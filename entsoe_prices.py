@@ -548,6 +548,91 @@ def filter_preferred_window(
     return inside, outside
 
 
+def close_gap_merge(
+    selected: list[dict],
+    all_prices: list[dict],
+    min_slot_minutes: int,
+    required_minutes: int,
+) -> list[dict]:
+    """
+    If two selected blocks are separated by a gap smaller than min_slot_minutes,
+    bridge the gap by including those intervening slots, then trim the most
+    expensive 15-min slot from either end of the newly formed continuous block
+    until total selected minutes equals required_minutes again.
+    """
+    if not selected:
+        return selected
+
+    slots = sorted(selected, key=lambda x: x["start"])
+    price_map = {s["start"]: s for s in all_prices}
+
+    # Group into contiguous blocks
+    def _group(s):
+        groups = []
+        block = [s[0]]
+        for slot in s[1:]:
+            if slot["start"] == block[-1]["end"]:
+                block.append(slot)
+            else:
+                groups.append(block)
+                block = [slot]
+        groups.append(block)
+        return groups
+
+    changed = True
+    while changed:
+        changed = False
+        groups = _group(slots)
+        for i in range(len(groups) - 1):
+            gap_start = groups[i][-1]["end"]
+            gap_end   = groups[i + 1][0]["start"]
+            gap_min   = int((gap_end - gap_start).total_seconds() / 60)
+            if 0 < gap_min < min_slot_minutes:
+                # Collect gap slots from all_prices
+                gap_slots = [
+                    price_map[s["start"]]
+                    for s in all_prices
+                    if gap_start <= s["start"] < gap_end and s["start"] in price_map
+                ]
+                if not gap_slots:
+                    continue
+                # Merge the two blocks + gap into one
+                merged_block = sorted(
+                    groups[i] + gap_slots + groups[i + 1],
+                    key=lambda x: x["start"],
+                )
+                extra_minutes = gap_min
+                log.info(
+                    "Gap of %d min between %s and %s is below min_slot_minutes=%d — merging blocks.",
+                    gap_min,
+                    gap_start.isoformat(), gap_end.isoformat(),
+                    min_slot_minutes,
+                )
+                # Trim most expensive endpoint slots until we shed extra_minutes
+                slot_dur = merged_block[0]["duration_minutes"]
+                while extra_minutes >= slot_dur and len(merged_block) > 1:
+                    first = merged_block[0]
+                    last  = merged_block[-1]
+                    if first["price_eur_mwh"] >= last["price_eur_mwh"]:
+                        log.info("Trimming leading slot %s (%.4f €/MWh)", first["start"].isoformat(), first["price_eur_mwh"])
+                        merged_block = merged_block[1:]
+                    else:
+                        log.info("Trimming trailing slot %s (%.4f €/MWh)", last["start"].isoformat(), last["price_eur_mwh"])
+                        merged_block = merged_block[:-1]
+                    extra_minutes -= slot_dur
+
+                # Rebuild slots list with the merged block in place
+                other_groups = groups[:i] + [merged_block] + groups[i + 2:]
+                slots = sorted(
+                    [s for g in other_groups for s in g],
+                    key=lambda x: x["start"],
+                )
+                changed = True
+                break  # restart loop with updated groups
+
+    return slots
+
+
 def merge_contiguous_slots(slots: list[dict]) -> list[tuple[datetime, datetime]]:
     if not slots:
         return []
@@ -1065,7 +1150,9 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         )
         selected = sorted(selected + spillover, key=lambda x: x["start"])
 
-    windows = merge_contiguous_slots(selected)
+    windows = merge_contiguous_slots(
+        close_gap_merge(selected, prices, min_slot_minutes, required_minutes)
+    )
 
     if not selected:
         log.error("No slots selected.")

@@ -110,6 +110,10 @@ All fields have defaults — a minimal config only needs `entsoe.api_key` and `e
 
 When `preferred_window_start` / `preferred_window_end` are set, the planner fills as many slots as possible from within that window first, then spills over to hours outside it only if needed to meet `required_hours`. This is useful for preferring overnight off-peak hours while still guaranteeing a full charge.
 
+### Gap merging
+
+After slot selection, if two chosen blocks are separated by a gap **shorter than `min_slot_minutes`**, the gap is bridged automatically. The intervening slots are included to form one continuous block, then the most expensive 15-minute slot from either end of the merged block is dropped to keep the total charging time at `required_hours`. This avoids impractically short gaps where stopping and restarting a charger would make no sense.
+
 ---
 
 ## Supported areas
@@ -198,5 +202,5 @@ To trigger a run manually: **Actions → ENTSO-E Charging Plan → Run workflow*
 1. **Fetch** — queries the ENTSO-E Transparency API (`documentType=A44`) for the target date
 2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods
 3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional preferred window
-4. **Plan** — merges adjacent slots into contiguous windows, computes stats, writes JSON
+4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming the costliest endpoint slot to compensate), merges adjacent slots into contiguous windows, computes stats, writes JSON
 5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart
