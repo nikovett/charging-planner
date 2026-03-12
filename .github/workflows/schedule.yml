@@ -40,6 +40,7 @@ jobs:
         run: |
           python entsoe_prices.py --plan plan.json
           echo "plan_date=$(python -c "import json; print(json.load(open('plan.json'))['date'])")" >> $GITHUB_OUTPUT
+          echo "=== plan.json ===" && cat plan.json
 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v6
@@ -93,7 +94,7 @@ jobs:
           for i in range(n_chars):
               slot_min = ruler_start_min + i * bucket
               if pw_s <= slot_min < pw_e:
-                  ruler.append("▒")   # preferred window, unscheduled
+                  ruler.append("·")   # preferred window, unscheduled
               else:
                   ruler.append("░")   # outside preferred window, unscheduled
           for w in wins:
