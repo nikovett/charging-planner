@@ -1,25 +1,25 @@
 name: ENTSO-E Charging Plan
-
+ 
 on:
   schedule:
     - cron: '30 11 * * *'  # 14:30 EEST (summer, UTC+3)
     - cron: '30 12 * * *'  # 14:30 EET  (winter, UTC+2)
   workflow_dispatch:
-
+ 
 jobs:
   plan:
     name: Build charging plan
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
+ 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-
+ 
       - name: Install dependencies
         run: pip install pyyaml
-
+ 
       - name: Write config
         run: |
           cat > config.yaml << 'YAML'
@@ -34,38 +34,38 @@ jobs:
             preferred_window_end: "07:00"
             timezone: "Europe/Helsinki"
           YAML
-
+ 
       - name: Build plan
         id: plan
         run: |
           python entsoe_prices.py --plan plan.json
           echo "plan_date=$(python -c "import json; print(json.load(open('plan.json'))['date'])")" >> $GITHUB_OUTPUT
-
+ 
       - name: Upload plan artifact
         uses: actions/upload-artifact@v4.6.2
         with:
           name: charging-plan-${{ steps.plan.outputs.plan_date }}
           path: plan.json
           retention-days: 2
-
+ 
       - name: Notify via ntfy
         run: |
           python - << 'EOF'
           import json, urllib.request, urllib.parse
-
+ 
           plan = json.load(open("plan.json"))
           date = plan["date"]
           avg  = plan["avg_price_cents_kwh"]
           tot  = plan["total_minutes"]
           wins = plan["windows"]
-
+ 
           if wins:
-              blocks = "  |  ".join(f"{w['start']}–{w['end']} ({w['avg_price_cents_kwh']:.2f} c€/kWh)" for w in wins)
+              blocks = "\n".join(f"{w['start']}–{w['end']} ({w['avg_price_cents_kwh']:.2f} c€/kWh)" for w in wins)
           else:
               blocks = "No windows selected"
-
+ 
           message = f"{date}  ·  {tot} min  ·  avg {avg:.2f} c€/kWh\n{blocks}"
-
+ 
           req = urllib.request.Request(
               "https://ntfy.sh/entsoe-charging-f7x3k2",
               data=message.encode(),
