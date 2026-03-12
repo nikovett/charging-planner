@@ -60,6 +60,7 @@ DEFAULT_CONFIG = {
     "charging": {
         "required_hours": 4,
         "max_price_cents_kwh": None,
+        "contiguous_only": False,
         "min_slot_minutes": 30,
         "schedule_next_day": True,
         "preferred_window_start": None,
@@ -372,6 +373,7 @@ def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[dict]
 def select_charging_windows(
     prices: list[dict],
     required_minutes: int,
+    contiguous_only: bool = False,
     max_price: Optional[float] = None,
     min_slot_minutes: int = 15,
 ) -> list[dict]:
@@ -397,6 +399,9 @@ def select_charging_windows(
     if not candidates:
         log.error("No candidate slots available for charging!")
         return []
+
+    if contiguous_only:
+        return _best_contiguous_window(candidates, prices, n_slots)
 
     min_slots_per_block = max(1, (min_slot_minutes + slot_dur - 1) // slot_dur)
     effective_min_minutes = min_slots_per_block * slot_dur
@@ -488,6 +493,25 @@ def _select_with_min_block(
         log.info("All %d block(s) meet the minimum block length of %d min.",
                  len(final_blocks), min_slots_per_block * slot_dur)
     return result
+
+
+def _best_contiguous_window(
+    candidates: list[dict], all_prices: list[dict], n_slots: int
+) -> list[dict]:
+    """Return the cheapest contiguous run of n_slots from all_prices where every slot is a candidate."""
+    slots = all_prices
+    if len(slots) < n_slots:
+        return slots
+    best_avg = float("inf")
+    best_start = 0
+    for i in range(len(slots) - n_slots + 1):
+        window = slots[i:i + n_slots]
+        if all(s in candidates for s in window):
+            avg = sum(s["price_eur_kwh"] for s in window) / n_slots
+            if avg < best_avg:
+                best_avg = avg
+                best_start = i
+    return slots[best_start:best_start + n_slots]
 
 
 def filter_preferred_window(
@@ -1023,6 +1047,7 @@ def cmd_plan(config: dict, output_path: str) -> dict:
 
     selected = select_charging_windows(
         inside, required_minutes=required_minutes,
+        contiguous_only=ch_cfg["contiguous_only"],
         max_price=max_price_eur,
         min_slot_minutes=min_slot_minutes,
     )
@@ -1034,6 +1059,7 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         spillover = select_charging_windows(
             [s for s in outside if id(s) not in selected_ids],
             required_minutes=remaining,
+            contiguous_only=ch_cfg["contiguous_only"],
             max_price=max_price_eur,
             min_slot_minutes=min_slot_minutes,
         )

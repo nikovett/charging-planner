@@ -98,6 +98,7 @@ All fields have defaults — a minimal config only needs `entsoe.api_key` and `e
 | `entsoe.api_key` | — | **Required.** ENTSO-E security token |
 | `entsoe.area` | `10YFI-1--------U` | Bidding zone — short code or full EIC (see below) |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
+| `charging.contiguous_only` | `false` | `true` = one unbroken block; `false` = cheapest slots (may be split across the day) |
 | `charging.min_slot_minutes` | `30` | Minimum contiguous block length. Must be a multiple of 15 |
 | `charging.schedule_next_day` | `true` | `true` = plan tomorrow; `false` = plan today |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
