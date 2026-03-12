@@ -11,9 +11,9 @@ jobs:
     name: Build charging plan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -27,12 +27,11 @@ jobs:
             api_key: "${{ secrets.ENTSOE_API_KEY }}"
             area: "FI"
           charging:
-            required_hours: 2
-            contiguous_only: false
+            required_hours: 4
             min_slot_minutes: 30
             schedule_next_day: true
             preferred_window_start: "00:00"
-            preferred_window_end: "06:30"
+            preferred_window_end: "07:00"
             timezone: "Europe/Helsinki"
           YAML
 
@@ -48,3 +47,34 @@ jobs:
           name: charging-plan-${{ steps.plan.outputs.plan_date }}
           path: plan.json
           retention-days: 2
+
+      - name: Notify via ntfy
+        run: |
+          python - << 'EOF'
+          import json, urllib.request, urllib.parse
+
+          plan = json.load(open("plan.json"))
+          date = plan["date"]
+          avg  = plan["avg_price_cents_kwh"]
+          tot  = plan["total_minutes"]
+          wins = plan["windows"]
+
+          if wins:
+              blocks = "  |  ".join(f"{w['start']}–{w['end']} ({w['avg_price_cents_kwh']:.2f} c€/kWh)" for w in wins)
+          else:
+              blocks = "No windows selected"
+
+          message = f"{date}  ·  {tot} min  ·  avg {avg:.2f} c€/kWh\n{blocks}"
+
+          req = urllib.request.Request(
+              "https://ntfy.sh/entsoe-charging-f7x3k2",
+              data=message.encode(),
+              method="POST",
+              headers={
+                  "Title": f"Charging plan {date}",
+                  "Priority": "default",
+                  "Tags": "electric_plug",
+              },
+          )
+          urllib.request.urlopen(req, timeout=10)
+          EOF
