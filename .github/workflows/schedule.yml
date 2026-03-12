@@ -94,14 +94,14 @@ jobs:
           for i in range(n_chars):
               slot_min = ruler_start_min + i * bucket
               if pw_s <= slot_min < pw_e:
-                  ruler.append("·")   # preferred window, unscheduled
+                  ruler.append("▒")   # preferred window, unscheduled
               else:
-                  ruler.append("-")   # outside preferred window, unscheduled
+                  ruler.append("░")   # outside preferred window, unscheduled
           for w in wins:
               s_idx = (hm(w["start"]) - ruler_start_min) // bucket
               e_idx = (hm(w["end"])   - ruler_start_min) // bucket if w["end"] != "00:00" else n_chars
               for i in range(max(0, s_idx), min(e_idx, n_chars)):
-                  ruler[i] = "#"
+                  ruler[i] = "█"
           ruler_str = "".join(ruler)
 
           # Labels: show start + end always; midpoint only if there's room
@@ -139,7 +139,7 @@ jobs:
 
           message = (
               f"{date}  ·  {tot} min  ·  avg {avg:.2f} c€/kWh\n\n"
-              f"{labels}\n{ruler_str}\n\n"
+              f"{start_label} {ruler_str} {end_label}\n\n"
               f"{lines}"
           )
 
