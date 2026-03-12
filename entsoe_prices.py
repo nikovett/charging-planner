@@ -739,6 +739,8 @@ def build_plan(
     local_tz_offset_hours: int,
     timezone_name: str,
     merged_starts: set | None = None,
+    preferred_window_start: str | None = None,
+    preferred_window_end: str | None = None,
 ) -> dict:
     """
     Build a plan dict that can be serialised to JSON, reviewed, and edited.
@@ -792,17 +794,19 @@ def build_plan(
     overall_avg = (sum(sel_prices) / len(sel_prices) * 100) if sel_prices else 0.0
 
     return {
-        "version":             PLAN_VERSION,
-        "date":                str(target_date),
-        "area":                area,
-        "price_source":        price_source,
-        "timezone":            timezone_name,
-        "utc_offset_hours":    local_tz_offset_hours,
-        "price_stats":         price_stats,
-        "required_minutes":    required_minutes,
-        "total_minutes":       total_min,
-        "avg_price_cents_kwh": round(overall_avg, 4),
-        "windows":             win_list,
+        "version":                PLAN_VERSION,
+        "date":                   str(target_date),
+        "area":                   area,
+        "price_source":           price_source,
+        "timezone":               timezone_name,
+        "utc_offset_hours":       local_tz_offset_hours,
+        "price_stats":            price_stats,
+        "required_minutes":       required_minutes,
+        "total_minutes":          total_min,
+        "avg_price_cents_kwh":    round(overall_avg, 4),
+        "preferred_window_start": preferred_window_start,
+        "preferred_window_end":   preferred_window_end,
+        "windows":                win_list,
     }
 
 
@@ -1191,6 +1195,8 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         local_tz_offset_hours=local_offset,
         timezone_name=tz_name,
         merged_starts=merged_starts,
+        preferred_window_start=ch_cfg.get("preferred_window_start"),
+        preferred_window_end=ch_cfg.get("preferred_window_end"),
     )
 
     # 6. Display
