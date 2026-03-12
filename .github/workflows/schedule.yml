@@ -51,7 +51,7 @@ jobs:
       - name: Notify via ntfy
         run: |
           python - << 'EOF'
-          import json, urllib.request, urllib.parse
+          import json, urllib.request
 
           plan = json.load(open("plan.json"))
           date = plan["date"]
@@ -59,16 +59,83 @@ jobs:
           tot  = plan["total_minutes"]
           wins = plan["windows"]
 
+          # Determine ruler bounds — start from preferred window then expand
+          # to encompass any slots that fell outside it (e.g. due to price cap)
+          pw_start = plan.get("preferred_window_start") or "00:00"
+          pw_end   = plan.get("preferred_window_end")   or "24:00"
+
+          def hm(s):
+              h, m = map(int, s.split(":"))
+              return h * 60 + m
+
+          ruler_start_min = hm(pw_start)
+          ruler_end_min   = hm(pw_end) if pw_end != "24:00" else 24 * 60
+
+          # Expand bounds to cover any window outside the preferred window
+          for w in wins:
+              ruler_start_min = min(ruler_start_min, hm(w["start"]))
+              ruler_end_min   = max(ruler_end_min,   hm(w["end"]) if w["end"] != "00:00" else 24 * 60)
+          # Snap to hour boundaries for clean labels
+          ruler_start_min = (ruler_start_min // 60) * 60
+          ruler_end_min   = ((ruler_end_min + 59) // 60) * 60
+          ruler_span_min  = ruler_end_min - ruler_start_min
+
+          # Each char = 15 min; fit into 48 chars
+          chars  = 48
+          bucket = max(15, (ruler_span_min + chars - 1) // chars)
+          bucket = ((bucket + 14) // 15) * 15
+          n_chars = ruler_span_min // bucket
+
+          # Mark preferred window region with a different shade
+          pw_s = hm(pw_start)
+          pw_e = hm(pw_end) if pw_end != "24:00" else 24 * 60
+          ruler = []
+          for i in range(n_chars):
+              slot_min = ruler_start_min + i * bucket
+              if pw_s <= slot_min < pw_e:
+                  ruler.append("▒")   # preferred window, unscheduled
+              else:
+                  ruler.append("░")   # outside preferred window, unscheduled
+          for w in wins:
+              s_idx = (hm(w["start"]) - ruler_start_min) // bucket
+              e_idx = (hm(w["end"])   - ruler_start_min) // bucket if w["end"] != "00:00" else n_chars
+              for i in range(max(0, s_idx), min(e_idx, n_chars)):
+                  ruler[i] = "█"
+          ruler_str = "".join(ruler)
+
+          # Labels: start, midpoint, end
+          mid_min = (ruler_start_min + ruler_end_min) // 2
+          mid_h, mid_m = divmod(mid_min, 60)
+          mid_label  = f"{mid_h:02d}:{mid_m:02d}"
+          start_label = f"{ruler_start_min // 60:02d}:00"
+          end_label   = f"{ruler_end_min // 60:02d}:00" if ruler_end_min < 24*60 else "24:00"
+          pad = (n_chars - len(mid_label)) // 2
+          labels = (
+              f"{start_label}"
+              f"{' ' * (pad - len(start_label))}"
+              f"{mid_label}"
+              f"{' ' * (n_chars - pad - len(mid_label) - len(end_label))}"
+              f"{end_label}"
+          )
+
           if wins:
-              blocks = "\n".join(
-                  f"{w['start']}–{w['end']} ({w['avg_price_cents_kwh']:.2f} c€/kWh)"
-                  + (" ⚡" if w.get("gap_merged") else "")
+              lines = "\n".join(
+                  f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
+                  + (" ⚡ merged" if w.get("gap_merged") else "")
+                  + (" ⚠️ outside window" if (
+                      pw_start and pw_end and
+                      (hm(w["start"]) >= pw_e or hm(w["end"]) <= pw_s)
+                  ) else "")
                   for w in wins
               )
           else:
-              blocks = "No windows selected"
+              lines = "No windows selected"
 
-          message = f"{date}  ·  {tot} min  ·  avg {avg:.2f} c€/kWh\n{blocks}"
+          message = (
+              f"{date}  ·  {tot} min  ·  avg {avg:.2f} c€/kWh\n\n"
+              f"{labels}\n{ruler_str}\n\n"
+              f"{lines}"
+          )
 
           req = urllib.request.Request(
               "https://ntfy.sh/entsoe-charging-f7x3k2",
