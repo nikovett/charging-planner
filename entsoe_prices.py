@@ -10,7 +10,7 @@ Usage:
     python entsoe_prices.py plan [--config config.yaml] [--plan plan.json]
 
 Schedule the 'plan' step to run daily at ~13:30 local time so the next day's
-ENTSO-E prices are available (published ~13:00 CET).
+ENTSO-E prices are available.
 """
 
 import argparse
@@ -192,6 +192,11 @@ def _emit_errors(errors: list) -> None:
 
 ENTSOE_API = "https://web-api.tp.entsoe.eu/api"
 
+
+class PricesNotYetAvailable(Exception):
+    """Raised when ENTSO-E returns no slots for the requested date,
+    typically because next-day prices have not been published yet."""
+
 ENTSOE_AREAS = {
     "FI":  "10YFI-1--------U",
     "SE1": "10Y1001A1001A44P", "SE2": "10Y1001A1001A45N",
@@ -329,9 +334,9 @@ def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[dict]
         period_start_utc = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
         period_end_utc   = datetime.fromisoformat(end_str.replace("Z", "+00:00")) if end_str else None
 
-        expected_start_date = target_date - timedelta(days=1)
-        if period_start_utc.date() != expected_start_date:
-            continue
+        # Accept any TimeSeries whose period overlaps the requested date range.
+        # The API request already constrains the window so no further date
+        # filtering is needed here.
 
         resolution_str = find_text(period, "resolution") or "PT60M"
         if "15" in resolution_str:
@@ -385,9 +390,8 @@ def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[dict]
         p["slot"] = i
 
     if not unique:
-        raise ValueError(
-            f"No price slots found for area={area} date={target_date}. "
-            "Next-day prices are usually published after 13:00 CET."
+        raise PricesNotYetAvailable(
+            f"No price slots found for area={area} date={target_date}."
         )
 
     slot_dur = unique[0]["duration_minutes"]
@@ -1159,6 +1163,14 @@ def cmd_plan(config: dict, output_path: str) -> dict:
             include_today=True,
         )
         price_source = "ENTSO-E"
+    except PricesNotYetAvailable:
+        log.warning(
+            "Tomorrow's prices (%s) are not yet available. "
+            "ENTSO-E publishes next-day prices at ~13:00 CET. "
+            "The scheduled workflow runs after that — re-run then or wait for the cron.",
+            target_date,
+        )
+        sys.exit(0)
     except Exception as exc:
         log.error("ENTSO-E fetch failed: %s", exc)
         sys.exit(1)
@@ -1171,6 +1183,29 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     tz_name      = ch_cfg.get("timezone") or _detect_timezone()
     local_offset = _tz_offset_hours(tz_name, target_date)
     log.info("Timezone: %s (UTC%+d)", tz_name, local_offset)
+
+    # 2b. Trim today's slots to only those within reach of the preferred window.
+    # Without this, running after midnight would expose a full day of today's
+    # slots as spillover candidates, e.g. 14:00 today for a 07:00 tomorrow charge.
+    # The earliest a leftward spill can usefully start is:
+    #   preferred_window_start_utc - required_minutes
+    # Slots before that point can never be part of the charging block.
+    _win_start_local = ch_cfg.get("preferred_window_start")
+    if _win_start_local:
+        _wh, _wm = map(int, _win_start_local.split(":"))
+        _win_start_utc = datetime(
+            target_date.year, target_date.month, target_date.day,
+            _wh, _wm, tzinfo=timezone.utc
+        ) - timedelta(hours=local_offset)
+        _required_minutes = int(ch_cfg["required_hours"] * 60)
+        _earliest_useful_utc = _win_start_utc - timedelta(minutes=_required_minutes)
+        _before = len(prices)
+        prices = [s for s in prices if s["start"] >= _earliest_useful_utc]
+        if len(prices) != _before:
+            log.info(
+                "Trimmed %d unreachable today-slots (earliest useful: %s UTC)",
+                _before - len(prices), _earliest_useful_utc.strftime("%Y-%m-%d %H:%M"),
+            )
 
     # 3. Preferred window split
     inside, outside = filter_preferred_window(

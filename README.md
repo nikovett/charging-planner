@@ -49,7 +49,7 @@ No other dependencies. The script uses only the standard library.
 2. Email [transparency@entsoe.eu](mailto:transparency@entsoe.eu) to request API access
 3. Your key will appear under **My Account → Security Tokens**
 
-Day-ahead prices are published at approximately 13:00 CET each day for the following day.
+Day-ahead prices are published at approximately 13:00 CET each day for the following day. If the script is run before prices are available it exits cleanly with a warning rather than an error.
 
 ---
 
@@ -185,7 +185,7 @@ The saved plan is straightforward and easy to hand-edit:
 
 ## GitHub Actions
 
-Place `schedule.yml` in `.github/workflows/`. The workflow runs daily at 14:30 Helsinki time (after ENTSO-E publishes next-day prices at ~13:00 CET), builds the plan, and uploads it as a workflow artifact for review.
+Place `schedule.yml` in `.github/workflows/`. The workflow runs daily at 14:30 Helsinki time, builds the plan, and uploads it as a workflow artifact for review.
 
 ### Required secret
 
@@ -243,8 +243,8 @@ Additional per-slot indicators:
 
 ## How it works
 
-1. **Fetch** — queries the ENTSO-E Transparency API (`documentType=A44`) for the target date
-2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods
-3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional preferred window
+1. **Fetch** — queries the ENTSO-E Transparency API (`documentType=A44`) for tomorrow's prices and today's remaining prices; exits cleanly if tomorrow's prices are not yet available
+2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods; trims today's slots to those within reach of the preferred window
+3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional preferred window; spills leftward into today's evening if needed
 4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming the costliest endpoint slot to compensate), merges adjacent slots into contiguous windows, computes stats, writes JSON
 5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart
