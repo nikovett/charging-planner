@@ -96,12 +96,12 @@ jobs:
               if pw_s <= slot_min < pw_e:
                   ruler.append("·")   # preferred window, unscheduled
               else:
-                  ruler.append("░")   # outside preferred window, unscheduled
+                  ruler.append("-")   # outside preferred window, unscheduled
           for w in wins:
               s_idx = (hm(w["start"]) - ruler_start_min) // bucket
               e_idx = (hm(w["end"])   - ruler_start_min) // bucket if w["end"] != "00:00" else n_chars
               for i in range(max(0, s_idx), min(e_idx, n_chars)):
-                  ruler[i] = "█"
+                  ruler[i] = "#"
           ruler_str = "".join(ruler)
 
           # Labels: show start + end always; midpoint only if there's room
