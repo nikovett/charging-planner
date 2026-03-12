@@ -613,11 +613,11 @@ def close_gap_merge(
                 while extra_minutes >= slot_dur and len(merged_block) > 1:
                     first = merged_block[0]
                     last  = merged_block[-1]
-                    if first["price_eur_mwh"] >= last["price_eur_mwh"]:
-                        log.info("Trimming leading slot %s (%.4f €/MWh)", first["start"].isoformat(), first["price_eur_mwh"])
+                    if first["price_eur_kwh"] >= last["price_eur_kwh"]:
+                        log.info("Trimming leading slot %s (%.4f €/kWh)", first["start"].isoformat(), first["price_eur_kwh"])
                         merged_block = merged_block[1:]
                     else:
-                        log.info("Trimming trailing slot %s (%.4f €/MWh)", last["start"].isoformat(), last["price_eur_mwh"])
+                        log.info("Trimming trailing slot %s (%.4f €/kWh)", last["start"].isoformat(), last["price_eur_kwh"])
                         merged_block = merged_block[:-1]
                     extra_minutes -= slot_dur
 
