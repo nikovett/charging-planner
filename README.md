@@ -81,6 +81,7 @@ entsoe:
 
 charging:
   required_hours: 4             # total hours of charging needed
+  contiguous_only: false        # true = one unbroken block; false = cheapest individual slots
   min_slot_minutes: 30          # minimum block length (must be divisible by 15)
   schedule_next_day: true       # plan for tomorrow (false = today)
   max_price_cents_kwh: null     # optional price ceiling, e.g. 5.0
