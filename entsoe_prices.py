@@ -63,7 +63,6 @@ DEFAULT_CONFIG = {
         "contiguous_only": False,
         "merge_gaps": True,
         "min_slot_minutes": 30,
-        "schedule_next_day": True,
         "preferred_window_start": None,
         "preferred_window_end": None,
         "timezone": None,
@@ -221,27 +220,56 @@ def _resolve_area(area: str) -> str:
     )
 
 
-def fetch_entsoe_prices(api_key: str, area: str, target_date: date) -> list[dict]:
+def fetch_entsoe_prices(
+    api_key: str,
+    area: str,
+    target_date: date,
+    include_today: bool = False,
+) -> list[dict]:
     eic = _resolve_area(area)
-    period_start = (target_date - timedelta(days=1)).strftime("%Y%m%d2000")
-    period_end   = target_date.strftime("%Y%m%d2300")
-    url = (
-        f"{ENTSOE_API}"
-        f"?documentType=A44"
-        f"&in_Domain={eic}"
-        f"&out_Domain={eic}"
-        f"&periodStart={period_start}"
-        f"&periodEnd={period_end}"
-        f"&securityToken={api_key}"
-    )
-    log.info("Fetching ENTSO-E prices: area=%s date=%s", area, target_date)
-    req = urllib.request.Request(url, headers={"Accept": "application/xml"})
+
+    def _fetch_one(d: date) -> list[dict]:
+        period_start = (d - timedelta(days=1)).strftime("%Y%m%d2000")
+        period_end   = d.strftime("%Y%m%d2300")
+        url = (
+            f"{ENTSOE_API}"
+            f"?documentType=A44"
+            f"&in_Domain={eic}"
+            f"&out_Domain={eic}"
+            f"&periodStart={period_start}"
+            f"&periodEnd={period_end}"
+            f"&securityToken={api_key}"
+        )
+        log.info("Fetching ENTSO-E prices: area=%s date=%s", area, d)
+        req = urllib.request.Request(url, headers={"Accept": "application/xml"})
+        try:
+            raw = _http_request_with_retry(req, timeout=20, retries=3, label="ENTSO-E")
+        except Exception as e:
+            log.error("ENTSO-E request failed after retries: %s", e)
+            raise
+        return _parse_entsoe_xml(raw, d, area)
+
+    tomorrow_prices = _fetch_one(target_date)
+
+    if not include_today:
+        return tomorrow_prices
+
+    # Fetch today and keep only slots from now onwards
+    today = target_date - timedelta(days=1)
     try:
-        raw = _http_request_with_retry(req, timeout=20, retries=3, label="ENTSO-E")
+        today_prices = _fetch_one(today)
+        now_utc = datetime.now(tz=timezone.utc)
+        today_prices = [s for s in today_prices if s["start"] >= now_utc]
+        log.info("Today's remaining slots (>= now): %d", len(today_prices))
     except Exception as e:
-        log.error("ENTSO-E request failed after retries: %s", e)
-        raise
-    return _parse_entsoe_xml(raw, target_date, area)
+        log.warning("Could not fetch today's prices, proceeding with tomorrow only: %s", e)
+        today_prices = []
+
+    # Merge and re-number slots
+    combined = sorted(today_prices + tomorrow_prices, key=lambda x: x["start"])
+    for i, s in enumerate(combined):
+        s["slot"] = i
+    return combined
 
 
 def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[dict]:
@@ -1119,12 +1147,17 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     ch_cfg = config["charging"]
 
     today       = date.today()
-    target_date = today + timedelta(days=1) if ch_cfg["schedule_next_day"] else today
+    target_date = today + timedelta(days=1)
     log.info("Target date: %s", target_date)
 
     # 1. Fetch prices
+    # Always fetch today's remaining slots too so leftward spill (contiguous_only)
+    # can extend into the current evening if needed.
     try:
-        prices       = fetch_entsoe_prices(et_cfg["api_key"], et_cfg["area"], target_date)
+        prices       = fetch_entsoe_prices(
+            et_cfg["api_key"], et_cfg["area"], target_date,
+            include_today=True,
+        )
         price_source = "ENTSO-E"
     except Exception as exc:
         log.error("ENTSO-E fetch failed: %s", exc)
@@ -1165,13 +1198,55 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     if remaining > 0 and outside:
         log.info("Filling %d min from outside preferred window.", remaining)
         selected_ids = {id(s) for s in selected}
-        spillover = select_charging_windows(
-            [s for s in outside if id(s) not in selected_ids],
-            required_minutes=remaining,
-            contiguous_only=ch_cfg["contiguous_only"],
-            max_price=max_price_eur,
-            min_slot_minutes=min_slot_minutes,
-        )
+        outside_unselected = [s for s in outside if id(s) not in selected_ids]
+        # If a preferred window end is set, never spill after it — only before.
+        win_end_local = ch_cfg.get("preferred_window_end")
+        if win_end_local:
+            h, m = map(int, win_end_local.split(":"))
+            win_end_utc = datetime(
+                target_date.year, target_date.month, target_date.day,
+                h, m, tzinfo=timezone.utc
+            ) - timedelta(hours=local_offset)
+            outside_unselected = [s for s in outside_unselected if s["end"] <= win_end_utc]
+            log.info(
+                "Spillover restricted to slots before window end %s (%d candidates)",
+                win_end_local, len(outside_unselected),
+            )
+        if ch_cfg["contiguous_only"]:
+            # Extend the contiguous block leftward: take slots immediately
+            # before the preferred window start so charging just begins earlier.
+            win_start_local = ch_cfg.get("preferred_window_start")
+            if win_start_local and selected:
+                block_start_utc = min(s["start"] for s in selected)
+                # Slots strictly before the block start, sorted descending (nearest first)
+                before = sorted(
+                    [s for s in outside_unselected if s["end"] <= block_start_utc],
+                    key=lambda x: x["start"],
+                    reverse=True,
+                )
+                slot_dur = prices[0]["duration_minutes"]
+                n_extra = (remaining + slot_dur - 1) // slot_dur
+                spillover = list(reversed(before[:n_extra]))
+                log.info(
+                    "contiguous_only spill: extending block %d min earlier (%d slots)",
+                    remaining, len(spillover),
+                )
+            else:
+                spillover = select_charging_windows(
+                    outside_unselected,
+                    required_minutes=remaining,
+                    contiguous_only=True,
+                    max_price=max_price_eur,
+                    min_slot_minutes=min_slot_minutes,
+                )
+        else:
+            spillover = select_charging_windows(
+                outside_unselected,
+                required_minutes=remaining,
+                contiguous_only=False,
+                max_price=max_price_eur,
+                min_slot_minutes=min_slot_minutes,
+            )
         selected = sorted(selected + spillover, key=lambda x: x["start"])
 
     windows = merge_contiguous_slots(selected)
