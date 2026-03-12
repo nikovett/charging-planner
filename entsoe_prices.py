@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
         "required_hours": 4,
         "max_price_cents_kwh": None,
         "contiguous_only": False,
+        "merge_gaps": True,
         "min_slot_minutes": 30,
         "schedule_next_day": True,
         "preferred_window_start": None,
@@ -553,18 +554,25 @@ def close_gap_merge(
     all_prices: list[dict],
     min_slot_minutes: int,
     required_minutes: int,
-) -> list[dict]:
+) -> tuple[list[dict], set]:
     """
     If two selected blocks are separated by a gap smaller than min_slot_minutes,
-    bridge the gap by including those intervening slots, then trim the most
-    expensive 15-min slot from either end of the newly formed continuous block
-    until total selected minutes equals required_minutes again.
+    bridge the gap by including those intervening slots, then trim from either
+    end of the newly formed continuous block until total selected minutes equals
+    required_minutes again.
+
+    Trimming prefers removing the most expensive endpoint slot. On a tie the
+    earliest slot is dropped.
+
+    Returns (slots, merged_starts) where merged_starts is a set of UTC start
+    datetimes for windows that were produced by a gap merge.
     """
     if not selected:
-        return selected
+        return selected, set()
 
     slots = sorted(selected, key=lambda x: x["start"])
     price_map = {s["start"]: s for s in all_prices}
+    merged_starts: set = set()
 
     # Group into contiguous blocks
     def _group(s):
@@ -601,25 +609,32 @@ def close_gap_merge(
                     groups[i] + gap_slots + groups[i + 1],
                     key=lambda x: x["start"],
                 )
-                extra_minutes = gap_min
+                # Trim endpoint slots until total selected equals required_minutes.
+                # extra_minutes = how much over required we are after bridging the gap.
+                current_total = sum(s["duration_minutes"] for g in groups for s in g) + gap_min
+                extra_minutes = current_total - required_minutes
                 log.info(
                     "Gap of %d min between %s and %s is below min_slot_minutes=%d — merging blocks.",
                     gap_min,
                     gap_start.isoformat(), gap_end.isoformat(),
                     min_slot_minutes,
                 )
-                # Trim most expensive endpoint slots until we shed extra_minutes
+                # Trim endpoint slots until we shed extra_minutes.
+                # On a tie in price, always drop the earliest (leading) slot.
                 slot_dur = merged_block[0]["duration_minutes"]
                 while extra_minutes >= slot_dur and len(merged_block) > 1:
                     first = merged_block[0]
                     last  = merged_block[-1]
-                    if first["price_eur_kwh"] >= last["price_eur_kwh"]:
-                        log.info("Trimming leading slot %s (%.4f €/kWh)", first["start"].isoformat(), first["price_eur_kwh"])
-                        merged_block = merged_block[1:]
-                    else:
+                    if last["price_eur_kwh"] > first["price_eur_kwh"]:
                         log.info("Trimming trailing slot %s (%.4f €/kWh)", last["start"].isoformat(), last["price_eur_kwh"])
                         merged_block = merged_block[:-1]
+                    else:
+                        # first is more expensive, or equal — drop earliest (first)
+                        log.info("Trimming leading slot %s (%.4f €/kWh)", first["start"].isoformat(), first["price_eur_kwh"])
+                        merged_block = merged_block[1:]
                     extra_minutes -= slot_dur
+
+                merged_starts.add(merged_block[0]["start"])
 
                 # Rebuild slots list with the merged block in place
                 other_groups = groups[:i] + [merged_block] + groups[i + 2:]
@@ -630,8 +645,7 @@ def close_gap_merge(
                 changed = True
                 break  # restart loop with updated groups
 
-    return slots
-
+    return slots, merged_starts
 
 def merge_contiguous_slots(slots: list[dict]) -> list[tuple[datetime, datetime]]:
     if not slots:
@@ -724,6 +738,7 @@ def build_plan(
     required_minutes: int,
     local_tz_offset_hours: int,
     timezone_name: str,
+    merged_starts: set | None = None,
 ) -> dict:
     """
     Build a plan dict that can be serialised to JSON, reviewed, and edited.
@@ -742,10 +757,13 @@ def build_plan(
       "avg_price_cents_kwh": 1.84,
       "windows": [
         { "start": "01:00", "end": "04:00",
-          "duration_minutes": 180, "avg_price_cents_kwh": 1.84 }
+          "duration_minutes": 180, "avg_price_cents_kwh": 1.84,
+          "gap_merged": false }
       ]
     }
     """
+    if merged_starts is None:
+        merged_starts = set()
     all_prices_eur = [s["price_eur_kwh"] for s in all_prices]
     price_stats = {
         "min_cents_kwh":  round(min(all_prices_eur) * 100, 4),
@@ -766,6 +784,7 @@ def build_plan(
             "end":   end_local.strftime("%H:%M"),
             "duration_minutes": dur,
             "avg_price_cents_kwh": round(avg_p, 4),
+            "gap_merged": start_utc in merged_starts,
         })
 
     total_min = sum(s["duration_minutes"] for s in selected)
@@ -965,9 +984,10 @@ def print_plan_summary(plan: dict, all_prices: list[dict]) -> None:
     if wins:
         print(f"  {_bold(f'Charging windows ({len(wins)}):')} ")
         for w in wins:
+            merged_tag = f"  {_yellow('⚡ gap merged')}" if w.get("gap_merged") else ""
             print(_window_bar(w["start"], w["end"],
                               w["duration_minutes"], w["avg_price_cents_kwh"],
-                              min_c, max_c))
+                              min_c, max_c) + merged_tag)
         print()
     else:
         print(f"  {_red('✗ No windows selected')}")
@@ -1150,9 +1170,11 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         )
         selected = sorted(selected + spillover, key=lambda x: x["start"])
 
-    windows = merge_contiguous_slots(
-        close_gap_merge(selected, prices, min_slot_minutes, required_minutes)
-    )
+    windows = merge_contiguous_slots(selected)
+    merged_starts: set = set()
+    if ch_cfg.get("merge_gaps", True) and not ch_cfg["contiguous_only"]:
+        selected, merged_starts = close_gap_merge(selected, prices, min_slot_minutes, required_minutes)
+        windows = merge_contiguous_slots(selected)
 
     if not selected:
         log.error("No slots selected.")
@@ -1168,6 +1190,7 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         required_minutes=required_minutes,
         local_tz_offset_hours=local_offset,
         timezone_name=tz_name,
+        merged_starts=merged_starts,
     )
 
     # 6. Display

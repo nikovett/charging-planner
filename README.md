@@ -82,6 +82,7 @@ entsoe:
 charging:
   required_hours: 4             # total hours of charging needed
   contiguous_only: false        # true = one unbroken block; false = cheapest individual slots
+  merge_gaps: true              # bridge gaps shorter than min_slot_minutes between selected blocks
   min_slot_minutes: 30          # minimum block length (must be divisible by 15)
   schedule_next_day: true       # plan for tomorrow (false = today)
   max_price_cents_kwh: null     # optional price ceiling, e.g. 5.0
@@ -100,6 +101,7 @@ All fields have defaults — a minimal config only needs `entsoe.api_key` and `e
 | `entsoe.area` | `10YFI-1--------U` | Bidding zone — short code or full EIC (see below) |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
 | `charging.contiguous_only` | `false` | `true` = one unbroken block; `false` = cheapest slots (may be split across the day) |
+| `charging.merge_gaps` | `true` | Bridge gaps shorter than `min_slot_minutes` between selected blocks. Ignored when `contiguous_only` is `true` |
 | `charging.min_slot_minutes` | `30` | Minimum contiguous block length. Must be a multiple of 15 |
 | `charging.schedule_next_day` | `true` | `true` = plan tomorrow; `false` = plan today |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
@@ -113,7 +115,9 @@ When `preferred_window_start` / `preferred_window_end` are set, the planner fill
 
 ### Gap merging
 
-After slot selection, if two chosen blocks are separated by a gap **shorter than `min_slot_minutes`**, the gap is bridged automatically. The intervening slots are included to form one continuous block, then the most expensive 15-minute slot from either end of the merged block is dropped to keep the total charging time at `required_hours`. This avoids impractically short gaps where stopping and restarting a charger would make no sense.
+After slot selection, if two chosen blocks are separated by a gap **shorter than `min_slot_minutes`**, the gap is bridged automatically. The intervening slots are included to form one continuous block, then the most expensive 15-minute slot from either end of the merged block is dropped to keep the total charging time at `required_hours`. On a price tie, the earliest slot is always dropped. Merged windows are flagged with ⚡ in the terminal output, GitHub Actions summary, and phone notification.
+
+This behaviour can be disabled by setting `merge_gaps: false`. It is automatically skipped when `contiguous_only: true` since the result is already one unbroken block.
 
 ---
 
