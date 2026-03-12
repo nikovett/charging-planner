@@ -1,0 +1,13 @@
+entsoe:
+  api_key: ""        # ENTSO-E security token (required)
+  area: "FI"         # Bidding zone — short code (FI, SE1–SE4, NO1–NO5, DK1/2, EE, LV, LT, DE, FR, NL, BE, AT, PL)
+                     # or full EIC code, e.g. "10YFI-1--------U"
+
+charging:
+  required_hours: 4          # Total hours of charging to schedule
+  min_slot_minutes: 30       # Minimum contiguous block length (must be divisible by 15)
+  schedule_next_day: true    # true = plan tomorrow; false = plan today
+  max_price_cents_kwh: null  # Price ceiling in c€/kWh — skip slots above this (null = no limit)
+  preferred_window_start: "00:00"  # Prefer slots within this local-time window (null = no preference)
+  preferred_window_end: "07:00"    # Slots outside the window are used only if needed to meet required_hours
+  timezone: "Europe/Helsinki"      # IANA timezone name (null = auto-detect from system)
