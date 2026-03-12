@@ -42,7 +42,7 @@ jobs:
           echo "plan_date=$(python -c "import json; print(json.load(open('plan.json'))['date'])")" >> $GITHUB_OUTPUT
 
       - name: Upload plan artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: charging-plan-${{ steps.plan.outputs.plan_date }}
           path: plan.json
