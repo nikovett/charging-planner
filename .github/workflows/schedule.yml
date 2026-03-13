@@ -37,10 +37,13 @@ jobs:
       - name: Build plan
         id: plan
         run: |
-          python entsoe_prices.py --plan plan.json
-          echo "prices_available=true" >> $GITHUB_OUTPUT
-          echo "plan_date=$(python -c "import json; print(json.load(open('plan.json'))['date'])")" >> $GITHUB_OUTPUT
-          echo "=== plan.json ===" && cat plan.json
+          python entsoe_prices.py --plan plan.json && {
+            echo "prices_available=true" >> $GITHUB_OUTPUT
+            echo "plan_date=$(python -c "import json; print(json.load(open('plan.json'))['date'])")" >> $GITHUB_OUTPUT
+            echo "=== plan.json ===" && cat plan.json
+          } || {
+            echo "Prices not yet available or script error — skipping remaining steps."
+          }
 
       - name: Upload plan artifact
         if: steps.plan.outputs.prices_available == 'true'
