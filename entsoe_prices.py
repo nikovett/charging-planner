@@ -292,8 +292,15 @@ def fetch_entsoe_prices(
     all_slots = _parse_entsoe_xml(raw, target_date, area)
 
     # Check that tomorrow's period is actually published.
-    # The boundary between today and tomorrow is target_dateT23:00Z (= 01:00 EET).
-    tomorrow_start_utc = datetime.combine(target_date, time(23, 0), tzinfo=timezone.utc)
+    # ENTSO-E TimeSeries boundary: today  = (target_date-1)T23:00Z – target_dateT23:00Z
+    #                              tomorrow= (target_date-1)T23:00Z is the START of today,
+    # so tomorrow's slots begin at (target_date-1)T23:00Z local-day boundary.
+    # target_date=2026-03-14 → today's TS: 2026-03-12T23:00Z–2026-03-13T23:00Z
+    #                          tomorrow's TS: 2026-03-13T23:00Z–2026-03-14T23:00Z
+    # So tomorrow starts at (target_date - 1)T23:00Z.
+    tomorrow_start_utc = datetime.combine(
+        target_date - timedelta(days=1), time(23, 0), tzinfo=timezone.utc
+    )
     target_slots   = [s for s in all_slots if s["start"] >= tomorrow_start_utc]
     target_minutes = sum(s["duration_minutes"] for s in target_slots)
     if target_minutes < 23 * 60:
