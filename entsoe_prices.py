@@ -1102,17 +1102,20 @@ def print_plan_summary(plan: dict, all_prices: list[dict]) -> None:
 
 def render_html_chart(plan: dict, all_prices: list[dict]) -> str:
     """
-    Render an HTML bar chart (bars growing upward, hours on x-axis) suitable
-    for embedding directly in GitHub Actions job summaries.
+    Render an HTML bar chart for GitHub Actions job summaries.
 
-    GitHub summaries support inline HTML with style attributes but not SVG,
-    so this produces a plain HTML table with inline CSS only.
+    Uses only table-based layout and inline styles that GHA's HTML sanitiser
+    permits. No flex, no absolute/relative positioning, no external resources.
+    Layout: one outer table row containing a y-axis cell (right-aligned text)
+    and a chart cell. The chart itself is a table with one column per hour;
+    each column is a nested 2-row table: top cell = spacer (empty, growing
+    downward), bottom cell = coloured bar. Hour labels sit in a second row.
     """
     if not all_prices:
         return ""
 
-    offset = plan["utc_offset_hours"]
-    wins   = plan["windows"]
+    offset   = plan["utc_offset_hours"]
+    wins     = plan["windows"]
     pw_start = plan.get("preferred_window_start")
     pw_end   = plan.get("preferred_window_end")
 
@@ -1121,8 +1124,8 @@ def render_html_chart(plan: dict, all_prices: list[dict]) -> str:
         return h * 60 + m
 
     has_pw = bool(pw_start and pw_end)
-    pw_s = hm(pw_start) if pw_start else 0
-    pw_e = hm(pw_end)   if pw_end   else 24 * 60
+    pw_s   = hm(pw_start) if pw_start else 0
+    pw_e   = hm(pw_end)   if pw_end   else 24 * 60
 
     sel_hours: set[int] = set()
     for w in wins:
@@ -1135,14 +1138,14 @@ def render_html_chart(plan: dict, all_prices: list[dict]) -> str:
         h = (slot["start"] + timedelta(hours=offset)).hour
         hourly[h].append(slot["price_eur_kwh"] * 100)
 
-    all_c   = [v for vals in hourly.values() for v in vals]
+    all_c = [v for vals in hourly.values() for v in vals]
     if not all_c:
         return ""
     min_c, max_c = min(all_c), max(all_c)
     c_range = max_c - min_c or 1.0
 
-    MAX_H = 80   # max bar height px
-    COL_W = 18   # column width px
+    MAX_H = 60   # total chart area height in px (bar + spacer)
+    COL_W = 16   # column width px
 
     def bar_color(price: float) -> str:
         ratio = (price - min_c) / c_range
@@ -1150,79 +1153,106 @@ def render_html_chart(plan: dict, all_prices: list[dict]) -> str:
         elif ratio < 0.66: return "#facc15"
         else:              return "#f87171"
 
-    # Bar columns
-    cols = []
+    # ── Y-axis: 4 labels in a right-aligned cell, spaced with <br> ──────────
+    # We output them top-to-bottom (max → min) with proportional line heights.
+    yaxis_rows = []
+    steps = 3
+    for i in range(steps + 1):
+        price = max_c - (max_c - min_c) * i / steps
+        # height of this band in px (gap between this label and the next)
+        band_h = MAX_H // steps
+        # last label gets no bottom padding
+        br = (f'<br><div style="height:{band_h - 12}px"></div>'
+              if i < steps else "")
+        yaxis_rows.append(
+            '<div style="font-size:9px;color:#aaa;text-align:right;'
+            'white-space:nowrap">%.1f%s</div>' % (price, br)
+        )
+    yaxis_cell = (
+        '<td style="vertical-align:top;padding-right:4px;padding-bottom:18px">'
+        + "".join(yaxis_rows) + "</td>"
+    )
+
+    # ── Bar columns ──────────────────────────────────────────────────────────
+    # Each hour = one <td> containing a 2-row mini-table:
+    #   row 0 (spacer): height = MAX_H - bar_h  → pushes bar to bottom
+    #   row 1 (bar):    height = bar_h, background = fill colour
+    hour_cells = []
+    label_cells = []
     for h in range(24):
         avg    = sum(hourly[h]) / len(hourly[h]) if h in hourly else 0.0
         is_sel = h in sel_hours
         in_pw  = has_pw and pw_s <= h * 60 < pw_e
         bar_h  = max(2, int((avg - min_c) / c_range * MAX_H))
+        spacer = MAX_H - bar_h
         fill   = "#7c3aed" if is_sel else bar_color(avg)
-        col_bg = "#dbeafe" if in_pw else "transparent"
-        cols.append(
-            '<td style="vertical-align:bottom;text-align:center;'
-            'width:%dpx;padding:0 1px;background:%s;border-radius:3px 3px 0 0">'
-            '<div title="%.2f c\u20ac/kWh" style="height:%dpx;background:%s;'
-            'border-radius:2px 2px 0 0;width:%dpx;margin:0 auto"></div>'
-            '</td>' % (COL_W, col_bg, avg, bar_h, fill, COL_W - 4)
+        col_bg = "#dbeafe" if in_pw else ""
+        col_bg_style = f"background:{col_bg};" if col_bg else ""
+
+        hour_cells.append(
+            '<td style="vertical-align:bottom;padding:0 1px;%(bg)s">'
+            '<table style="border-collapse:collapse;width:%(w)dpx">'
+            '<tr><td style="height:%(sp)dpx;padding:0"></td></tr>'
+            '<tr><td title="%(avg).2f c\u20ac/kWh" '
+            'style="height:%(bar)dpx;background:%(fill)s;padding:0;'
+            'border-radius:2px 2px 0 0"></td></tr>'
+            '</table></td>'
+            % dict(bg=col_bg_style, w=COL_W-2, sp=spacer,
+                   avg=avg, bar=bar_h, fill=fill)
         )
 
-    # Hour labels (show 0, 6, 12, 18, 24)
-    labels = []
-    for h in range(24):
         show = str(h) if h % 6 == 0 else ""
-        labels.append(
+        label_cells.append(
             '<td style="text-align:center;font-size:10px;color:#888;'
-            'padding:2px 0;width:%dpx">%s</td>' % (COL_W, show)
+            'padding:2px 0;width:%(w)dpx">%(s)s</td>'
+            % dict(w=COL_W, s=show)
         )
 
-    # Y-axis labels (positioned absolute on left)
-    yaxis = ""
-    for i in range(4):
-        price  = min_c + (max_c - min_c) * i / 3
-        bottom = int(i / 3 * MAX_H)
-        yaxis += (
-            '<div style="position:absolute;bottom:%dpx;left:0;font-size:9px;'
-            'color:#aaa;white-space:nowrap;transform:translateY(50%%)">'
-            '%.1f</div>' % (bottom, price)
+    chart_cell = (
+        '<td style="vertical-align:bottom">'
+        '<table style="border-collapse:collapse;border-bottom:1px solid #d0d7de">'
+        '<tr>' + "".join(hour_cells) + '</tr>'
+        '</table>'
+        '<table style="border-collapse:collapse">'
+        '<tr>' + "".join(label_cells) + '</tr>'
+        '</table>'
+        '</td>'
+    )
+
+    outer = (
+        '<table style="border-collapse:collapse;margin-top:8px">'
+        '<tr>' + yaxis_cell + chart_cell + '</tr>'
+        '</table>'
+    )
+
+    # ── Legend: small coloured table cells as swatches ───────────────────────
+    def swatch(color: str, label: str) -> str:
+        return (
+            '<td style="padding:0 8px 0 0;white-space:nowrap">'
+            '<table style="border-collapse:collapse;display:inline-table">'
+            '<tr>'
+            '<td style="width:10px;height:10px;background:%(c)s;'
+            'border:1px solid #ccc;padding:0"></td>'
+            '<td style="font-size:11px;color:#888;padding:0 0 0 3px">%(l)s</td>'
+            '</tr></table></td>'
+            % dict(c=color, l=label)
         )
+
+    swatches = []
+    if has_pw:
+        swatches.append(swatch("#dbeafe", "Preferred window"))
+    swatches.append(swatch("#7c3aed", "Charging"))
+    swatches.append(swatch("#4ade80", "Cheap"))
+    swatches.append(swatch("#facc15", "Mid"))
+    swatches.append(swatch("#f87171", "Expensive"))
 
     legend = (
-        '<div style="font-size:11px;color:#888;margin-top:8px">'
-        '<span style="display:inline-block;width:10px;height:10px;background:#dbeafe;'
-        'border:1px solid #93c5fd;margin-right:4px;vertical-align:middle"></span>'
-        'Preferred window&nbsp;&nbsp;'
-        '<span style="display:inline-block;width:10px;height:10px;background:#7c3aed;'
-        'margin-right:4px;vertical-align:middle"></span>Charging&nbsp;&nbsp;'
-        '<span style="display:inline-block;width:10px;height:10px;background:#4ade80;'
-        'margin-right:4px;vertical-align:middle"></span>Cheap&nbsp;'
-        '<span style="display:inline-block;width:10px;height:10px;background:#facc15;'
-        'margin-right:4px;vertical-align:middle"></span>Mid&nbsp;'
-        '<span style="display:inline-block;width:10px;height:10px;background:#f87171;'
-        'margin-right:4px;vertical-align:middle"></span>Expensive'
-        '</div>'
-        if pw_start else
-        '<div style="font-size:11px;color:#888;margin-top:8px">'
-        '<span style="display:inline-block;width:10px;height:10px;background:#7c3aed;'
-        'margin-right:4px;vertical-align:middle"></span>Charging&nbsp;&nbsp;'
-        '<span style="display:inline-block;width:10px;height:10px;background:#4ade80;'
-        'margin-right:4px;vertical-align:middle"></span>Cheap&nbsp;'
-        '<span style="display:inline-block;width:10px;height:10px;background:#facc15;'
-        'margin-right:4px;vertical-align:middle"></span>Mid&nbsp;'
-        '<span style="display:inline-block;width:10px;height:10px;background:#f87171;'
-        'margin-right:4px;vertical-align:middle"></span>Expensive'
-        '</div>'
+        '<table style="border-collapse:collapse;margin-top:6px">'
+        '<tr>' + "".join(swatches) + '</tr>'
+        '</table>'
     )
 
-    return (
-        '<div style="display:flex;align-items:flex-end;margin-top:8px">'
-        '<div style="position:relative;height:%dpx;width:28px;flex-shrink:0;margin-bottom:18px">%s</div>'
-        '<div>'
-        '<table style="border-collapse:collapse;border-bottom:1px solid #ccc"><tr>%s</tr></table>'
-        '<table style="border-collapse:collapse;width:100%%"><tr>%s</tr></table>'
-        '</div></div>%s'
-        % (MAX_H, yaxis, "".join(cols), "".join(labels), legend)
-    )
+    return outer + legend
 
 
 def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
