@@ -1,6 +1,6 @@
 # entsoe-prices
 
-Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu), selects the cheapest charging windows for the next day, and saves a plan to JSON for review or further use.
+Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu), selects the cheapest charging windows for the target day, and saves a plan to JSON for review or further use.
 
 ```
   ══════════════════════════════════════════════════════════════════
@@ -97,7 +97,7 @@ All fields have defaults — a minimal config only needs `entsoe.api_key` and `e
 | Key | Default | Description |
 |---|---|---|
 | `entsoe.api_key` | — | **Required.** ENTSO-E security token |
-| `entsoe.area` | `10YFI-1--------U` | Bidding zone — short code or full EIC (see below) |
+| `entsoe.area` | — | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
 | `charging.contiguous_only` | `false` | `true` = one unbroken block; `false` = cheapest slots (may be split across the day) |
 | `charging.merge_gaps` | `true` | Bridge gaps shorter than `min_slot_minutes` between selected blocks. Ignored when `contiguous_only` is `true` |
@@ -209,13 +209,14 @@ To trigger a run manually: **Actions → ENTSO-E Charging Plan → Run workflow*
 
 ### Job summary chart
 
-Each successful run writes an SVG price chart directly into the GitHub Actions job summary. The chart shows:
+Each successful run embeds an SVG price chart directly into the GitHub Actions job summary (no external image host needed). The chart shows:
 
-- **Pink filled area** — 15-minute resolution day-ahead prices (c€/kWh)
-- **Blue shading** — preferred charging window
-- **Purple bar** — scheduled charging windows
+- **Pink filled area** — day-ahead prices at full 15-minute slot resolution (c€/kWh)
+- **Blue shading** — preferred charging window (omitted if no preferred window is configured)
+- **Purple bar along the x-axis** — scheduled charging windows
+- **Y-axis** — price in c€/kWh with gridlines; x-axis spans 00:00–24:00 local time
 
-Open any workflow run and click the job name to see the summary with the chart inline.
+Open any workflow run → click the job name → scroll to the summary section.
 
 ---
 
@@ -255,8 +256,8 @@ Additional per-slot indicators:
 
 ## How it works
 
-1. **Fetch** — queries the ENTSO-E Transparency API (`documentType=A44`) for tomorrow's prices and today's remaining prices; exits cleanly if tomorrow's prices are not yet available
+1. **Fetch** — queries the ENTSO-E Transparency API (`documentType=A44`) for the target day's prices and today's remaining prices; determines target date based on local time (today if before noon, tomorrow if after noon); exits cleanly if prices are not yet available
 2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods; trims today's slots to those within reach of the preferred window
 3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional preferred window; spills leftward into today's evening if needed
 4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming the costliest endpoint slot to compensate), merges adjacent slots into contiguous windows, computes stats, writes JSON
-5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart; writes an SVG chart into the GitHub Actions job summary
+5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart; embeds an inline SVG price chart (15-minute resolution, with preferred window shading and charging window markers) into the GitHub Actions job summary
