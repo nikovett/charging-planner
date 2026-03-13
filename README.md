@@ -207,6 +207,16 @@ The workflow is scheduled twice daily — at 11:30 UTC and 12:30 UTC — to land
 
 To trigger a run manually: **Actions → ENTSO-E Charging Plan → Run workflow**.
 
+### Job summary chart
+
+Each successful run writes an SVG price chart directly into the GitHub Actions job summary. The chart shows:
+
+- **Pink filled area** — 15-minute resolution day-ahead prices (c€/kWh)
+- **Blue shading** — preferred charging window
+- **Purple bar** — scheduled charging windows
+
+Open any workflow run and click the job name to see the summary with the chart inline.
+
 ---
 
 ## Phone notification (ntfy)
@@ -249,4 +259,4 @@ Additional per-slot indicators:
 2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods; trims today's slots to those within reach of the preferred window
 3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional preferred window; spills leftward into today's evening if needed
 4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming the costliest endpoint slot to compensate), merges adjacent slots into contiguous windows, computes stats, writes JSON
-5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart
+5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart; writes an SVG chart into the GitHub Actions job summary

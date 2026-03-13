@@ -1100,6 +1100,167 @@ def print_plan_summary(plan: dict, all_prices: list[dict]) -> None:
 # GitHub Actions job summary
 # ===========================================================================
 
+def render_svg_chart(plan: dict, all_prices: list[dict]) -> str:
+    """
+    Render an SVG price-area chart with charging windows marked as a bar
+    along the x-axis, suitable for embedding in GitHub Actions job summaries.
+    """
+    if not all_prices:
+        return ""
+
+    W, H      = 600, 220
+    PAD_L     = 48
+    PAD_R     = 12
+    PAD_T     = 18
+    PAD_B     = 52
+    BAR_H     = 10
+    CHART_W   = W - PAD_L - PAD_R
+    CHART_H   = H - PAD_T - PAD_B - BAR_H - 4
+
+    offset = plan["utc_offset_hours"]
+    wins   = plan["windows"]
+
+    slots_sorted = sorted(all_prices, key=lambda s: s["start"])
+    all_c = [s["price_eur_kwh"] * 100 for s in slots_sorted]
+    if not all_c:
+        return ""
+    max_c   = max(all_c) * 1.15
+    c_range = max_c or 1.0
+
+    # Map slot UTC datetimes to x-positions via local-day fraction.
+    # Anchor to target_date (from plan) so x=0 always means local 00:00,
+    # regardless of where the first fetched slot falls in UTC.
+    from datetime import date as _date
+    target_date   = _date.fromisoformat(plan["date"])
+    day_start_utc = datetime.combine(target_date, datetime.min.time(), tzinfo=timezone.utc) - timedelta(hours=offset)
+    day_minutes   = 24 * 60  # NOTE: assumes 24h day; DST transition days are 23h/25h but
+    #                      price data is still published in 24 hourly slots,
+    #                      so the x-axis will be very slightly off on those days.
+
+    def xp(hour: float) -> float:
+        return PAD_L + hour / 24 * CHART_W
+
+    def xp_dt(dt) -> float:
+        minutes = (dt - day_start_utc).total_seconds() / 60
+        return PAD_L + (minutes / day_minutes) * CHART_W
+
+    def yp(price_c: float) -> float:
+        return PAD_T + CHART_H * (1 - price_c / c_range)
+
+    # Step-chart area path — one step per slot at full 15-min resolution
+    points: list[tuple[float, float]] = []
+    for slot in slots_sorted:
+        price_c = slot["price_eur_kwh"] * 100
+        points.append((xp_dt(slot["start"]), yp(price_c)))
+        points.append((xp_dt(slot["end"]),   yp(price_c)))
+
+    baseline = yp(0)
+    path_d = "M %.1f,%.1f" % (points[0][0], baseline)
+    for px, py in points:
+        path_d += " L %.1f,%.1f" % (px, py)
+    path_d += " L %.1f,%.1f Z" % (points[-1][0], baseline)
+
+    # Gridlines + y-labels
+    n_grid   = 3
+    bar_top  = PAD_T + CHART_H + 4
+    grid_els = []
+    for i in range(n_grid + 1):
+        price = max_c * i / n_grid
+        gy    = yp(price)
+        grid_els.append(
+            '<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#e0e0e0" stroke-width="1"/>'
+            % (PAD_L, gy, PAD_L + CHART_W, gy)
+        )
+        grid_els.append(
+            '<text x="%.1f" y="%.1f" text-anchor="end" font-size="10" fill="#888">%.1f</text>'
+            % (PAD_L - 4, gy + 4, price)
+        )
+
+    # X-axis labels
+    xaxis_els = []
+    for h in (0, 6, 12, 18, 24):
+        xv = xp(h)
+        xaxis_els.append(
+            '<text x="%.1f" y="%.1f" text-anchor="middle" font-size="10" fill="#888">%d</text>'
+            % (xv, bar_top + BAR_H + 14, h)
+        )
+
+    # Preferred window shaded background
+    def hhmm_frac(hhmm: str) -> float:
+        hh, mm = map(int, hhmm.split(":"))
+        return (hh + mm / 60) / 24
+
+    pw_start = plan.get("preferred_window_start")
+    pw_end   = plan.get("preferred_window_end")
+    pwin_el  = ""
+    if pw_start and pw_end:
+        px1 = PAD_L + hhmm_frac(pw_start) * CHART_W
+        px2 = PAD_L + hhmm_frac(pw_end)   * CHART_W
+        pwin_el = (
+            '<rect x="%.1f" y="%d" width="%.1f" height="%d"'
+            ' fill="#dbeafe" fill-opacity="0.55"/>' 
+            % (px1, PAD_T, px2 - px1, CHART_H)
+        )
+
+    # Charging window bars
+    bar_els = []
+    for w in wins:
+        x1 = PAD_L + hhmm_frac(w["start"]) * CHART_W
+        x2 = PAD_L + hhmm_frac(w["end"])   * CHART_W
+        bar_els.append(
+            '<rect x="%.1f" y="%.1f" width="%.1f" height="%d" fill="#7c3aed" rx="2"/>' 
+            % (x1, bar_top, x2 - x1, BAR_H)
+        )
+
+    # Legend
+    leg_y  = bar_top + BAR_H + 28
+    legend = (
+        '<rect x="%d" y="%.1f" width="12" height="8" fill="#f9a8b8" rx="1"/>' 
+        % (PAD_L, leg_y - 8)
+        + '<text x="%d" y="%.1f" font-size="10" fill="#888">Prices</text>' 
+        % (PAD_L + 16, leg_y)
+        + '<rect x="%d" y="%.1f" width="12" height="8" fill="#7c3aed" rx="1"/>' 
+        % (PAD_L + 70, leg_y - 8)
+        + '<text x="%d" y="%.1f" font-size="10" fill="#888">Charging</text>' 
+        % (PAD_L + 86, leg_y)
+    )
+    if pw_start and pw_end:
+        legend += (
+            '<rect x="%d" y="%.1f" width="12" height="8" fill="#dbeafe" rx="1"'
+            ' stroke="#93c5fd" stroke-width="1"/>' 
+            % (PAD_L + 155, leg_y - 8)
+            + '<text x="%d" y="%.1f" font-size="10" fill="#888">Preferred window</text>' 
+            % (PAD_L + 171, leg_y)
+    )
+
+    # Y-axis label (rotated)
+    mid_y  = PAD_T + CHART_H // 2
+    ylabel = (
+        '<text x="10" y="%d" text-anchor="middle" font-size="10" fill="#aaa"'
+        ' transform="rotate(-90,10,%d)">c\u20ac/kWh</text>' % (mid_y, mid_y)
+    )
+
+    parts = [
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %d %d" width="%d" height="%d"'
+        ' style="font-family:sans-serif;background:#fff">' % (W, H, W, H),
+        "".join(grid_els),
+        pwin_el,
+        '<path d="%s" fill="#f9a8b8" fill-opacity="0.7" stroke="#f472b6" stroke-width="1.5"/>' % path_d,
+        '<rect x="%d" y="%.1f" width="%d" height="%d" fill="#f3f4f6" rx="2"/>'
+        % (PAD_L, bar_top, CHART_W, BAR_H),
+        "".join(bar_els),
+        '<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="#ccc" stroke-width="1"/>'
+        % (PAD_L, PAD_T, PAD_L, PAD_T + CHART_H),
+        '<line x1="%d" y1="%d" x2="%d" y2="%d" stroke="#ccc" stroke-width="1"/>'
+        % (PAD_L, PAD_T + CHART_H, PAD_L + CHART_W, PAD_T + CHART_H),
+        "".join(xaxis_els),
+        ylabel,
+        legend,
+        "</svg>",
+    ]
+    return "\n".join(parts)
+
+
 def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
@@ -1139,45 +1300,10 @@ def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
         md += ["_No windows selected._", ""]
 
     if all_prices:
-        # Plain-text chart for GHA (no ANSI)
-        offset = plan["utc_offset_hours"]
-        hourly_prices: dict[int, list[float]] = defaultdict(list)
-        sel_starts: set = set()
-        for slot in all_prices:
-            local_start = slot["start"] + timedelta(hours=offset)
-            hhmm = local_start.strftime("%H:%M")
-            for w in wins:
-                if w["start"] <= hhmm < w["end"]:
-                    sel_starts.add(slot["start"])
-                    break
+        svg = render_svg_chart(plan, all_prices)
+        if svg:
+            md += ["### Price profile", "", svg, ""]
 
-        for slot in all_prices:
-            lh = (slot["start"] + timedelta(hours=offset)).hour
-            hourly_prices[lh].append(slot["price_eur_kwh"])
-
-        all_eur = [s["price_eur_kwh"] for s in all_prices]
-        min_p, max_p = min(all_eur), max(all_eur)
-        p_range = max_p - min_p or 1.0
-        BAR = 36
-
-        chart_lines = ["Hour   c€/kWh  " + " " * (BAR // 2 - 3) + "Price profile",
-                       "─" * (BAR + 18)]
-        for hour in range(24):
-            if hour not in hourly_prices:
-                continue
-            avg_h   = sum(hourly_prices[hour]) / len(hourly_prices[hour])
-            filled  = max(1, int((avg_h - min_p) / p_range * BAR))
-            is_sel  = any((slot["start"] + timedelta(hours=offset)).hour == hour
-                          and slot["start"] in sel_starts for slot in all_prices)
-            bar_chr = "█" if is_sel else "░"
-            marker  = " ◀" if is_sel else ""
-            chart_lines.append(
-                f"{hour:02d}:00  {avg_h*100:5.2f}   {bar_chr * filled}{'░' * (BAR - filled)}{marker}"
-            )
-        chart_lines.append("─" * (BAR + 18))
-        chart_lines.append(f"░ available  █ selected   min {min_p*100:.2f}  avg {sum(all_eur)/len(all_eur)*100:.2f}  max {max_p*100:.2f}  c€/kWh")
-
-        md += ["### Price profile", "", "```", "\n".join(chart_lines), "```", ""]
 
     try:
         with open(summary_path, "a", encoding="utf-8") as f:
