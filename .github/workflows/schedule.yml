@@ -2,8 +2,9 @@ name: ENTSO-E Charging Plan
 
 on:
   schedule:
-    - cron: '30 11 * * *'  # 14:30 EEST (summer, UTC+3)
-    - cron: '30 12 * * *'  # 14:30 EET  (winter, UTC+2)
+    - cron: '0 12 * * *'   # 12:00 UTC = 15:00 EEST (summer) / 14:00 EET (winter)
+                            # One run covers both DST states. Prices publish ~13:00 CET
+                            # so this always lands after publication.
   workflow_dispatch:
 
 jobs:
