@@ -209,12 +209,17 @@ To trigger a run manually: **Actions → ENTSO-E Charging Plan → Run workflow*
 
 ### Job summary chart
 
-Each successful run embeds an SVG price chart directly into the GitHub Actions job summary (no external image host needed). The chart shows:
+Each successful run embeds an HTML bar chart directly into the GitHub Actions job summary. GitHub Actions summaries support inline HTML with `style` attributes but not SVG or data URIs, so the chart is rendered as a compact HTML table — one column per hour, bars growing upward.
 
-- **Pink filled area** — day-ahead prices at full 15-minute slot resolution (c€/kWh)
-- **Blue shading** — preferred charging window (omitted if no preferred window is configured)
-- **Purple bar along the x-axis** — scheduled charging windows
-- **Y-axis** — price in c€/kWh with gridlines; x-axis spans 00:00–24:00 local time
+The chart shows:
+
+- **Blue column background** — preferred charging window (omitted if no preferred window is configured)
+- **Purple bar** — scheduled charging hours
+- **Green / yellow / red bars** — price level (cheap → mid → expensive) for unscheduled hours
+- **Y-axis** — c€/kWh scale; x-axis labels hours 0, 6, 12, 18
+- **Hover tooltip** — exact average price for each hour column
+
+See [`example_summary.html`](example_summary.html) for a rendered example of what the full job summary looks like.
 
 Open any workflow run → click the job name → scroll to the summary section.
 
@@ -260,4 +265,4 @@ Additional per-slot indicators:
 2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods; trims today's slots to those within reach of the preferred window
 3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional preferred window; spills leftward into today's evening if needed
 4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming the costliest endpoint slot to compensate), merges adjacent slots into contiguous windows, computes stats, writes JSON
-5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart; embeds an inline SVG price chart (15-minute resolution, with preferred window shading and charging window markers) into the GitHub Actions job summary
+5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart; writes an inline HTML bar chart (one column per hour, preferred window shading, charging hour markers) into the GitHub Actions job summary
