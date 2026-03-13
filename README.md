@@ -186,7 +186,7 @@ The saved plan is straightforward and easy to hand-edit:
 
 ## GitHub Actions
 
-Place `schedule.yml` in `.github/workflows/`. The workflow runs twice daily (landing at 14:30 Helsinki time in both summer and winter), builds the plan, and uploads it as a workflow artifact for review.
+Place `schedule.yml` in `.github/workflows/`. The workflow runs once daily at 12:00 UTC, builds the plan, and uploads it as a workflow artifact for review.
 
 ### Required secret
 
@@ -202,7 +202,7 @@ Add a single repository secret:
 Settings → Secrets and variables → Actions → New repository secret
 ```
 
-The workflow runs once daily at 12:00 UTC — 15:00 Helsinki time in summer (EEST, UTC+3) and 14:00 in winter (EET, UTC+2). A single run covers both DST states because 12:00 UTC lands after ENTSO-E's ~13:00 CET publication window in all cases.
+The workflow runs once daily at 12:00 UTC — 14:00 Helsinki time in winter (EET, UTC+2) and 15:00 in summer (EEST, UTC+3). A single cron covers both DST states because 12:00 UTC lands after ENTSO-E's ~13:00 CET publication window in all cases.
 
 To trigger a run manually: **Actions → ENTSO-E Charging Plan → Run workflow**.
 

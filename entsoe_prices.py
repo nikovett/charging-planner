@@ -47,6 +47,28 @@ log = logging.getLogger(__name__)
 
 
 # ===========================================================================
+# Data model
+# ===========================================================================
+
+@dataclass(frozen=True)
+class Slot:
+    """A single 15/30/60-minute price slot from ENTSO-E.
+
+    frozen=True makes Slot hashable (usable in sets) and its start/end
+    datetimes serve as a natural key.  All selection and merge functions
+    operate on lists of Slot rather than plain dicts.
+    """
+    start:             datetime
+    end:               datetime
+    duration_minutes:  int
+    price_eur_kwh:     float
+    slot:              int = 0          # ordinal within the fetched batch
+
+    def __lt__(self, other: "Slot") -> bool:
+        return self.start < other.start
+
+
+# ===========================================================================
 # Configuration
 # ===========================================================================
 
@@ -221,6 +243,65 @@ def _emit_errors(errors: list) -> None:
 
 
 # ===========================================================================
+# Typed config
+# ===========================================================================
+
+@dataclass
+class Config:
+    """Parsed, validated configuration ready for use in cmd_plan.
+
+    All type conversions happen here (hours→minutes, cents→EUR, HH:MM strings
+    kept as-is for log messages).  cmd_plan receives a Config and never
+    touches the raw dict again.
+    """
+    # ENTSO-E
+    api_key:                str
+    area:                   str
+
+    # Charging
+    required_minutes:       int
+    contiguous_only:        bool
+    merge_gaps:             bool
+    min_slot_minutes:       int
+    max_price_eur:          Optional[float]   # None = no ceiling
+    preferred_window_start: str               # validated HH:MM
+    preferred_window_end:   str               # validated HH:MM
+    tz:                     object            # ZoneInfo or timezone.utc
+    tz_name:                str
+
+
+def parse_config(raw: dict) -> "Config":
+    """Validate raw config dict and return a typed Config.
+
+    Raises ConfigError on any invalid field.  This is the single entry point
+    for config validation — callers should not call validate_plan_config
+    directly.
+    """
+    validate_plan_config(raw)          # raises ConfigError on any problem
+
+    et = raw["entsoe"]
+    ch = raw["charging"]
+
+    # Resolve timezone — may raise ConfigError for explicit bad names
+    tz_name, tz = _resolve_tz(ch.get("timezone"), date.today())
+
+    ceil_cents = ch.get("max_price_cents_kwh")
+    return Config(
+        api_key=et["api_key"],
+        area=et["area"],
+        required_minutes=int(ch["required_hours"] * 60),
+        contiguous_only=bool(ch.get("contiguous_only", False)),
+        merge_gaps=bool(ch.get("merge_gaps", True)),
+        min_slot_minutes=int(ch.get("min_slot_minutes", 30)),
+        max_price_eur=ceil_cents / 100.0 if ceil_cents is not None else None,
+        preferred_window_start=ch["preferred_window_start"],
+        preferred_window_end=ch["preferred_window_end"],
+        tz=tz,
+        tz_name=tz_name,
+    )
+
+
+# ===========================================================================
 # ENTSO-E Transparency Platform API
 # ===========================================================================
 
@@ -314,8 +395,8 @@ def fetch_entsoe_prices(
     tomorrow_start_utc = datetime.combine(
         target_date - timedelta(days=1), time(23, 0), tzinfo=timezone.utc
     )
-    target_slots   = [s for s in all_slots if s["start"] >= tomorrow_start_utc]
-    target_minutes = sum(s["duration_minutes"] for s in target_slots)
+    target_slots   = [s for s in all_slots if s.start >= tomorrow_start_utc]
+    target_minutes = sum(s.duration_minutes for s in target_slots)
     if target_minutes < 23 * 60:
         raise PricesNotYetAvailable(
             f"Only {target_minutes} min of data for {target_date} "
@@ -324,17 +405,18 @@ def fetch_entsoe_prices(
 
     # Filter today's slots to >= now so we don't schedule in the past.
     now_utc     = datetime.now(tz=timezone.utc)
-    today_slots = [s for s in all_slots if s["start"] < tomorrow_start_utc
-                   and s["start"] >= now_utc]
+    today_slots = [s for s in all_slots if s.start < tomorrow_start_utc
+                   and s.start >= now_utc]
     log.info("Today's remaining slots (>= now): %d", len(today_slots))
 
-    combined = sorted(today_slots + target_slots, key=lambda x: x["start"])
-    for i, s in enumerate(combined):
-        s["slot"] = i
+    combined_raw = sorted(today_slots + target_slots, key=lambda x: x.start)
+    combined = [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
+                     price_eur_kwh=s.price_eur_kwh, slot=i)
+                for i, s in enumerate(combined_raw)]
     return combined
 
 
-def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[dict]:
+def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[Slot]:
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
@@ -428,30 +510,32 @@ def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[dict]
                 continue
             if period_end_utc and slot_end > period_end_utc:
                 continue
-            prices.append({
-                "slot": len(prices),
-                "start": slot_start,
-                "end": slot_end,
-                "duration_minutes": slot_minutes,
-                "price_eur_kwh": last_price / 1000.0,
-            })
+            prices.append(Slot(
+                slot=len(prices),
+                start=slot_start,
+                end=slot_end,
+                duration_minutes=slot_minutes,
+                price_eur_kwh=last_price / 1000.0,
+            ))
 
     seen: set[datetime] = set()
-    unique = []
-    for p in sorted(prices, key=lambda x: x["start"]):
-        if p["start"] not in seen:
-            seen.add(p["start"])
+    unique: list[Slot] = []
+    for p in sorted(prices, key=lambda x: x.start):
+        if p.start not in seen:
+            seen.add(p.start)
             unique.append(p)
 
-    for i, p in enumerate(unique):
-        p["slot"] = i
+    # Re-assign sequential slot ordinals after deduplication
+    unique = [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
+                   price_eur_kwh=s.price_eur_kwh, slot=i)
+              for i, s in enumerate(unique)]
 
     if not unique:
         raise PricesNotYetAvailable(
             f"No price slots found for area={area} date={target_date}."
         )
 
-    slot_dur = unique[0]["duration_minutes"]
+    slot_dur = unique[0].duration_minutes
     log.info("Fetched %d price slots for %s (resolution: %d-minute)", len(unique), target_date, slot_dur)
     return unique
 
@@ -461,16 +545,16 @@ def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[dict]
 # ===========================================================================
 
 def select_charging_windows(
-    prices: list[dict],
+    prices: list[Slot],
     required_minutes: int,
     contiguous_only: bool = False,
     max_price: Optional[float] = None,
     min_slot_minutes: int = 15,
-) -> list[dict]:
+) -> list[Slot]:
     if not prices:
         return []
 
-    slot_dur = prices[0]["duration_minutes"]
+    slot_dur = prices[0].duration_minutes
     if required_minutes % slot_dur != 0:
         required_minutes = ((required_minutes + slot_dur - 1) // slot_dur) * slot_dur
         log.warning("required_minutes rounded up to %d to align with %d-minute slots.",
@@ -481,7 +565,7 @@ def select_charging_windows(
 
     candidates = prices
     if max_price is not None:
-        candidates = [p for p in prices if p["price_eur_kwh"] <= max_price]
+        candidates = [p for p in prices if p.price_eur_kwh <= max_price]
         if len(candidates) < n_slots:
             log.warning("Only %d slots below price ceiling %.2f c/kWh (needed %d).",
                         len(candidates), max_price * 100, n_slots)
@@ -500,22 +584,22 @@ def select_charging_windows(
                  effective_min_minutes, slot_dur)
 
     if min_slots_per_block <= 1:
-        selected = sorted(candidates, key=lambda x: (x["price_eur_kwh"], -x["start"].timestamp()))[:n_slots]
-        selected.sort(key=lambda x: x["start"])
+        selected = sorted(candidates, key=lambda x: (x.price_eur_kwh, -x.start.timestamp()))[:n_slots]
+        selected.sort(key=lambda x: x.start)
         return selected
 
     return _select_with_min_block(candidates, n_slots, min_slots_per_block)
 
 
 def _select_with_min_block(
-    candidates: list[dict],
+    candidates: list[Slot],
     n_slots: int,
     min_slots_per_block: int,
-) -> list[dict]:
-    sorted_candidates = sorted(candidates, key=lambda x: (x["price_eur_kwh"], -x["start"].timestamp()))
-    slot_dur = candidates[0]["duration_minutes"] if candidates else 15
+) -> list[Slot]:
+    sorted_candidates = sorted(candidates, key=lambda x: (x.price_eur_kwh, -x.start.timestamp()))
+    slot_dur = candidates[0].duration_minutes if candidates else 15
 
-    selected_set: set[int] = set()
+    selected_set: set[int] = set()  # id() of selected Slot objects
     disqualified: set[int] = set()
 
     def pick_next(n: int) -> list[dict]:
@@ -533,7 +617,7 @@ def _select_with_min_block(
     slot_by_id = {id(s): s for s in sorted_candidates}
 
     for iteration in range(len(candidates)):
-        current = sorted([slot_by_id[i] for i in selected_set], key=lambda x: x["start"])
+        current = sorted([slot_by_id[i] for i in selected_set], key=lambda x: x.start)
         blocks = _group_contiguous(current)
         short_blocks = [b for b in blocks if len(b) < min_slots_per_block]
         if not short_blocks:
@@ -557,9 +641,9 @@ def _select_with_min_block(
     else:
         log.warning("min_slot_minutes enforcement loop exhausted without converging.")
 
-    result = sorted([slot_by_id[i] for i in selected_set], key=lambda x: x["start"])
+    result = sorted([slot_by_id[i] for i in selected_set], key=lambda x: x.start)
     final_blocks  = _group_contiguous(result)
-    slot_dur      = candidates[0]["duration_minutes"] if candidates else 15
+    slot_dur      = candidates[0].duration_minutes if candidates else 15
     min_block_min = min_slots_per_block * slot_dur
     short = [b for b in final_blocks if len(b) < min_slots_per_block]
     if short:
@@ -572,8 +656,8 @@ def _select_with_min_block(
 
 
 def _best_contiguous_window(
-    candidates: list[dict], all_prices: list[dict], n_slots: int
-) -> list[dict]:
+    candidates: list[Slot], all_prices: list[Slot], n_slots: int
+) -> list[Slot]:
     """Return the cheapest contiguous run of n_slots from all_prices where every slot is a candidate.
 
     If no fully-eligible window exists (e.g. max_price excludes too many slots),
@@ -583,7 +667,7 @@ def _best_contiguous_window(
     slots = all_prices
     if len(slots) < n_slots:
         return slots
-    candidate_starts: set[datetime] = {s["start"] for s in candidates}
+    candidate_starts: set[datetime] = {s.start for s in candidates}
 
     best_avg      = float("inf")
     best_start    = None
@@ -591,8 +675,8 @@ def _best_contiguous_window(
     # (closest to departure time).
     for i in range(len(slots) - n_slots, -1, -1):
         window = slots[i:i + n_slots]
-        if all(s["start"] in candidate_starts for s in window):
-            avg = sum(s["price_eur_kwh"] for s in window) / n_slots
+        if all(s.start in candidate_starts for s in window):
+            avg = sum(s.price_eur_kwh for s in window) / n_slots
             if avg <= best_avg:
                 best_avg   = avg
                 best_start = i
@@ -610,7 +694,7 @@ def _best_contiguous_window(
     best_start = 0
     for i in range(len(slots) - n_slots, -1, -1):
         window = slots[i:i + n_slots]
-        avg = sum(s["price_eur_kwh"] for s in window) / n_slots
+        avg = sum(s.price_eur_kwh for s in window) / n_slots
         if avg <= best_avg:
             best_avg   = avg
             best_start = i
@@ -632,12 +716,12 @@ def _hhmm_to_utc(hhmm: str, ref_date: date, tz) -> datetime:
 
 
 def filter_preferred_window(
-    prices: list[dict],
+    prices: list[Slot],
     win_start_utc: datetime,
     win_end_utc: datetime,
     window_start_local: str,
     window_end_local: str,
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[Slot], list[Slot]]:
     """Split prices into slots inside and outside the preferred window.
 
     win_start_utc / win_end_utc are the pre-resolved UTC bounds.
@@ -645,7 +729,7 @@ def filter_preferred_window(
     """
     inside, outside = [], []
     for slot in prices:
-        if slot["start"] >= win_start_utc and slot["end"] <= win_end_utc:
+        if slot.start >= win_start_utc and slot.end <= win_end_utc:
             inside.append(slot)
         else:
             outside.append(slot)
@@ -656,14 +740,14 @@ def filter_preferred_window(
     return inside, outside
 
 
-def _group_contiguous(slots: list[dict]) -> list[list[dict]]:
+def _group_contiguous(slots: list[Slot]) -> list[list[Slot]]:
     """Split a sorted list of slots into groups of adjacent (contiguous) slots."""
     if not slots:
         return []
-    groups: list[list[dict]] = []
+    groups: list[list[Slot]] = []
     block = [slots[0]]
     for slot in slots[1:]:
-        if slot["start"] == block[-1]["end"]:
+        if slot.start == block[-1].end:
             block.append(slot)
         else:
             groups.append(block)
@@ -673,11 +757,11 @@ def _group_contiguous(slots: list[dict]) -> list[list[dict]]:
 
 
 def close_gap_merge(
-    selected: list[dict],
-    all_prices: list[dict],
+    selected: list[Slot],
+    all_prices: list[Slot],
     min_slot_minutes: int,
     required_minutes: int,
-) -> tuple[list[dict], set]:
+) -> tuple[list[Slot], set]:
     """
     If two selected blocks are separated by a gap smaller than min_slot_minutes,
     bridge the gap by including those intervening slots, then trim endpoint slots
@@ -696,8 +780,8 @@ def close_gap_merge(
     if not selected:
         return selected, set()
 
-    slots = sorted(selected, key=lambda x: x["start"])
-    price_map = {s["start"]: s for s in all_prices}
+    slots = sorted(selected, key=lambda x: x.start)
+    price_map = {s.start: s for s in all_prices}
     merged_starts: set = set()
 
     changed = True
@@ -705,33 +789,33 @@ def close_gap_merge(
         changed = False
         groups = _group_contiguous(slots)
         for i in range(len(groups) - 1):
-            gap_start = groups[i][-1]["end"]
-            gap_end   = groups[i + 1][0]["start"]
+            gap_start = groups[i][-1].end
+            gap_end   = groups[i + 1][0].start
             gap_min   = int((gap_end - gap_start).total_seconds() / 60)
             if 0 < gap_min < min_slot_minutes:
                 # Collect gap slots from all_prices
                 gap_slots = [
-                    price_map[s["start"]]
+                    price_map[s.start]
                     for s in all_prices
-                    if gap_start <= s["start"] < gap_end and s["start"] in price_map
+                    if gap_start <= s.start < gap_end and s.start in price_map
                 ]
                 if not gap_slots:
                     continue
                 # Merge the two blocks + gap into one
                 merged_block = sorted(
                     groups[i] + gap_slots + groups[i + 1],
-                    key=lambda x: x["start"],
+                    key=lambda x: x.start,
                 )
                 # Trim endpoint slots until total selected equals required_minutes.
                 # extra_minutes = how much over required we are after bridging the gap.
                 # merged_block already contains all slots including the gap, so summing
                 # it gives the exact post-bridge total without double-counting.
                 other_total   = sum(
-                    s["duration_minutes"]
+                    s.duration_minutes
                     for g in (groups[:i] + groups[i + 2:])
                     for s in g
                 )
-                current_total = sum(s["duration_minutes"] for s in merged_block)
+                current_total = sum(s.duration_minutes for s in merged_block)
                 extra_minutes = (current_total + other_total) - required_minutes
                 log.info(
                     "Gap of %d min between %s and %s is below min_slot_minutes=%d — merging blocks.",
@@ -746,40 +830,40 @@ def close_gap_merge(
                     front = merged_block[0]
                     back  = merged_block[-1]
                     # Drop back only if it is strictly more expensive than front.
-                    if back["price_eur_kwh"] > front["price_eur_kwh"]:
+                    if back.price_eur_kwh > front.price_eur_kwh:
                         log.info(
                             "Trimming trailing slot %s (%.4f €/kWh) — more expensive than front (%.4f)",
-                            back["start"].isoformat(), back["price_eur_kwh"], front["price_eur_kwh"],
+                            back.start.isoformat(), back.price_eur_kwh, front.price_eur_kwh,
                         )
                         merged_block   = merged_block[:-1]
-                        extra_minutes -= back["duration_minutes"]
+                        extra_minutes -= back.duration_minutes
                     else:
                         log.info(
                             "Trimming leading slot %s (%.4f €/kWh)%s",
-                            front["start"].isoformat(), front["price_eur_kwh"],
-                            " — tiebreak" if back["price_eur_kwh"] == front["price_eur_kwh"] else "",
+                            front.start.isoformat(), front.price_eur_kwh,
+                            " — tiebreak" if back.price_eur_kwh == front.price_eur_kwh else "",
                         )
                         merged_block   = merged_block[1:]
-                        extra_minutes -= front["duration_minutes"]
+                        extra_minutes -= front.duration_minutes
 
-                merged_starts.add(merged_block[0]["start"])
+                merged_starts.add(merged_block[0].start)
 
                 # Rebuild slots list with the merged block in place
                 other_groups = groups[:i] + [merged_block] + groups[i + 2:]
                 slots = sorted(
                     [s for g in other_groups for s in g],
-                    key=lambda x: x["start"],
+                    key=lambda x: x.start,
                 )
                 changed = True
                 break  # restart loop with updated groups
 
     return slots, merged_starts
 
-def merge_contiguous_slots(slots: list[dict]) -> list[tuple[datetime, datetime]]:
+def merge_contiguous_slots(slots: list[Slot]) -> list[tuple[datetime, datetime]]:
     if not slots:
         return []
-    groups = _group_contiguous(sorted(slots, key=lambda x: x["start"]))
-    return [(g[0]["start"], g[-1]["end"]) for g in groups]
+    groups = _group_contiguous(sorted(slots, key=lambda x: x.start))
+    return [(g[0].start, g[-1].end) for g in groups]
 
 
 # ===========================================================================
@@ -862,8 +946,8 @@ class PlanParams:
     target_date:            date
     area:                   str
     price_source:           str
-    all_prices:             list
-    selected:               list
+    all_prices:             list[Slot]
+    selected:               list[Slot]
     windows:                list
     required_minutes:       int
     tz:                     object          # ZoneInfo or timezone.utc
@@ -898,7 +982,7 @@ def build_plan(p: PlanParams) -> dict:
     """
     # Use selected prices as fallback if all_prices is somehow empty
     stat_source = p.all_prices or p.selected
-    all_prices_eur = [s["price_eur_kwh"] for s in stat_source]
+    all_prices_eur = [s.price_eur_kwh for s in stat_source]
     if all_prices_eur:
         price_stats = {
             "min_cents_kwh":  round(min(all_prices_eur) * 100, 4),
@@ -913,13 +997,13 @@ def build_plan(p: PlanParams) -> dict:
         start_local = start_utc.astimezone(p.tz)
         end_local   = end_utc.astimezone(p.tz)
         dur = int((end_utc - start_utc).total_seconds() / 60)
-        block_slots = [s for s in p.selected if start_utc <= s["start"] < end_utc]
-        avg_p = (sum(s["price_eur_kwh"] for s in block_slots) / len(block_slots) * 100
+        block_slots = [s for s in p.selected if start_utc <= s.start < end_utc]
+        avg_p = (sum(s.price_eur_kwh for s in block_slots) / len(block_slots) * 100
                  if block_slots else 0.0)
         # A window is gap_merged if any of its constituent slots was the start
         # of a gap-merged block. Checking only start_utc is fragile when
         # close_gap_merge produces blocks that get further merged.
-        is_gap_merged = any(s["start"] in p.merged_starts for s in block_slots)
+        is_gap_merged = any(s.start in p.merged_starts for s in block_slots)
         win_list.append({
             "start": start_local.strftime("%H:%M"),
             "end":   end_local.strftime("%H:%M"),
@@ -928,8 +1012,8 @@ def build_plan(p: PlanParams) -> dict:
             "gap_merged": is_gap_merged,
         })
 
-    total_min = sum(s["duration_minutes"] for s in p.selected)
-    sel_prices = [s["price_eur_kwh"] for s in p.selected]
+    total_min = sum(s.duration_minutes for s in p.selected)
+    sel_prices = [s.price_eur_kwh for s in p.selected]
     overall_avg = (sum(sel_prices) / len(sel_prices) * 100) if sel_prices else 0.0
 
     return {
@@ -949,7 +1033,7 @@ def build_plan(p: PlanParams) -> dict:
         "preferred_window_start": p.preferred_window_start,
         "preferred_window_end":   p.preferred_window_end,
         "windows":                win_list,
-        "selected_starts_utc":    [s["start"].isoformat() for s in p.selected],
+        "selected_starts_utc":    [s.start.isoformat() for s in p.selected],
     }
 
 
@@ -1019,7 +1103,7 @@ def _window_bar(start_hm: str, end_hm: str, dur_min: int, avg_c: float,
             f"{_c(col, f'{avg_c:.2f} c€/kWh')}  {_dim(dur_str)}")
 
 
-def print_plan_summary(plan: dict, all_prices: list[dict]) -> None:
+def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     """Print a rich, coloured plan summary to stdout."""
     W   = 66
     ps  = plan["price_stats"]
@@ -1081,7 +1165,7 @@ def print_plan_summary(plan: dict, all_prices: list[dict]) -> None:
 # GitHub Actions job summary
 # ===========================================================================
 
-def render_svg_chart(plan: dict, all_prices: list[dict]) -> str:
+def render_svg_chart(plan: dict, all_prices: list[Slot]) -> str:
     """
     Render an SVG price-area chart with charging windows marked as a bar
     along the x-axis.  Returns a raw SVG string suitable for saving as
@@ -1112,8 +1196,8 @@ def render_svg_chart(plan: dict, all_prices: list[dict]) -> str:
 
     hourly: dict[int, list[float]] = defaultdict(list)
     for slot in all_prices:
-        h = (slot["start"] + timedelta(hours=offset)).hour
-        hourly[h].append(slot["price_eur_kwh"] * 100)
+        h = (slot.start + timedelta(hours=offset)).hour
+        hourly[h].append(slot.price_eur_kwh * 100)
 
     all_c = [v for vals in hourly.values() for v in vals]
     if not all_c:
@@ -1135,10 +1219,10 @@ def render_svg_chart(plan: dict, all_prices: list[dict]) -> str:
 
     # ── Area path (step chart, one step per slot) ────────────────────────────
     points: list[tuple[float, float]] = []
-    for slot in sorted(all_prices, key=lambda s: s["start"]):
-        h_local = (slot["start"] + timedelta(hours=offset)).hour +                   (slot["start"] + timedelta(hours=offset)).minute / 60
-        h_end   = h_local + slot["duration_minutes"] / 60
-        price_c = slot["price_eur_kwh"] * 100
+    for slot in sorted(all_prices, key=lambda s: s.start):
+        h_local = (slot.start + timedelta(hours=offset)).hour +                   (slot.start + timedelta(hours=offset)).minute / 60
+        h_end   = h_local + slot.duration_minutes / 60
+        price_c = slot.price_eur_kwh * 100
         points.append((x(h_local), y(price_c)))
         points.append((x(h_end),   y(price_c)))
 
@@ -1228,7 +1312,7 @@ def render_svg_chart(plan: dict, all_prices: list[dict]) -> str:
     )
 
 
-def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
+def write_gha_summary(plan: dict, all_prices: list[Slot]) -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
@@ -1294,8 +1378,8 @@ def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
 # ===========================================================================
 
 def _select_spillover(
-    outside: list[dict],
-    selected: list[dict],
+    outside: list[Slot],
+    selected: list[Slot],
     contiguous_only: bool,
     win_start_utc: datetime,
     win_end_utc: datetime,
@@ -1304,8 +1388,8 @@ def _select_spillover(
     remaining: int,
     max_price_eur: Optional[float],
     min_slot_minutes: int,
-    all_prices: list[dict],
-) -> list[dict]:
+    all_prices: list[Slot],
+) -> list[Slot]:
     """
     Select spillover slots to cover `remaining` minutes when the preferred
     window alone cannot satisfy `required_minutes`.
@@ -1321,7 +1405,7 @@ def _select_spillover(
     candidates = [s for s in outside if id(s) not in selected_ids]
 
     # Restrict to slots before the window end.
-    candidates = [s for s in candidates if s["end"] <= win_end_utc]
+    candidates = [s for s in candidates if s.end <= win_end_utc]
     log.info(
         "Spillover restricted to slots before window end %s (%d candidates)",
         win_end_local, len(candidates),
@@ -1330,13 +1414,13 @@ def _select_spillover(
     if contiguous_only:
         if selected:
             # Extend leftward: take the slots immediately before the block start.
-            block_start_utc = min(s["start"] for s in selected)
+            block_start_utc = min(s.start for s in selected)
             before = sorted(
-                [s for s in candidates if s["end"] <= block_start_utc],
-                key=lambda x: x["start"],
+                [s for s in candidates if s.end <= block_start_utc],
+                key=lambda x: x.start,
                 reverse=True,
             )
-            slot_dur = all_prices[0]["duration_minutes"] if all_prices else 15
+            slot_dur = all_prices[0].duration_minutes if all_prices else 15
             n_extra  = (remaining + slot_dur - 1) // slot_dur
             spillover = list(reversed(before[:n_extra]))
             log.info(
@@ -1349,10 +1433,10 @@ def _select_spillover(
         # the result never spills after the preferred window end.
         filtered = [
             s for s in all_prices
-            if s["end"] <= win_end_utc
-            and (max_price_eur is None or s["price_eur_kwh"] <= max_price_eur)
+            if s.end <= win_end_utc
+            and (max_price_eur is None or s.price_eur_kwh <= max_price_eur)
         ]
-        slot_dur = all_prices[0]["duration_minutes"] if all_prices else 15
+        slot_dur = all_prices[0].duration_minutes if all_prices else 15
         n_slots  = (remaining + slot_dur - 1) // slot_dur
         return _best_contiguous_window(filtered, all_prices, n_slots)
 
@@ -1365,48 +1449,27 @@ def _select_spillover(
     )
 
 
-def cmd_plan(config: dict, output_path: str) -> dict:
-    """
-    Fetch prices, select windows, print the plan, save plan.json.
-    Returns the plan dict.
-    """
-    try:
-        validate_plan_config(config)
-    except ConfigError as exc:
-        log.error("%s", exc)
-        sys.exit(1)
+# ---------------------------------------------------------------------------
+# cmd_plan helpers — each covers one named phase of the planning pipeline
+# ---------------------------------------------------------------------------
 
-    et_cfg = config["entsoe"]
-    ch_cfg = config["charging"]
-
-    # target_date is the day whose prices we are planning for.
-    # Before noon local time: prices for today were just published (ENTSO-E ~13:00 CET),
-    # but we are already into that day — plan for today.
-    # After noon: plan for tomorrow (prices not yet published; run will exit cleanly if absent).
-    # Heuristic: use local noon as the cutover. We derive the precise offset below once
-    # _resolve_tz runs, but we need a date to call _resolve_tz — bootstrap with a UTC guess.
-    _now_utc   = datetime.now(tz=timezone.utc)
-    # Resolve timezone early so we can compute local time for target_date selection.
-    # We pass today's UTC date as a provisional ref_date — only affects DST edge
-    # cases at the exact moment of a DST transition, which is acceptable.
-    _tz_name_pre, _tz_pre = _resolve_tz(ch_cfg.get("timezone"), _now_utc.date())
-    _local_now  = _now_utc.astimezone(_tz_pre)
-    if _local_now.hour < 12:
-        # We are in the early hours of a new day — plan for today
-        target_date = _local_now.date()
+def _plan_target_date(cfg: Config) -> date:
+    """Return the date to plan for: today if before local noon, tomorrow otherwise."""
+    now_utc   = datetime.now(tz=timezone.utc)
+    local_now = now_utc.astimezone(cfg.tz)
+    if local_now.hour < 12:
+        target = local_now.date()
     else:
-        # Daytime/evening — plan for tomorrow
-        target_date = (_local_now + timedelta(days=1)).date()
-    log.info("Target date: %s (local time: %s)", target_date, _local_now.strftime("%Y-%m-%d %H:%M"))
+        target = (local_now + timedelta(days=1)).date()
+    log.info("Target date: %s (local time: %s)", target, local_now.strftime("%Y-%m-%d %H:%M"))
+    return target
 
-    # 1. Fetch prices
-    # Today's remaining slots are included so leftward spill can reach back
-    # into the current evening when required_hours exceeds the preferred window.
+
+def _fetch_prices(cfg: Config, target_date: date) -> tuple[list[Slot], str]:
+    """Fetch ENTSO-E prices for target_date.  Exits the process on failure."""
     try:
-        all_prices   = fetch_entsoe_prices(
-            et_cfg["api_key"], et_cfg["area"], target_date,
-        )
-        price_source = "ENTSO-E"
+        prices = fetch_entsoe_prices(cfg.api_key, cfg.area, target_date)
+        return prices, "ENTSO-E"
     except PricesNotYetAvailable:
         log.warning(
             "Tomorrow's prices (%s) are not yet available. "
@@ -1419,138 +1482,141 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         log.error("ENTSO-E fetch failed: %s", exc)
         sys.exit(1)
 
-    if not all_prices:
-        log.error("No prices available. Cannot build plan.")
-        sys.exit(1)
 
-    # 2. Timezone
-    tz_name, tz = _resolve_tz(ch_cfg.get("timezone"), target_date)
-    # Derive integer offset for the plan JSON (representative of target_date noon).
-    _noon = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=tz)
-    local_offset_hours = int(_noon.utcoffset().total_seconds() / 3600)
-    log.info("Timezone: %s (UTC%+d)", tz_name, local_offset_hours)
+def _select_slots(
+    cfg:             Config,
+    cfg_tz,                          # ZoneInfo for target_date
+    candidate_prices: list[Slot],
+    win_start_utc:   datetime,
+    win_end_utc:     datetime,
+) -> tuple[list[Slot], set]:
+    """Run the full slot-selection pipeline and return (selected, merged_starts).
 
-    # 3. Resolve preferred window HH:MM → UTC once; all downstream code uses UTC.
-    win_start_local  = ch_cfg["preferred_window_start"]
-    win_end_local    = ch_cfg["preferred_window_end"]
-    required_minutes = int(ch_cfg["required_hours"] * 60)
-    min_slot_minutes = int(ch_cfg.get("min_slot_minutes", 30))
-    ceil_cents       = ch_cfg.get("max_price_cents_kwh")
-    max_price_eur    = ceil_cents / 100.0 if ceil_cents is not None else None
-
-    win_start_utc = _hhmm_to_utc(win_start_local, target_date, tz)
-    win_end_utc   = _hhmm_to_utc(win_end_local,   target_date, tz)
-    log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
-
-    # Trim today's slots to those reachable by leftward spill.
-    # The earliest a block can start is: win_start_utc - required_minutes.
-    # Slots before that can never be part of the charging plan regardless.
-    # Keep all_prices intact for display; use candidate_prices for selection.
-    earliest_useful  = win_start_utc - timedelta(minutes=required_minutes)
-    candidate_prices = [s for s in all_prices if s["start"] >= earliest_useful]
-    trimmed = len(all_prices) - len(candidate_prices)
-    if trimmed:
-        log.info(
-            "Trimmed %d unreachable today-slots (earliest useful: %s UTC)",
-            trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"),
-        )
-
-    # 4. Split into preferred-window inside / outside
+    Pipeline:
+      filter preferred window → greedy cheapest select → spillover fill
+      → gap-merge (if enabled) → coverage warning
+    """
     inside, outside = filter_preferred_window(
         candidate_prices,
         win_start_utc=win_start_utc,
         win_end_utc=win_end_utc,
-        window_start_local=win_start_local,
-        window_end_local=win_end_local,
+        window_start_local=cfg.preferred_window_start,
+        window_end_local=cfg.preferred_window_end,
     )
 
-    # 5. Select charging slots
     selected = select_charging_windows(
         inside,
-        required_minutes=required_minutes,
-        contiguous_only=ch_cfg["contiguous_only"],
-        max_price=max_price_eur,
-        min_slot_minutes=min_slot_minutes,
+        required_minutes=cfg.required_minutes,
+        contiguous_only=cfg.contiguous_only,
+        max_price=cfg.max_price_eur,
+        min_slot_minutes=cfg.min_slot_minutes,
     )
-    sel_min   = sum(s["duration_minutes"] for s in selected)
-    remaining = required_minutes - sel_min
+
+    remaining = cfg.required_minutes - sum(s.duration_minutes for s in selected)
     if remaining > 0 and outside:
         log.info("Filling %d min from outside preferred window.", remaining)
         spillover = _select_spillover(
             outside=outside,
             selected=selected,
-            contiguous_only=ch_cfg["contiguous_only"],
+            contiguous_only=cfg.contiguous_only,
             win_start_utc=win_start_utc,
             win_end_utc=win_end_utc,
-            win_end_local=win_end_local,
-            required_minutes=required_minutes,
+            win_end_local=cfg.preferred_window_end,
+            required_minutes=cfg.required_minutes,
             remaining=remaining,
-            max_price_eur=max_price_eur,
-            min_slot_minutes=min_slot_minutes,
+            max_price_eur=cfg.max_price_eur,
+            min_slot_minutes=cfg.min_slot_minutes,
             all_prices=candidate_prices,
         )
-        selected = sorted(selected + spillover, key=lambda x: x["start"])
+        selected = sorted(selected + spillover, key=lambda x: x.start)
 
-    # 6. Gap merging
-    # Note: close_gap_merge uses candidate_prices for price_map lookup.
-    # Gap slots that fall outside the trimmed window won't be found and the
-    # merge will be silently skipped for that gap — acceptable in practice
-    # since such gaps would span the trim boundary (yesterday evening).
-    windows       = merge_contiguous_slots(selected)
     merged_starts: set = set()
-    if ch_cfg.get("merge_gaps", True) and not ch_cfg["contiguous_only"]:
+    if cfg.merge_gaps and not cfg.contiguous_only:
         selected, merged_starts = close_gap_merge(
-            selected, candidate_prices, min_slot_minutes, required_minutes
+            selected, candidate_prices, cfg.min_slot_minutes, cfg.required_minutes
         )
-        windows = merge_contiguous_slots(selected)
 
     if not selected:
         log.error("No slots selected.")
     else:
-        scheduled_min = sum(s["duration_minutes"] for s in selected)
-        if scheduled_min < required_minutes:
+        scheduled_min = sum(s.duration_minutes for s in selected)
+        if scheduled_min < cfg.required_minutes:
             log.warning(
                 "⚠ Only %d min scheduled of %d min required — "
                 "not enough price data available yet (tomorrow's prices may not be published).",
-                scheduled_min, required_minutes,
+                scheduled_min, cfg.required_minutes,
             )
 
-    # 7. Build plan — price stats should reflect tomorrow only, not today's spill slots
-    # Slots are stored as UTC datetimes; convert to local before comparing to target_date,
-    # otherwise UTC-offset timezones (e.g. FI UTC+2) silently drop all tomorrow slots.
-    tomorrow_prices = [
-        s for s in all_prices
-        if s["start"].astimezone(tz).date() == target_date
-    ]
+    return selected, merged_starts
+
+
+# ---------------------------------------------------------------------------
+# Main planning command
+# ---------------------------------------------------------------------------
+
+def cmd_plan(raw_config: dict, output_path: str) -> dict:
+    """Fetch prices, select windows, print the plan, save plan.json."""
+    try:
+        cfg = parse_config(raw_config)
+    except ConfigError as exc:
+        log.error("%s", exc)
+        sys.exit(1)
+
+    target_date = _plan_target_date(cfg)
+
+    all_prices, price_source = _fetch_prices(cfg, target_date)
+
+    # Re-resolve tz against the actual target_date: DST offset may differ from
+    # the today-based offset stored in cfg.tz (used only for target_date selection).
+    cfg_tz_name, cfg_tz = _resolve_tz(raw_config["charging"].get("timezone"), target_date)
+    _noon = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=cfg_tz)
+    log.info("Timezone: %s (UTC%+d)", cfg_tz_name,
+             int(_noon.utcoffset().total_seconds() / 3600))
+
+    # Resolve preferred window HH:MM → UTC once; all downstream code uses UTC.
+    win_start_utc = _hhmm_to_utc(cfg.preferred_window_start, target_date, cfg_tz)
+    win_end_utc   = _hhmm_to_utc(cfg.preferred_window_end,   target_date, cfg_tz)
+    log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
+
+    # Trim today's slots that can never be part of the plan (too early for leftward spill).
+    earliest_useful  = win_start_utc - timedelta(minutes=cfg.required_minutes)
+    candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
+    if trimmed := len(all_prices) - len(candidate_prices):
+        log.info("Trimmed %d unreachable today-slots (earliest useful: %s UTC)",
+                 trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"))
+
+    selected, merged_starts = _select_slots(
+        cfg, cfg_tz, candidate_prices, win_start_utc, win_end_utc
+    )
+    windows = merge_contiguous_slots(selected)
+
+    # Price stats reflect tomorrow's prices only, not today's spill slots.
+    tomorrow_prices = [s for s in all_prices if s.start.astimezone(cfg_tz).date() == target_date]
     if not tomorrow_prices:
         log.warning(
             "No prices found for target_date=%s after local-date filter — using full all_prices for stats.",
             target_date,
         )
         tomorrow_prices = list(all_prices)
+
     plan = build_plan(PlanParams(
         target_date=target_date,
-        area=et_cfg["area"],
+        area=cfg.area,
         price_source=price_source,
         all_prices=tomorrow_prices,
         selected=selected,
         windows=windows,
-        required_minutes=required_minutes,
-        tz=tz,
-        timezone_name=tz_name,
+        required_minutes=cfg.required_minutes,
+        tz=cfg_tz,
+        timezone_name=cfg_tz_name,
         merged_starts=merged_starts,
-        preferred_window_start=win_start_local,
-        preferred_window_end=win_end_local,
+        preferred_window_start=cfg.preferred_window_start,
+        preferred_window_end=cfg.preferred_window_end,
     ))
 
-    # 8. Display
     print_plan_summary(plan, tomorrow_prices)
-
-    # 9. Save
     save_plan(plan, output_path)
     print(f"  Plan saved to: {output_path}\n")
-
-    # 10. GHA summary
     write_gha_summary(plan, all_prices=tomorrow_prices)
 
     return plan
