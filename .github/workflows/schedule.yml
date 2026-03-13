@@ -45,7 +45,9 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: charging-plan-${{ steps.plan.outputs.plan_date }}
-          path: plan.json
+          path: |
+            plan.json
+            chart.svg
           retention-days: 2
 
       - name: Notify via ntfy
