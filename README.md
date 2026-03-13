@@ -181,11 +181,13 @@ The saved plan is straightforward and easy to hand-edit:
 
 `preferred_window_start` and `preferred_window_end` are `null` if no preferred window is configured. `gap_merged` is `true` when the window was formed by bridging a sub-`min_slot_minutes` gap between two originally separate blocks.
 
+`price_stats` reflects **tomorrow's prices only** — it does not include any spill slots pulled from today's evening. This means `avg_price_cents_kwh` (your scheduled average) can occasionally be lower than `price_stats.min_cents_kwh` when spillover selected unusually cheap slots from earlier today.
+
 ---
 
 ## GitHub Actions
 
-Place `schedule.yml` in `.github/workflows/`. The workflow runs daily at 14:30 Helsinki time, builds the plan, and uploads it as a workflow artifact for review.
+Place `schedule.yml` in `.github/workflows/`. The workflow runs twice daily (landing at 14:30 Helsinki time in both summer and winter), builds the plan, and uploads it as a workflow artifact for review.
 
 ### Required secret
 
@@ -201,7 +203,7 @@ Add a single repository secret:
 Settings → Secrets and variables → Actions → New repository secret
 ```
 
-The cron schedule runs twice daily to handle both summer (EEST, UTC+3) and winter (EET, UTC+2) time. Only one run will find prices on any given day — the other exits cleanly.
+The workflow is scheduled twice daily — at 11:30 UTC and 12:30 UTC — to land at 14:30 Helsinki time regardless of whether DST is in effect (EEST, UTC+3 in summer; EET, UTC+2 in winter). On any given day only one run will find prices; the other exits cleanly with no side effects.
 
 To trigger a run manually: **Actions → ENTSO-E Charging Plan → Run workflow**.
 
