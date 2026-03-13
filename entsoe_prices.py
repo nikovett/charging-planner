@@ -837,12 +837,17 @@ def build_plan(p: PlanParams) -> dict:
       ]
     }
     """
-    all_prices_eur = [s["price_eur_kwh"] for s in p.all_prices]
-    price_stats = {
-        "min_cents_kwh":  round(min(all_prices_eur) * 100, 4),
-        "max_cents_kwh":  round(max(all_prices_eur) * 100, 4),
-        "avg_cents_kwh":  round(sum(all_prices_eur) / len(all_prices_eur) * 100, 4),
-    }
+    # Use selected prices as fallback if all_prices is somehow empty
+    stat_source = p.all_prices or p.selected
+    all_prices_eur = [s["price_eur_kwh"] for s in stat_source]
+    if all_prices_eur:
+        price_stats = {
+            "min_cents_kwh":  round(min(all_prices_eur) * 100, 4),
+            "max_cents_kwh":  round(max(all_prices_eur) * 100, 4),
+            "avg_cents_kwh":  round(sum(all_prices_eur) / len(all_prices_eur) * 100, 4),
+        }
+    else:
+        price_stats = {"min_cents_kwh": 0.0, "max_cents_kwh": 0.0, "avg_cents_kwh": 0.0}
 
     win_list = []
     for start_utc, end_utc in p.windows:
@@ -1268,8 +1273,31 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     et_cfg = config["entsoe"]
     ch_cfg = config["charging"]
 
-    target_date = date.today() + timedelta(days=1)
-    log.info("Target date: %s", target_date)
+    # target_date is the day whose prices we are planning for.
+    # Before noon local time: prices for today were just published (ENTSO-E ~13:00 CET),
+    # but we are already into that day — plan for today.
+    # After noon: plan for tomorrow (prices not yet published; run will exit cleanly if absent).
+    # Heuristic: use local noon as the cutover. We derive the precise offset below once
+    # _resolve_tz runs, but we need a date to call _resolve_tz — bootstrap with a UTC guess.
+    _now_utc = datetime.now(tz=timezone.utc)
+    _tz_guess = ch_cfg.get("timezone")
+    _offset_guess = 0
+    if _tz_guess:
+        try:
+            import zoneinfo as _zi_mod
+            _offset_guess = int(
+                _now_utc.astimezone(_zi_mod.ZoneInfo(_tz_guess)).utcoffset().total_seconds() // 3600
+            )
+        except Exception:
+            pass
+    _local_now = _now_utc + timedelta(hours=_offset_guess)
+    if _local_now.hour < 12:
+        # We are in the early hours of a new day — plan for today
+        target_date = _local_now.date()
+    else:
+        # Daytime/evening — plan for tomorrow
+        target_date = (_local_now + timedelta(days=1)).date()
+    log.info("Target date: %s (local time: %s)", target_date, _local_now.strftime("%Y-%m-%d %H:%M"))
 
     # 1. Fetch prices
     # Today's remaining slots are included so leftward spill can reach back
@@ -1376,7 +1404,18 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         log.error("No slots selected.")
 
     # 7. Build plan — price stats should reflect tomorrow only, not today's spill slots
-    tomorrow_prices = [s for s in all_prices if s["start"].date() == target_date]
+    # Slots are stored as UTC datetimes; convert to local before comparing to target_date,
+    # otherwise UTC-offset timezones (e.g. FI UTC+2) silently drop all tomorrow slots.
+    tomorrow_prices = [
+        s for s in all_prices
+        if (s["start"] + timedelta(hours=local_offset)).date() == target_date
+    ]
+    if not tomorrow_prices:
+        log.warning(
+            "No prices found for target_date=%s after local-date filter — using full all_prices for stats.",
+            target_date,
+        )
+        tomorrow_prices = list(all_prices)
     plan = build_plan(PlanParams(
         target_date=target_date,
         area=et_cfg["area"],
