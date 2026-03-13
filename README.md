@@ -202,7 +202,7 @@ Add a single repository secret:
 Settings → Secrets and variables → Actions → New repository secret
 ```
 
-The workflow is scheduled twice daily — at 11:30 UTC and 12:30 UTC — to land at 14:30 Helsinki time regardless of whether DST is in effect (EEST, UTC+3 in summer; EET, UTC+2 in winter). On any given day only one run will find prices; the other exits cleanly with no side effects.
+The workflow runs once daily at 12:00 UTC — 15:00 Helsinki time in summer (EEST, UTC+3) and 14:00 in winter (EET, UTC+2). A single run covers both DST states because 12:00 UTC lands after ENTSO-E's ~13:00 CET publication window in all cases.
 
 To trigger a run manually: **Actions → ENTSO-E Charging Plan → Run workflow**.
 
