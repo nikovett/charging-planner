@@ -9,27 +9,36 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
   Date      2026-03-15   Area FI   Source ENTSO-E
   Timezone  Europe/Helsinki (UTC+2)
 
-  Market prices   0.82 min  3.14 avg  7.21 max  c€/kWh
+  Market prices   0.47 min  1.64 avg  4.27 max  c€/kWh
 
-  Scheduled  240 min of 240 min required  ↓ 71% below market avg
-  Avg price  0.91 c€/kWh
+  Scheduled  240 min of 240 min required  ↓ 62% below market avg
+  Avg price  0.62 c€/kWh
 
   Charging windows (1):
-    03:00–07:00  ████████████████  0.91 c€/kWh  4h00m
+    03:00–07:00  ████████████████  0.62 c€/kWh  4h00m
 
   Hour  c€/kWh                  Price profile
-  ──────────────────────────────────────────────────────────
-  00:00   2.10  ▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░
-  01:00   1.80  ▒▒▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  02:00   1.50  ▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  03:00   1.20  ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
-  04:00   1.00  █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
-  05:00   0.90  █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
-  06:00   1.10  ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
+  ────────────────────────────────────────────────────────────
+  00:00   0.65  ▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  01:00   0.50  ▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  02:00   0.56  ▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  03:00   0.93  ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
+  04:00   1.38  █████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
+  05:00   1.72  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
+  06:00   1.88  ██████████████░░░░░░░░░░░░░░░░░░░░░░░░ ◀
+  07:00   1.72  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░
+  08:00   1.29  ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
   ...
+  15:00   3.44  █████████████████████████████░░░░░░░░░
+  16:00   4.27  ██████████████████████████████████████
+  17:00   4.13  ██████████████████████████████████████
+  ...
+  ────────────────────────────────────────────────────────────
+  ▒ = available    █ = selected (cheapest)    colours:
+  min 0.47 avg 1.64 max 4.27 c€/kWh
 ```
 
-Terminal output is colour-coded green→yellow→red by relative price. Selected hours show a filled bar (`█`) with a `◀` marker.
+Terminal output is colour-coded green→yellow→red by relative price. Selected hours show a filled bar (`█`) with a `◀` marker. Unselected hours show a proportional bar (`▒`) sized to their price relative to the day's range.
 
 ---
 
@@ -104,7 +113,7 @@ All fields have defaults — a minimal config only needs `entsoe.api_key` and `e
 | `charging.min_slot_minutes` | `30` | Minimum contiguous block length. Must be a multiple of 15 |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `null` | Prefer slots starting at or after this local time (`HH:MM`) |
-| `charging.preferred_window_end` | `null` | Prefer slots ending at or before this local time (`HH:MM`) |
+| `charging.preferred_window_end` | `null` | Prefer slots ending at or before this local time (`HH:MM`). Treat this as your departure time — charging is scheduled as late as possible within this window |
 | `charging.timezone` | `null` | IANA timezone name. `null` = auto-detect from `/etc/timezone` |
 
 ### Preferred window
@@ -117,7 +126,7 @@ When `preferred_window_start` / `preferred_window_end` are set, the planner fill
 
 ### Gap merging
 
-After slot selection, if two chosen blocks are separated by a gap **shorter than `min_slot_minutes`**, the gap is bridged automatically. The intervening slots are included to form one continuous block, then the most expensive 15-minute slot from either end of the merged block is dropped to keep the total charging time at `required_hours`. On a price tie, the earliest slot is always dropped. Merged windows are flagged with ⚡ in the terminal output, GitHub Actions summary, and phone notification.
+After slot selection, if two chosen blocks are separated by a gap **shorter than `min_slot_minutes`**, the gap is bridged automatically. The intervening slots are included to form one continuous block, then slots are trimmed from the **beginning** of the merged block until the total charging time returns to `required_hours`. Trimming from the start pushes the charging window as late as possible — closer to your departure time. Merged windows are flagged with ⚡ in the terminal output, GitHub Actions summary, and phone notification.
 
 This behaviour can be disabled by setting `merge_gaps: false`. It is automatically skipped when `contiguous_only: true` since the result is already one unbroken block.
 
@@ -260,8 +269,8 @@ Additional per-slot indicators:
 
 ## How it works
 
-1. **Fetch** — queries the ENTSO-E Transparency API (`documentType=A44`) for the target day's prices and today's remaining prices; determines target date based on local time (today if before noon, tomorrow if after noon); exits cleanly if prices are not yet available
+1. **Fetch** — makes a single query to the ENTSO-E Transparency Platform API (`documentType=A44`, endpoint `web-api.tp.entsoe.eu`) covering both today's and tomorrow's 23:00–23:00 UTC periods; determines target date based on local time (today if before noon, tomorrow if after noon); exits cleanly with `sys.exit(0)` if tomorrow's prices are not yet published (fewer than 23 h of slots after `target_dateT23:00Z`)
 2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods; trims today's slots to those within reach of the preferred window
-3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional preferred window; spills leftward into today's evening if needed
-4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming the costliest endpoint slot to compensate), merges adjacent slots into contiguous windows, computes stats, writes JSON
+3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional price ceiling; among equally priced options the latest slots are always preferred (closest to `preferred_window_end`); spills leftward into today's evening if needed
+4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming from the start of the merged block to preserve total charging time and push the window as late as possible), merges adjacent slots into contiguous windows, computes stats, writes JSON
 5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart; writes a markdown summary and saves `chart.svg` (pink area chart, preferred window shading, purple charging bar) for the GitHub Actions run artifact

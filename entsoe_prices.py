@@ -22,7 +22,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 import urllib.request
 import urllib.error
@@ -255,49 +255,60 @@ def fetch_entsoe_prices(
     area: str,
     target_date: date,
 ) -> list[dict]:
-    """Fetch tomorrow's day-ahead prices plus today's remaining slots.
+    """Fetch day-ahead prices for today and tomorrow in a single API call.
 
-    Today's slots (from now onwards) are prepended so that leftward spillover
-    can extend a contiguous charging block into the current evening.
+    ENTSO-E always returns two complete 23:00–23:00 UTC TimeSeries periods:
+      - (target_date - 1)T23:00Z – target_dateT23:00Z  →  today's prices
+      - target_dateT23:00Z – (target_date + 1)T23:00Z  →  tomorrow's prices
+
+    Both periods arrive in one response.  Today's slots are filtered to
+    >= now so that leftward spillover can reach back into the current evening.
+    If tomorrow's TimeSeries contains fewer than 23 h of slots, prices have
+    not been published yet and PricesNotYetAvailable is raised.
     """
     eic = _resolve_area(area)
 
-    def _fetch_one(d: date) -> list[dict]:
-        period_start = (d - timedelta(days=1)).strftime("%Y%m%d2000")
-        period_end   = d.strftime("%Y%m%d2300")
-        url = (
-            f"{ENTSOE_API}"
-            f"?documentType=A44"
-            f"&in_Domain={eic}"
-            f"&out_Domain={eic}"
-            f"&periodStart={period_start}"
-            f"&periodEnd={period_end}"
-            f"&securityToken={api_key}"
-        )
-        log.info("Fetching ENTSO-E prices: area=%s date=%s", area, d)
-        req = urllib.request.Request(url, headers={"Accept": "application/xml"})
-        try:
-            raw = _http_request_with_retry(req, timeout=20, retries=3, label="ENTSO-E")
-        except Exception as e:
-            log.error("ENTSO-E request failed after retries: %s", e)
-            raise
-        return _parse_entsoe_xml(raw, d, area)
-
-    tomorrow_prices = _fetch_one(target_date)
-
-    # Fetch today and keep only slots from now onwards
-    today = target_date - timedelta(days=1)
+    # Request window spans both periods in one call:
+    #   from: (target_date - 1) 23:00 UTC  (= start of today's period)
+    #   to:   (target_date + 1) 23:00 UTC  (= end of tomorrow's period)
+    period_start = (target_date - timedelta(days=1)).strftime("%Y%m%d2300")
+    period_end   = (target_date + timedelta(days=1)).strftime("%Y%m%d2300")
+    url = (
+        f"{ENTSOE_API}"
+        f"?documentType=A44"
+        f"&in_Domain={eic}"
+        f"&out_Domain={eic}"
+        f"&periodStart={period_start}"
+        f"&periodEnd={period_end}"
+        f"&securityToken={api_key}"
+    )
+    log.info("Fetching ENTSO-E prices: area=%s target_date=%s", area, target_date)
+    req = urllib.request.Request(url, headers={"Accept": "application/xml"})
     try:
-        today_prices = _fetch_one(today)
-        now_utc      = datetime.now(tz=timezone.utc)
-        today_prices = [s for s in today_prices if s["start"] >= now_utc]
-        log.info("Today's remaining slots (>= now): %d", len(today_prices))
+        raw = _http_request_with_retry(req, timeout=20, retries=3, label="ENTSO-E")
     except Exception as e:
-        log.warning("Could not fetch today's prices, proceeding with tomorrow only: %s", e)
-        today_prices = []
+        log.error("ENTSO-E request failed after retries: %s", e)
+        raise
+    all_slots = _parse_entsoe_xml(raw, target_date, area)
 
-    # Merge and re-number slots
-    combined = sorted(today_prices + tomorrow_prices, key=lambda x: x["start"])
+    # Check that tomorrow's period is actually published.
+    # The boundary between today and tomorrow is target_dateT23:00Z (= 01:00 EET).
+    tomorrow_start_utc = datetime.combine(target_date, time(23, 0), tzinfo=timezone.utc)
+    target_slots   = [s for s in all_slots if s["start"] >= tomorrow_start_utc]
+    target_minutes = sum(s["duration_minutes"] for s in target_slots)
+    if target_minutes < 23 * 60:
+        raise PricesNotYetAvailable(
+            f"Only {target_minutes} min of data for {target_date} "
+            f"({len(target_slots)} slots) — tomorrow's prices not published yet."
+        )
+
+    # Filter today's slots to >= now so we don't schedule in the past.
+    now_utc     = datetime.now(tz=timezone.utc)
+    today_slots = [s for s in all_slots if s["start"] < tomorrow_start_utc
+                   and s["start"] >= now_utc]
+    log.info("Today's remaining slots (>= now): %d", len(today_slots))
+
+    combined = sorted(today_slots + target_slots, key=lambda x: x["start"])
     for i, s in enumerate(combined):
         s["slot"] = i
     return combined
@@ -556,11 +567,13 @@ def _best_contiguous_window(
 
     best_avg      = float("inf")
     best_start    = None
-    for i in range(len(slots) - n_slots + 1):
+    # Iterate in reverse so that on equal avg price the latest window wins
+    # (closest to departure time).
+    for i in range(len(slots) - n_slots, -1, -1):
         window = slots[i:i + n_slots]
         if all(s["start"] in candidate_starts for s in window):
             avg = sum(s["price_eur_kwh"] for s in window) / n_slots
-            if avg < best_avg:
+            if avg <= best_avg:
                 best_avg   = avg
                 best_start = i
 
@@ -575,10 +588,10 @@ def _best_contiguous_window(
     )
     best_avg   = float("inf")
     best_start = 0
-    for i in range(len(slots) - n_slots + 1):
+    for i in range(len(slots) - n_slots, -1, -1):
         window = slots[i:i + n_slots]
         avg = sum(s["price_eur_kwh"] for s in window) / n_slots
-        if avg < best_avg:
+        if avg <= best_avg:
             best_avg   = avg
             best_start = i
     return slots[best_start:best_start + n_slots]
@@ -694,19 +707,14 @@ def close_gap_merge(
                     gap_start.isoformat(), gap_end.isoformat(),
                     min_slot_minutes,
                 )
-                # Trim endpoint slots until we shed extra_minutes.
-                # On a tie in price, always drop the earliest (leading) slot.
+                # Always trim from the beginning of the merged block (req 6).
+                # This pushes the charging window as late as possible,
+                # closest to the departure time (req 2).
                 slot_dur = merged_block[0]["duration_minutes"]
                 while extra_minutes >= slot_dur and len(merged_block) > 1:
                     first = merged_block[0]
-                    last  = merged_block[-1]
-                    if last["price_eur_kwh"] > first["price_eur_kwh"]:
-                        log.info("Trimming trailing slot %s (%.4f €/kWh)", last["start"].isoformat(), last["price_eur_kwh"])
-                        merged_block = merged_block[:-1]
-                    else:
-                        # first is more expensive, or equal — drop earliest (first)
-                        log.info("Trimming leading slot %s (%.4f €/kWh)", first["start"].isoformat(), first["price_eur_kwh"])
-                        merged_block = merged_block[1:]
+                    log.info("Trimming leading slot %s (%.4f €/kWh)", first["start"].isoformat(), first["price_eur_kwh"])
+                    merged_block = merged_block[1:]
                     extra_minutes -= slot_dur
 
                 merged_starts.add(merged_block[0]["start"])
@@ -1269,8 +1277,10 @@ def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
         f"| **Timezone** | {plan['timezone']} (UTC{plan['utc_offset_hours']:+d}) |",
         f"| **Market prices** | {ps['min_cents_kwh']:.2f} \u2013 {ps['max_cents_kwh']:.2f} c\u20ac/kWh (avg {ps['avg_cents_kwh']:.2f}) |",
         f"| **Required** | {req} min |",
-        f"| **Scheduled** | {tot} min |",
-        f"| **Avg price** | **{avg:.2f} c\u20ac/kWh** ({savings_pct:.0f}% below market avg) |",
+        f"| **Scheduled** | {tot} min" +
+        (" ⚠️ **incomplete** — only {tot} of {req} min scheduled, tomorrow's prices may not be published yet" if tot < req else "") +
+        " |",
+        f"| **Avg price** | **{avg:.2f} c\u20ac/kWh** ({abs(savings_pct):.0f}% {'below' if savings_pct >= 0 else 'above'} market avg) |",
         "",
     ]
 
@@ -1522,6 +1532,14 @@ def cmd_plan(config: dict, output_path: str) -> dict:
 
     if not selected:
         log.error("No slots selected.")
+    else:
+        scheduled_min = sum(s["duration_minutes"] for s in selected)
+        if scheduled_min < required_minutes:
+            log.warning(
+                "⚠ Only %d min scheduled of %d min required — "
+                "not enough price data available yet (tomorrow's prices may not be published).",
+                scheduled_min, required_minutes,
+            )
 
     # 7. Build plan — price stats should reflect tomorrow only, not today's spill slots
     # Slots are stored as UTC datetimes; convert to local before comparing to target_date,
