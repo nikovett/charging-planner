@@ -30,7 +30,7 @@ Terminal output is colour-coded: market price stats are shown in green (min) / y
 - [`pyyaml`](https://pypi.org/project/PyYAML/) — `pip install pyyaml`
 - An ENTSO-E API key (free — see [Getting an API key](#getting-an-api-key))
 
-No other dependencies. The script uses only the standard library.
+No other dependencies. The script uses only the standard library, including [`zoneinfo`](https://docs.python.org/3/library/zoneinfo.html) (stdlib since Python 3.9) for DST-correct timezone handling.
 
 ---
 
@@ -96,7 +96,7 @@ charging:
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | — | **Required.** Start of preferred charging window (`HH:MM`, `00:00`–`23:59`) |
 | `charging.preferred_window_end` | — | **Required.** End of preferred charging window (`HH:MM`, must be after start). Use `23:59` for no restriction. Treat this as your departure time — charging is scheduled as late as possible within this window |
-| `charging.timezone` | `null` | IANA timezone name. `null` = auto-detect from `/etc/timezone` |
+| `charging.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from `/etc/timezone`. Used with `zoneinfo` for DST-correct window resolution — the correct UTC offset is applied for each specific date, including DST transition days |
 
 ### Preferred window
 
@@ -166,11 +166,19 @@ The saved plan is straightforward and easy to hand-edit:
       "avg_price_cents_kwh": 0.91,
       "gap_merged": false
     }
+  ],
+  "selected_starts_utc": [
+    "2026-03-15T01:00:00+00:00",
+    "2026-03-15T01:15:00+00:00"
   ]
 }
 ```
 
 `gap_merged` is `true` when the window was formed by bridging a sub-`min_slot_minutes` gap between two originally separate blocks.
+
+`utc_offset_hours` is derived from `zoneinfo` at noon on the target date — it represents the offset in effect for that day (e.g. `2` for EET, `3` for EEST) and is used for display purposes only. All internal scheduling is done in UTC.
+
+`selected_starts_utc` lists the UTC ISO 8601 start times of every individual 15-minute slot selected, in order. Useful for downstream systems that need to act on the schedule in UTC rather than local time.
 
 `price_stats` reflects **tomorrow's prices only** — it does not include any spill slots pulled from today's evening. This means `avg_price_cents_kwh` (your scheduled average) can occasionally be lower than `price_stats.min_cents_kwh` when spillover selected unusually cheap slots from earlier today.
 
@@ -245,13 +253,13 @@ Additional per-slot indicators:
 | Indicator | Meaning |
 |---|---|
 | `⚡ merged` | Two blocks separated by a short gap were merged into one continuous window |
-| `⚠️ outside window` | Slot falls outside the preferred charging window |
+| `⚠️ outside window` | Window falls outside the preferred charging window (computed from `preferred_window_start`/`end` at notification time, not stored in plan JSON) |
 
 ---
 
 ## How it works
 
-1. **Fetch** — makes a single query to the ENTSO-E Transparency Platform API (`documentType=A44`, endpoint `web-api.tp.entsoe.eu`) spanning `(target_date-1)T23:00Z` – `(target_date+1)T23:00Z`; the response always contains two TimeSeries: today `(target_date-1)T23:00Z–target_dateT23:00Z` and tomorrow `(target_date-1+1)T23:00Z–(target_date+1)T23:00Z`; determines target date based on local time (today if before noon, tomorrow if after noon); exits cleanly with `sys.exit(0)` if tomorrow's period has fewer than 23 h of slots — prices typically publish around 14:00 EET
+1. **Fetch** — makes a single query to the ENTSO-E Transparency Platform API (`documentType=A44`, endpoint `web-api.tp.entsoe.eu`) spanning `(target_date-1)T23:00Z` – `(target_date+1)T23:00Z`; the response always contains two TimeSeries: today `(target_date-1)T23:00Z–target_dateT23:00Z` and tomorrow `(target_date-1+1)T23:00Z–(target_date+1)T23:00Z`; determines target date based on local time using `zoneinfo` (today if before noon, tomorrow if after noon); resolves the preferred window `HH:MM` strings to UTC once via `zoneinfo` — DST transitions are handled correctly because `ZoneInfo` applies the exact offset for each specific date/time rather than a fixed integer; exits cleanly with `sys.exit(0)` if tomorrow's period has fewer than 23 h of slots — prices typically publish around 14:00 EET. The ENTSO-E UTC window is always exactly 24 h regardless of DST, so the threshold is reliable on spring-forward and clock-back days
 2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods; trims today's slots to those within reach of the preferred window
 3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional price ceiling (`max_price_cents_kwh`); among equally priced options the latest slots are always preferred (closest to `preferred_window_end`); spills leftward into today's evening if needed
 4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming from the start of the merged block to preserve total charging time and push the window as late as possible), merges adjacent slots into contiguous windows, computes stats, writes JSON

@@ -617,23 +617,32 @@ def _best_contiguous_window(
     return slots[best_start:best_start + n_slots]
 
 
-def _hhmm_to_utc(hhmm: str, ref_date: date, utc_offset_hours: int) -> datetime:
-    """Convert a local HH:MM string on ref_date to a UTC datetime."""
+def _hhmm_to_utc(hhmm: str, ref_date: date, tz) -> datetime:
+    """Convert a local HH:MM string on ref_date to UTC using a ZoneInfo object.
+
+    DST-safe: ZoneInfo resolves the correct offset for the exact date/time,
+    so windows set to e.g. "03:00" on a DST transition day are handled correctly.
+    Returns a UTC datetime with tzinfo=timezone.utc.
+    """
+    from zoneinfo import ZoneInfo
     h, m = map(int, hhmm.split(":"))
-    return datetime(ref_date.year, ref_date.month, ref_date.day,
-                    h, m, tzinfo=timezone.utc) - timedelta(hours=utc_offset_hours)
+    local_dt = datetime(ref_date.year, ref_date.month, ref_date.day,
+                        h, m, tzinfo=tz)
+    return local_dt.astimezone(timezone.utc)
 
 
 def filter_preferred_window(
     prices: list[dict],
+    win_start_utc: datetime,
+    win_end_utc: datetime,
     window_start_local: str,
     window_end_local: str,
-    local_tz_offset_hours: int,
-    target_date: date,
 ) -> tuple[list[dict], list[dict]]:
-    win_start_utc = _hhmm_to_utc(window_start_local, target_date, local_tz_offset_hours)
-    win_end_utc   = _hhmm_to_utc(window_end_local,   target_date, local_tz_offset_hours)
+    """Split prices into slots inside and outside the preferred window.
 
+    win_start_utc / win_end_utc are the pre-resolved UTC bounds.
+    window_start_local / window_end_local are passed only for log messages.
+    """
     inside, outside = [], []
     for slot in prices:
         if slot["start"] >= win_start_utc and slot["end"] <= win_end_utc:
@@ -714,8 +723,13 @@ def close_gap_merge(
                 # extra_minutes = how much over required we are after bridging the gap.
                 # merged_block already contains all slots including the gap, so summing
                 # it gives the exact post-bridge total without double-counting.
+                other_total   = sum(
+                    s["duration_minutes"]
+                    for g in (groups[:i] + groups[i + 2:])
+                    for s in g
+                )
                 current_total = sum(s["duration_minutes"] for s in merged_block)
-                extra_minutes = current_total - required_minutes
+                extra_minutes = (current_total + other_total) - required_minutes
                 log.info(
                     "Gap of %d min between %s and %s is below min_slot_minutes=%d — merging blocks.",
                     gap_min,
@@ -756,13 +770,19 @@ def merge_contiguous_slots(slots: list[dict]) -> list[tuple[datetime, datetime]]
 # Timezone helpers
 # ===========================================================================
 
-def _resolve_tz(config_tz: str | None, ref_date: date) -> tuple[str, int]:
-    """Return (tz_name, utc_offset_hours) for the given date.
+def _resolve_tz(config_tz: str | None, ref_date: date):
+    """Return (tz_name, ZoneInfo) for the given timezone config string.
 
     config_tz may be an explicit IANA name (e.g. "Europe/Helsinki"), a
     UTC-offset string (e.g. "UTC+02:00"), or None to auto-detect from the
-    host system.
+    host system.  Falls back to UTC if nothing can be determined.
+
+    Returns a ZoneInfo (or timezone.utc) object — not an integer offset.
+    DST transitions are handled correctly because ZoneInfo resolves the
+    actual offset for each specific datetime, not a fixed hourly value.
     """
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
     # Determine timezone name
     tz_name = config_tz
     if not tz_name:
@@ -783,9 +803,9 @@ def _resolve_tz(config_tz: str | None, ref_date: date) -> tuple[str, int]:
             pass
     if not tz_name:
         try:
-            offset = datetime.now().astimezone().utcoffset()
-            if offset is not None:
-                total_min = int(offset.total_seconds() / 60)
+            off = datetime.now().astimezone().utcoffset()
+            if off is not None:
+                total_min = int(off.total_seconds() / 60)
                 sign = "+" if total_min >= 0 else "-"
                 h, m = divmod(abs(total_min), 60)
                 tz_name = f"UTC{sign}{h:02d}:{m:02d}"
@@ -793,24 +813,15 @@ def _resolve_tz(config_tz: str | None, ref_date: date) -> tuple[str, int]:
             pass
     tz_name = tz_name or "UTC"
 
-    # Determine UTC offset in whole hours for ref_date
-    offset_hours = 0
+    # Resolve to a ZoneInfo object
     try:
-        from zoneinfo import ZoneInfo
-        dt = datetime(ref_date.year, ref_date.month, ref_date.day, 12, 0,
-                      tzinfo=ZoneInfo(tz_name))
-        utcoff = dt.utcoffset()
-        if utcoff is not None:
-            offset_hours = int(utcoff.total_seconds() / 3600)
-    except Exception:
-        try:
-            utcoff = datetime.now().astimezone().utcoffset()
-            if utcoff is not None:
-                offset_hours = int(utcoff.total_seconds() / 3600)
-        except Exception:
-            pass
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, KeyError):
+        log.warning("Unknown timezone %r — falling back to UTC.", tz_name)
+        tz_name = "UTC"
+        tz = timezone.utc
 
-    return tz_name, offset_hours
+    return tz_name, tz
 
 
 # ===========================================================================
@@ -830,7 +841,7 @@ class PlanParams:
     selected:               list
     windows:                list
     required_minutes:       int
-    local_tz_offset_hours:  int
+    tz:                     object          # ZoneInfo or timezone.utc
     timezone_name:          str
     preferred_window_start: str
     preferred_window_end:   str
@@ -873,9 +884,9 @@ def build_plan(p: PlanParams) -> dict:
         price_stats = {"min_cents_kwh": 0.0, "max_cents_kwh": 0.0, "avg_cents_kwh": 0.0}
 
     win_list = []
-    for start_utc, end_utc in p.windows:
-        start_local = start_utc + timedelta(hours=p.local_tz_offset_hours)
-        end_local   = end_utc   + timedelta(hours=p.local_tz_offset_hours)
+    for start_utc, end_utc in sorted(p.windows, key=lambda w: w[0]):
+        start_local = start_utc.astimezone(p.tz)
+        end_local   = end_utc.astimezone(p.tz)
         dur = int((end_utc - start_utc).total_seconds() / 60)
         block_slots = [s for s in p.selected if start_utc <= s["start"] < end_utc]
         avg_p = (sum(s["price_eur_kwh"] for s in block_slots) / len(block_slots) * 100
@@ -902,7 +913,10 @@ def build_plan(p: PlanParams) -> dict:
         "area":                   p.area,
         "price_source":           p.price_source,
         "timezone":               p.timezone_name,
-        "utc_offset_hours":       p.local_tz_offset_hours,
+        "utc_offset_hours":       int(
+            datetime(p.target_date.year, p.target_date.month, p.target_date.day,
+                     12, 0, tzinfo=p.tz).utcoffset().total_seconds() / 3600
+        ),
         "price_stats":            price_stats,
         "required_minutes":       p.required_minutes,
         "total_minutes":          total_min,
@@ -1258,10 +1272,9 @@ def _select_spillover(
     outside: list[dict],
     selected: list[dict],
     contiguous_only: bool,
-    win_start_local: str,
+    win_start_utc: datetime,
+    win_end_utc: datetime,
     win_end_local: str,
-    target_date: date,
-    local_offset: int,
     required_minutes: int,
     remaining: int,
     max_price_eur: Optional[float],
@@ -1273,15 +1286,16 @@ def _select_spillover(
     window alone cannot satisfy `required_minutes`.
 
     Rules:
-    - Never spill after win_end_local (if set).
+    - Never spill after win_end_utc.
     - contiguous_only: extend the existing block leftward (earlier slots only).
     - non-contiguous: pick cheapest slots from eligible outside slots.
+
+    win_end_local is passed only for log messages.
     """
     selected_ids = {id(s) for s in selected}
     candidates = [s for s in outside if id(s) not in selected_ids]
 
-    # Restrict to slots before the window end when one is configured.
-    win_end_utc = _hhmm_to_utc(win_end_local, target_date, local_offset)
+    # Restrict to slots before the window end.
     candidates = [s for s in candidates if s["end"] <= win_end_utc]
     log.info(
         "Spillover restricted to slots before window end %s (%d candidates)",
@@ -1342,18 +1356,12 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     # After noon: plan for tomorrow (prices not yet published; run will exit cleanly if absent).
     # Heuristic: use local noon as the cutover. We derive the precise offset below once
     # _resolve_tz runs, but we need a date to call _resolve_tz — bootstrap with a UTC guess.
-    _now_utc = datetime.now(tz=timezone.utc)
-    _tz_guess = ch_cfg.get("timezone")
-    _offset_guess = 0
-    if _tz_guess:
-        try:
-            import zoneinfo as _zi_mod
-            _offset_guess = int(
-                _now_utc.astimezone(_zi_mod.ZoneInfo(_tz_guess)).utcoffset().total_seconds() // 3600
-            )
-        except Exception:
-            pass
-    _local_now = _now_utc + timedelta(hours=_offset_guess)
+    _now_utc   = datetime.now(tz=timezone.utc)
+    # Resolve timezone early so we can compute local time for target_date selection.
+    # We pass today's UTC date as a provisional ref_date — only affects DST edge
+    # cases at the exact moment of a DST transition, which is acceptable.
+    _tz_name_pre, _tz_pre = _resolve_tz(ch_cfg.get("timezone"), _now_utc.date())
+    _local_now  = _now_utc.astimezone(_tz_pre)
     if _local_now.hour < 12:
         # We are in the early hours of a new day — plan for today
         target_date = _local_now.date()
@@ -1387,13 +1395,13 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         sys.exit(1)
 
     # 2. Timezone
-    tz_name, local_offset = _resolve_tz(ch_cfg.get("timezone"), target_date)
-    log.info("Timezone: %s (UTC%+d)", tz_name, local_offset)
+    tz_name, tz = _resolve_tz(ch_cfg.get("timezone"), target_date)
+    # Derive integer offset for the plan JSON (representative of target_date noon).
+    _noon = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=tz)
+    local_offset_hours = int(_noon.utcoffset().total_seconds() / 3600)
+    log.info("Timezone: %s (UTC%+d)", tz_name, local_offset_hours)
 
-    # 3. Trim today's slots to those reachable by leftward spill.
-    # The earliest a block can start is: win_start_utc - required_minutes.
-    # Slots before that can never be part of the charging plan regardless.
-    # Keep all_prices intact for display; use candidate_prices for selection.
+    # 3. Resolve preferred window HH:MM → UTC once; all downstream code uses UTC.
     win_start_local  = ch_cfg["preferred_window_start"]
     win_end_local    = ch_cfg["preferred_window_end"]
     required_minutes = int(ch_cfg["required_hours"] * 60)
@@ -1401,8 +1409,15 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     ceil_cents       = ch_cfg.get("max_price_cents_kwh")
     max_price_eur    = ceil_cents / 100.0 if ceil_cents is not None else None
 
-    win_start_utc   = _hhmm_to_utc(win_start_local, target_date, local_offset)
-    earliest_useful = win_start_utc - timedelta(minutes=required_minutes)
+    win_start_utc = _hhmm_to_utc(win_start_local, target_date, tz)
+    win_end_utc   = _hhmm_to_utc(win_end_local,   target_date, tz)
+    log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
+
+    # Trim today's slots to those reachable by leftward spill.
+    # The earliest a block can start is: win_start_utc - required_minutes.
+    # Slots before that can never be part of the charging plan regardless.
+    # Keep all_prices intact for display; use candidate_prices for selection.
+    earliest_useful  = win_start_utc - timedelta(minutes=required_minutes)
     candidate_prices = [s for s in all_prices if s["start"] >= earliest_useful]
     trimmed = len(all_prices) - len(candidate_prices)
     if trimmed:
@@ -1414,10 +1429,10 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     # 4. Split into preferred-window inside / outside
     inside, outside = filter_preferred_window(
         candidate_prices,
+        win_start_utc=win_start_utc,
+        win_end_utc=win_end_utc,
         window_start_local=win_start_local,
         window_end_local=win_end_local,
-        local_tz_offset_hours=local_offset,
-        target_date=target_date,
     )
 
     # 5. Select charging slots
@@ -1436,10 +1451,9 @@ def cmd_plan(config: dict, output_path: str) -> dict:
             outside=outside,
             selected=selected,
             contiguous_only=ch_cfg["contiguous_only"],
-            win_start_local=win_start_local,
+            win_start_utc=win_start_utc,
+            win_end_utc=win_end_utc,
             win_end_local=win_end_local,
-            target_date=target_date,
-            local_offset=local_offset,
             required_minutes=required_minutes,
             remaining=remaining,
             max_price_eur=max_price_eur,
@@ -1477,7 +1491,7 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     # otherwise UTC-offset timezones (e.g. FI UTC+2) silently drop all tomorrow slots.
     tomorrow_prices = [
         s for s in all_prices
-        if (s["start"] + timedelta(hours=local_offset)).date() == target_date
+        if s["start"].astimezone(tz).date() == target_date
     ]
     if not tomorrow_prices:
         log.warning(
@@ -1493,7 +1507,7 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         selected=selected,
         windows=windows,
         required_minutes=required_minutes,
-        local_tz_offset_hours=local_offset,
+        tz=tz,
         timezone_name=tz_name,
         merged_starts=merged_starts,
         preferred_window_start=win_start_local,
