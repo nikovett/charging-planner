@@ -8,6 +8,7 @@ charging:
   contiguous_only: false     # true = one unbroken block; false = cheapest individual slots (may be split)
   min_slot_minutes: 30       # Minimum contiguous block length (must be divisible by 15)
   max_price_cents_kwh: null  # Price ceiling in c€/kWh — skip slots above this (null = no limit)
-  preferred_window_start: "00:00"  # Prefer slots within this local-time window (null = no preference)
-  preferred_window_end: "07:00"    # Slots outside the window are used only if needed to meet required_hours
+  preferred_window_start: "00:00"  # Start of preferred charging window (required, HH:MM, 00:00–23:59)
+  preferred_window_end: "07:00"    # End of preferred charging window (required, must be after start)
+                                   # Slots outside the window are used only if needed to meet required_hours
   timezone: "Europe/Helsinki"      # IANA timezone name (null = auto-detect from system)

@@ -17,28 +17,10 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
   Charging windows (1):
     03:00–07:00  ████████████████  0.62 c€/kWh  4h00m
 
-  Hour  c€/kWh                  Price profile
-  ────────────────────────────────────────────────────────────
-  00:00   0.65  ▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  01:00   0.50  ▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  02:00   0.56  ▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  03:00   0.93  ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
-  04:00   1.38  █████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
-  05:00   1.72  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░ ◀
-  06:00   1.88  ██████████████░░░░░░░░░░░░░░░░░░░░░░░░ ◀
-  07:00   1.72  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░
-  08:00   1.29  ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  ...
-  15:00   3.44  █████████████████████████████░░░░░░░░░
-  16:00   4.27  ██████████████████████████████████████
-  17:00   4.13  ██████████████████████████████████████
-  ...
-  ────────────────────────────────────────────────────────────
-  ▒ = available    █ = selected (cheapest)    colours:
-  min 0.47 avg 1.64 max 4.27 c€/kWh
+  ══════════════════════════════════════════════════════════════════
 ```
 
-Terminal output is colour-coded green→yellow→red by relative price. Selected hours show a filled bar (`█`) with a `◀` marker. Unselected hours show a proportional bar (`▒`) sized to their price relative to the day's range.
+Terminal output is colour-coded green→yellow→red by relative price.
 
 ---
 
@@ -94,12 +76,12 @@ charging:
   merge_gaps: true              # bridge gaps shorter than min_slot_minutes between selected blocks
   min_slot_minutes: 30          # minimum block length (must be divisible by 15)
   max_price_cents_kwh: null     # optional price ceiling, e.g. 5.0
-  preferred_window_start: "00:00"  # optional: prefer slots within this window
-  preferred_window_end: "07:00"
+  preferred_window_start: "00:00"  # required: HH:MM, 00:00–23:59
+  preferred_window_end: "07:00"    # required: must be after start; use "23:59" for no restriction
   timezone: "Europe/Helsinki"   # null = auto-detect from system
 ```
 
-All fields have defaults — a minimal config only needs `entsoe.api_key` and `entsoe.area`.
+`entsoe.api_key`, `entsoe.area`, `preferred_window_start`, and `preferred_window_end` are required — all other fields have defaults.
 
 ### Configuration reference
 
@@ -112,13 +94,13 @@ All fields have defaults — a minimal config only needs `entsoe.api_key` and `e
 | `charging.merge_gaps` | `true` | Bridge gaps shorter than `min_slot_minutes` between selected blocks. Ignored when `contiguous_only` is `true` |
 | `charging.min_slot_minutes` | `30` | Minimum contiguous block length. Must be a multiple of 15 |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
-| `charging.preferred_window_start` | `null` | Prefer slots starting at or after this local time (`HH:MM`) |
-| `charging.preferred_window_end` | `null` | Prefer slots ending at or before this local time (`HH:MM`). Treat this as your departure time — charging is scheduled as late as possible within this window |
+| `charging.preferred_window_start` | — | **Required.** Start of preferred charging window (`HH:MM`, `00:00`–`23:59`) |
+| `charging.preferred_window_end` | — | **Required.** End of preferred charging window (`HH:MM`, must be after start). Use `23:59` for no restriction. Treat this as your departure time — charging is scheduled as late as possible within this window |
 | `charging.timezone` | `null` | IANA timezone name. `null` = auto-detect from `/etc/timezone` |
 
 ### Preferred window
 
-When `preferred_window_start` / `preferred_window_end` are set, the planner fills as many slots as possible from within that window first, then spills over outside it only if needed to meet `required_hours`. This is useful for preferring overnight off-peak hours while still guaranteeing a full charge.
+The planner fills as many slots as possible from within the preferred window first, then spills over outside it only if needed to meet `required_hours`. This is useful for preferring overnight off-peak hours while still guaranteeing a full charge. To impose no restriction on timing, set `preferred_window_start: "00:00"` and `preferred_window_end: "23:59"`.
 
 **Spill direction** — spillover never goes *after* `preferred_window_end`. If extra slots are needed they are always taken from before the window start (i.e. earlier in the evening or the current day). The planner fetches today's remaining prices alongside tomorrow's so that spill can reach back into the current evening if necessary.
 
@@ -188,7 +170,7 @@ The saved plan is straightforward and easy to hand-edit:
 }
 ```
 
-`preferred_window_start` and `preferred_window_end` are `null` if no preferred window is configured. `gap_merged` is `true` when the window was formed by bridging a sub-`min_slot_minutes` gap between two originally separate blocks.
+`gap_merged` is `true` when the window was formed by bridging a sub-`min_slot_minutes` gap between two originally separate blocks.
 
 `price_stats` reflects **tomorrow's prices only** — it does not include any spill slots pulled from today's evening. This means `avg_price_cents_kwh` (your scheduled average) can occasionally be lower than `price_stats.min_cents_kwh` when spillover selected unusually cheap slots from earlier today.
 
@@ -223,7 +205,7 @@ Each successful run writes a formatted summary into the GitHub Actions job view,
 The SVG chart shows:
 
 - **Pink filled area** — day-ahead prices at full 15-minute slot resolution (c€/kWh)
-- **Blue shading** — preferred charging window (omitted if no preferred window is configured)
+- **Blue shading** — preferred charging window
 - **Purple bar** — scheduled charging windows along the x-axis
 - **Y-axis** — price in c€/kWh with gridlines; x-axis spans 00:00–24:00 local time
 
@@ -269,8 +251,8 @@ Additional per-slot indicators:
 
 ## How it works
 
-1. **Fetch** — makes a single query to the ENTSO-E Transparency Platform API (`documentType=A44`, endpoint `web-api.tp.entsoe.eu`) covering both today's and tomorrow's 23:00–23:00 UTC periods; determines target date based on local time (today if before noon, tomorrow if after noon); exits cleanly with `sys.exit(0)` if tomorrow's prices are not yet published (fewer than 23 h of slots after `target_dateT23:00Z`)
+1. **Fetch** — makes a single query to the ENTSO-E Transparency Platform API (`documentType=A44`, endpoint `web-api.tp.entsoe.eu`) spanning `(target_date-1)T23:00Z` – `(target_date+1)T23:00Z`; the response always contains two TimeSeries: today `(target_date-1)T23:00Z–target_dateT23:00Z` and tomorrow `(target_date-1+1)T23:00Z–(target_date+1)T23:00Z`; determines target date based on local time (today if before noon, tomorrow if after noon); exits cleanly with `sys.exit(0)` if tomorrow's period has fewer than 23 h of slots — prices typically publish around 14:00 EET
 2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods; trims today's slots to those within reach of the preferred window
-3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional price ceiling; among equally priced options the latest slots are always preferred (closest to `preferred_window_end`); spills leftward into today's evening if needed
+3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional price ceiling (`max_price_cents_kwh`); among equally priced options the latest slots are always preferred (closest to `preferred_window_end`); spills leftward into today's evening if needed
 4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming from the start of the merged block to preserve total charging time and push the window as late as possible), merges adjacent slots into contiguous windows, computes stats, writes JSON
-5. **Display** — prints a colour-coded terminal summary with a 24-hour price bar chart; writes a markdown summary and saves `chart.svg` (pink area chart, preferred window shading, purple charging bar) for the GitHub Actions run artifact
+5. **Display** — prints a colour-coded terminal summary (header, market prices, scheduled windows); writes a markdown summary and saves `chart.svg` (pink area chart, preferred window shading, purple charging bar) for the GitHub Actions run artifact

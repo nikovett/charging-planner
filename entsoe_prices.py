@@ -64,8 +64,8 @@ DEFAULT_CONFIG = {
         "contiguous_only": False,
         "merge_gaps": True,
         "min_slot_minutes": 30,
-        "preferred_window_start": None,
-        "preferred_window_end": None,
+        "preferred_window_start": "00:00",
+        "preferred_window_end":   "23:59",
         "timezone": None,
     },
 }
@@ -166,22 +166,35 @@ def validate_plan_config(config: dict) -> None:
     if ceil is not None and (not isinstance(ceil, (int, float)) or ceil <= 0):
         errors.append(f"charging.max_price_cents_kwh={ceil!r} must be a positive number or null.")
 
-    for key in ("preferred_window_start", "preferred_window_end"):
+    def _parse_hhmm(key: str) -> Optional[tuple[int, int]]:
         val = ch.get(key)
-        if val is not None:
-            try:
-                h, m = map(int, str(val).split(":"))
-                if not (0 <= h <= 23 and 0 <= m <= 59):
-                    raise ValueError
-            except (ValueError, AttributeError):
-                errors.append(f"charging.{key}={val!r} is not valid. Use 'HH:MM'.")
+        if val is None:
+            errors.append(f"charging.{key} is required. Use 'HH:MM' (e.g. '00:00').")
+            return None
+        try:
+            h, m = map(int, str(val).split(":"))
+            if not (0 <= h <= 23 and 0 <= m <= 59):
+                raise ValueError
+            return h, m
+        except (ValueError, AttributeError):
+            errors.append(f"charging.{key}={val!r} is not valid. Use 'HH:MM' (00:00–23:59).")
+            return None
+
+    pw_s = _parse_hhmm("preferred_window_start")
+    pw_e = _parse_hhmm("preferred_window_end")
+    if pw_s is not None and pw_e is not None:
+        if (pw_s[0] * 60 + pw_s[1]) >= (pw_e[0] * 60 + pw_e[1]):
+            errors.append(
+                f"charging.preferred_window_start must be before preferred_window_end "
+                f"(got {ch['preferred_window_start']}–{ch['preferred_window_end']})."
+            )
 
     _emit_errors(errors)
 
     # Advisory warnings — only reached when config is valid (no ConfigError raised above)
     win_start = ch.get("preferred_window_start")
     win_end   = ch.get("preferred_window_end")
-    if ch.get("contiguous_only") and win_start and win_end:
+    if ch.get("contiguous_only") and win_start and win_end:  # both always present after validation
         try:
             sh, sm = map(int, win_start.split(":"))
             eh, em = map(int, win_end.split(":"))
@@ -613,28 +626,23 @@ def _hhmm_to_utc(hhmm: str, ref_date: date, utc_offset_hours: int) -> datetime:
 
 def filter_preferred_window(
     prices: list[dict],
-    window_start_local: Optional[str],
-    window_end_local: Optional[str],
+    window_start_local: str,
+    window_end_local: str,
     local_tz_offset_hours: int,
     target_date: date,
 ) -> tuple[list[dict], list[dict]]:
-    win_start_utc = _hhmm_to_utc(window_start_local, target_date, local_tz_offset_hours) if window_start_local else None
-    win_end_utc   = _hhmm_to_utc(window_end_local,   target_date, local_tz_offset_hours) if window_end_local   else None
+    win_start_utc = _hhmm_to_utc(window_start_local, target_date, local_tz_offset_hours)
+    win_end_utc   = _hhmm_to_utc(window_end_local,   target_date, local_tz_offset_hours)
 
     inside, outside = [], []
     for slot in prices:
-        in_start = (win_start_utc is None) or (slot["start"] >= win_start_utc)
-        in_end   = (win_end_utc   is None) or (slot["end"]   <= win_end_utc)
-        if in_start and in_end:
+        if slot["start"] >= win_start_utc and slot["end"] <= win_end_utc:
             inside.append(slot)
         else:
             outside.append(slot)
 
-    if win_start_utc or win_end_utc:
-        win_s = window_start_local or "00:00"
-        win_e = window_end_local   or "24:00"
-        log.info("Preferred window %s–%s local: %d slots inside, %d outside",
-                 win_s, win_e, len(inside), len(outside))
+    log.info("Preferred window %s–%s local: %d slots inside, %d outside",
+             window_start_local, window_end_local, len(inside), len(outside))
 
     return inside, outside
 
@@ -824,9 +832,9 @@ class PlanParams:
     required_minutes:       int
     local_tz_offset_hours:  int
     timezone_name:          str
+    preferred_window_start: str
+    preferred_window_end:   str
     merged_starts:          set           = field(default_factory=set)
-    preferred_window_start: str | None    = None
-    preferred_window_end:   str | None    = None
 
 
 def build_plan(p: PlanParams) -> dict:
@@ -902,6 +910,7 @@ def build_plan(p: PlanParams) -> dict:
         "preferred_window_start": p.preferred_window_start,
         "preferred_window_end":   p.preferred_window_end,
         "windows":                win_list,
+        "selected_starts_utc":    [s["start"].isoformat() for s in p.selected],
     }
 
 
@@ -951,77 +960,6 @@ def _price_color(price_eur: float, min_p: float, max_p: float) -> str:
     else:
         return "31"   # red
 
-
-def render_price_chart(
-    all_prices: list[dict],
-    selected_starts: set,
-    local_tz_offset_hours: int,
-    bar_width: int = 38,
-) -> str:
-    """
-    Render a rich terminal bar chart of the 24-hour price profile.
-
-    Each row = one hour (sub-hourly slots averaged).
-    Bars are colour-coded green→yellow→red by relative price.
-    Selected hours are rendered with a filled bar and a ▶ marker.
-    A sparkline footer summarises cheapest/priciest hours at a glance.
-    """
-    if not all_prices:
-        return ""
-
-    # Sub-hourly slots are averaged per hour. all_prices should contain only
-    # tomorrow's slots (target_date) so each hour appears at most once.
-    hourly_prices: dict[int, list[float]] = defaultdict(list)
-    hourly_sel:    dict[int, bool]        = {}
-
-    for slot in all_prices:
-        local_start = slot["start"] + timedelta(hours=local_tz_offset_hours)
-        h = local_start.hour
-        hourly_prices[h].append(slot["price_eur_kwh"])
-        if slot["start"] in selected_starts:
-            hourly_sel[h] = True
-
-    all_eur  = [s["price_eur_kwh"] for s in all_prices]
-    min_p    = min(all_eur)
-    max_p    = max(all_eur)
-    avg_p    = sum(all_eur) / len(all_eur)
-    p_range  = max_p - min_p or 1.0
-
-    SEL_CHAR  = "█"
-    BASE_CHAR = "▒"
-    EMPTY     = "░"
-
-    sep = "  " + "─" * (bar_width + 22)
-    lines = [
-        "",
-        _bold("  Hour  c€/kWh  " + " " * (bar_width // 2 - 3) + "Price profile"),
-        sep,
-    ]
-
-    for hour in range(24):
-        if hour not in hourly_prices:
-            continue
-        avg   = sum(hourly_prices[hour]) / len(hourly_prices[hour])
-        ratio = (avg - min_p) / p_range
-        filled = max(1, int(ratio * bar_width))
-        empty  = bar_width - filled
-        color  = _price_color(avg, min_p, max_p)
-        is_sel = hourly_sel.get(hour, False)
-
-        bar_char  = SEL_CHAR if is_sel else BASE_CHAR
-        bar_body  = _c(color + (";1" if is_sel else ""), bar_char * filled) + _dim(EMPTY * empty)
-        marker    = _bold(_green(" ◀")) if is_sel else "  "
-        price_str = _c(color, f"{avg * 100:5.2f}")
-
-        lines.append(f"  {_bold(f'{hour:02d}:00')}  {price_str}  {bar_body}{marker}")
-
-    lines += [
-        sep,
-        f"  {_dim('▒ = available    █ = selected (cheapest)    colours: ')}",
-        f"  {_dim('min')} {_green(f'{min_p*100:.2f}')} {_dim('avg')} {_yellow(f'{avg_p*100:.2f}')} {_dim('max')} {_red(f'{max_p*100:.2f}')} {_dim('c€/kWh')}",
-        "",
-    ]
-    return "\n".join(lines)
 
 
 def _window_bar(start_hm: str, end_hm: str, dur_min: int, avg_c: float,
@@ -1094,18 +1032,7 @@ def print_plan_summary(plan: dict, all_prices: list[dict]) -> None:
         print(f"  {_red('✗ No windows selected')}")
         print()
 
-    # Price chart
-    if all_prices:
-        offset = plan["utc_offset_hours"]
-        sel_starts: set = set()
-        for slot in all_prices:
-            local_start = slot["start"] + timedelta(hours=offset)
-            hhmm = local_start.strftime("%H:%M")
-            for w in wins:
-                if w["start"] <= hhmm < w["end"]:
-                    sel_starts.add(slot["start"])
-                    break
-        print(render_price_chart(all_prices, sel_starts, offset))
+
 
     print(_bold("  " + "═" * W))
     print()
@@ -1331,8 +1258,8 @@ def _select_spillover(
     outside: list[dict],
     selected: list[dict],
     contiguous_only: bool,
-    win_start_local: Optional[str],
-    win_end_local: Optional[str],
+    win_start_local: str,
+    win_end_local: str,
     target_date: date,
     local_offset: int,
     required_minutes: int,
@@ -1354,16 +1281,15 @@ def _select_spillover(
     candidates = [s for s in outside if id(s) not in selected_ids]
 
     # Restrict to slots before the window end when one is configured.
-    if win_end_local:
-        win_end_utc = _hhmm_to_utc(win_end_local, target_date, local_offset)
-        candidates = [s for s in candidates if s["end"] <= win_end_utc]
-        log.info(
-            "Spillover restricted to slots before window end %s (%d candidates)",
-            win_end_local, len(candidates),
-        )
+    win_end_utc = _hhmm_to_utc(win_end_local, target_date, local_offset)
+    candidates = [s for s in candidates if s["end"] <= win_end_utc]
+    log.info(
+        "Spillover restricted to slots before window end %s (%d candidates)",
+        win_end_local, len(candidates),
+    )
 
     if contiguous_only:
-        if win_start_local and selected:
+        if selected:
             # Extend leftward: take the slots immediately before the block start.
             block_start_utc = min(s["start"] for s in selected)
             before = sorted(
@@ -1468,30 +1394,28 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     # The earliest a block can start is: win_start_utc - required_minutes.
     # Slots before that can never be part of the charging plan regardless.
     # Keep all_prices intact for display; use candidate_prices for selection.
-    win_start_local  = ch_cfg.get("preferred_window_start")
+    win_start_local  = ch_cfg["preferred_window_start"]
+    win_end_local    = ch_cfg["preferred_window_end"]
     required_minutes = int(ch_cfg["required_hours"] * 60)
     min_slot_minutes = int(ch_cfg.get("min_slot_minutes", 30))
     ceil_cents       = ch_cfg.get("max_price_cents_kwh")
     max_price_eur    = ceil_cents / 100.0 if ceil_cents is not None else None
 
-    if win_start_local:
-        win_start_utc    = _hhmm_to_utc(win_start_local, target_date, local_offset)
-        earliest_useful  = win_start_utc - timedelta(minutes=required_minutes)
-        candidate_prices = [s for s in all_prices if s["start"] >= earliest_useful]
-        trimmed = len(all_prices) - len(candidate_prices)
-        if trimmed:
-            log.info(
-                "Trimmed %d unreachable today-slots (earliest useful: %s UTC)",
-                trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"),
-            )
-    else:
-        candidate_prices = all_prices
+    win_start_utc   = _hhmm_to_utc(win_start_local, target_date, local_offset)
+    earliest_useful = win_start_utc - timedelta(minutes=required_minutes)
+    candidate_prices = [s for s in all_prices if s["start"] >= earliest_useful]
+    trimmed = len(all_prices) - len(candidate_prices)
+    if trimmed:
+        log.info(
+            "Trimmed %d unreachable today-slots (earliest useful: %s UTC)",
+            trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"),
+        )
 
     # 4. Split into preferred-window inside / outside
     inside, outside = filter_preferred_window(
         candidate_prices,
         window_start_local=win_start_local,
-        window_end_local=ch_cfg.get("preferred_window_end"),
+        window_end_local=win_end_local,
         local_tz_offset_hours=local_offset,
         target_date=target_date,
     )
@@ -1513,7 +1437,7 @@ def cmd_plan(config: dict, output_path: str) -> dict:
             selected=selected,
             contiguous_only=ch_cfg["contiguous_only"],
             win_start_local=win_start_local,
-            win_end_local=ch_cfg.get("preferred_window_end"),
+            win_end_local=win_end_local,
             target_date=target_date,
             local_offset=local_offset,
             required_minutes=required_minutes,
@@ -1573,7 +1497,7 @@ def cmd_plan(config: dict, output_path: str) -> dict:
         timezone_name=tz_name,
         merged_starts=merged_starts,
         preferred_window_start=win_start_local,
-        preferred_window_end=ch_cfg.get("preferred_window_end"),
+        preferred_window_end=win_end_local,
     ))
 
     # 8. Display
