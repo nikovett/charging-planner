@@ -482,6 +482,7 @@ def _select_with_min_block(
     min_slots_per_block: int,
 ) -> list[dict]:
     sorted_candidates = sorted(candidates, key=lambda x: (x["price_eur_kwh"], -x["start"].timestamp()))
+    slot_dur = candidates[0]["duration_minutes"] if candidates else 15
 
     selected_set: set[int] = set()
     disqualified: set[int] = set()
