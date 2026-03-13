@@ -1100,38 +1100,34 @@ def print_plan_summary(plan: dict, all_prices: list[dict]) -> None:
 # GitHub Actions job summary
 # ===========================================================================
 
-def render_html_chart(plan: dict, all_prices: list[dict]) -> str:
+def render_svg_chart(plan: dict, all_prices: list[dict]) -> str:
     """
-    Render an HTML bar chart for GitHub Actions job summaries.
+    Render an SVG price-area chart with charging windows marked as a bar
+    along the x-axis.  Returns a raw SVG string suitable for saving as
+    chart.svg and uploading as a GitHub Actions artifact.
 
-    Uses only table-based layout and inline styles that GHA's HTML sanitiser
-    permits. No flex, no absolute/relative positioning, no external resources.
-    Layout: one outer table row containing a y-axis cell (right-aligned text)
-    and a chart cell. The chart itself is a table with one column per hour;
-    each column is a nested 2-row table: top cell = spacer (empty, growing
-    downward), bottom cell = coloured bar. Hour labels sit in a second row.
+    Layout (600×220 px):
+      - Filled pink area  : hourly average prices (step chart)
+      - Blue shading      : preferred charging window (if configured)
+      - Purple bar        : scheduled charging windows (bottom strip)
+      - Gridlines + axes  : y = c€/kWh, x = 00:00–24:00 local time
     """
     if not all_prices:
         return ""
+
+    W, H    = 600, 220
+    PAD_L   = 48
+    PAD_R   = 12
+    PAD_T   = 18
+    PAD_B   = 52
+    BAR_H   = 10
+    CHART_W = W - PAD_L - PAD_R
+    CHART_H = H - PAD_T - PAD_B - BAR_H - 4
 
     offset   = plan["utc_offset_hours"]
     wins     = plan["windows"]
     pw_start = plan.get("preferred_window_start")
     pw_end   = plan.get("preferred_window_end")
-
-    def hm(s: str) -> int:
-        h, m = map(int, s.split(":"))
-        return h * 60 + m
-
-    has_pw = bool(pw_start and pw_end)
-    pw_s   = hm(pw_start) if pw_start else 0
-    pw_e   = hm(pw_end)   if pw_end   else 24 * 60
-
-    sel_hours: set[int] = set()
-    for w in wins:
-        end_min = hm(w["end"]) if w["end"] != "00:00" else 24 * 60
-        for h in range(hm(w["start"]) // 60, end_min // 60):
-            sel_hours.add(h)
 
     hourly: dict[int, list[float]] = defaultdict(list)
     for slot in all_prices:
@@ -1141,118 +1137,114 @@ def render_html_chart(plan: dict, all_prices: list[dict]) -> str:
     all_c = [v for vals in hourly.values() for v in vals]
     if not all_c:
         return ""
-    min_c, max_c = min(all_c), max(all_c)
-    c_range = max_c - min_c or 1.0
+    max_c   = max(all_c) * 1.15
+    c_range = max_c or 1.0
 
-    MAX_H = 60   # total chart area height in px (bar + spacer)
-    COL_W = 16   # column width px
+    def x(hour: float) -> float:
+        return PAD_L + hour / 24 * CHART_W
 
-    def bar_color(price: float) -> str:
-        ratio = (price - min_c) / c_range
-        if ratio < 0.33:   return "#4ade80"
-        elif ratio < 0.66: return "#facc15"
-        else:              return "#f87171"
+    def y(price_c: float) -> float:
+        return PAD_T + CHART_H * (1 - price_c / c_range)
 
-    # ── Y-axis: 4 labels in a right-aligned cell, spaced with <br> ──────────
-    # We output them top-to-bottom (max → min) with proportional line heights.
-    yaxis_rows = []
-    steps = 3
-    for i in range(steps + 1):
-        price = max_c - (max_c - min_c) * i / steps
-        # height of this band in px (gap between this label and the next)
-        band_h = MAX_H // steps
-        # last label gets no bottom padding
-        br = (f'<br><div style="height:{band_h - 12}px"></div>'
-              if i < steps else "")
-        yaxis_rows.append(
-            '<div style="font-size:9px;color:#aaa;text-align:right;'
-            'white-space:nowrap">%.1f%s</div>' % (price, br)
-        )
-    yaxis_cell = (
-        '<td style="vertical-align:top;padding-right:4px;padding-bottom:18px">'
-        + "".join(yaxis_rows) + "</td>"
-    )
+    def hm_frac(hhmm: str) -> float:
+        hh, mm = map(int, hhmm.split(":"))
+        return (hh + mm / 60) / 24
 
-    # ── Bar columns ──────────────────────────────────────────────────────────
-    # Each hour = one <td> containing a 2-row mini-table:
-    #   row 0 (spacer): height = MAX_H - bar_h  → pushes bar to bottom
-    #   row 1 (bar):    height = bar_h, background = fill colour
-    hour_cells = []
-    label_cells = []
-    for h in range(24):
-        avg    = sum(hourly[h]) / len(hourly[h]) if h in hourly else 0.0
-        is_sel = h in sel_hours
-        in_pw  = has_pw and pw_s <= h * 60 < pw_e
-        bar_h  = max(2, int((avg - min_c) / c_range * MAX_H))
-        spacer = MAX_H - bar_h
-        fill   = "#7c3aed" if is_sel else bar_color(avg)
-        col_bg = "#dbeafe" if in_pw else ""
-        col_bg_style = f"background:{col_bg};" if col_bg else ""
+    bar_top = PAD_T + CHART_H + 4
 
-        hour_cells.append(
-            '<td style="vertical-align:bottom;padding:0 1px;%(bg)s">'
-            '<table style="border-collapse:collapse;width:%(w)dpx">'
-            '<tr><td style="height:%(sp)dpx;padding:0"></td></tr>'
-            '<tr><td title="%(avg).2f c\u20ac/kWh" '
-            'style="height:%(bar)dpx;background:%(fill)s;padding:0;'
-            'border-radius:2px 2px 0 0"></td></tr>'
-            '</table></td>'
-            % dict(bg=col_bg_style, w=COL_W-2, sp=spacer,
-                   avg=avg, bar=bar_h, fill=fill)
+    # ── Area path (step chart, one step per slot) ────────────────────────────
+    points: list[tuple[float, float]] = []
+    for slot in sorted(all_prices, key=lambda s: s["start"]):
+        h_local = (slot["start"] + timedelta(hours=offset)).hour +                   (slot["start"] + timedelta(hours=offset)).minute / 60
+        h_end   = h_local + slot["duration_minutes"] / 60
+        price_c = slot["price_eur_kwh"] * 100
+        points.append((x(h_local), y(price_c)))
+        points.append((x(h_end),   y(price_c)))
+
+    base_y  = y(0)
+    path_d  = f"M {points[0][0]:.1f},{base_y:.1f} "
+    for px, py in points:
+        path_d += f"L {px:.1f},{py:.1f} "
+    path_d += f"L {points[-1][0]:.1f},{base_y:.1f} Z"
+
+    # ── Preferred window shading ─────────────────────────────────────────────
+    pw_rect = ""
+    if pw_start and pw_end:
+        px1 = x(hm_frac(pw_start) * 24)
+        px2 = x(hm_frac(pw_end)   * 24)
+        pw_rect = (
+            f'<rect x="{px1:.1f}" y="{PAD_T}" '
+            f'width="{px2-px1:.1f}" height="{CHART_H}" '
+            f'fill="#bfdbfe" fill-opacity="0.35"/>'
         )
 
-        show = str(h) if h % 6 == 0 else ""
-        label_cells.append(
-            '<td style="text-align:center;font-size:10px;color:#888;'
-            'padding:2px 0;width:%(w)dpx">%(s)s</td>'
-            % dict(w=COL_W, s=show)
+    # ── Gridlines & y-labels ─────────────────────────────────────────────────
+    grid_svg = ""
+    for i in range(4):
+        price = max_c * i / 3
+        gy    = y(price)
+        grid_svg += (
+            f'<line x1="{PAD_L:.1f}" y1="{gy:.1f}" '
+            f'x2="{PAD_L+CHART_W:.1f}" y2="{gy:.1f}" '
+            f'stroke="#e5e7eb" stroke-width="1"/>'
+            f'<text x="{PAD_L-4:.1f}" y="{gy+4:.1f}" '
+            f'text-anchor="end" font-size="10" fill="#9ca3af">{price:.1f}</text>'
         )
 
-    chart_cell = (
-        '<td style="vertical-align:bottom">'
-        '<table style="border-collapse:collapse;border-bottom:1px solid #d0d7de">'
-        '<tr>' + "".join(hour_cells) + '</tr>'
-        '</table>'
-        '<table style="border-collapse:collapse">'
-        '<tr>' + "".join(label_cells) + '</tr>'
-        '</table>'
-        '</td>'
-    )
-
-    outer = (
-        '<table style="border-collapse:collapse;margin-top:8px">'
-        '<tr>' + yaxis_cell + chart_cell + '</tr>'
-        '</table>'
-    )
-
-    # ── Legend: small coloured table cells as swatches ───────────────────────
-    def swatch(color: str, label: str) -> str:
-        return (
-            '<td style="padding:0 8px 0 0;white-space:nowrap">'
-            '<table style="border-collapse:collapse;display:inline-table">'
-            '<tr>'
-            '<td style="width:10px;height:10px;background:%(c)s;'
-            'border:1px solid #ccc;padding:0"></td>'
-            '<td style="font-size:11px;color:#888;padding:0 0 0 3px">%(l)s</td>'
-            '</tr></table></td>'
-            % dict(c=color, l=label)
+    # ── X-axis labels ────────────────────────────────────────────────────────
+    xaxis_svg = ""
+    for h in (0, 6, 12, 18, 24):
+        xv = x(h)
+        xaxis_svg += (
+            f'<text x="{xv:.1f}" y="{bar_top+BAR_H+14:.1f}" '
+            f'text-anchor="middle" font-size="10" fill="#9ca3af">{h}</text>'
         )
 
-    swatches = []
-    if has_pw:
-        swatches.append(swatch("#dbeafe", "Preferred window"))
-    swatches.append(swatch("#7c3aed", "Charging"))
-    swatches.append(swatch("#4ade80", "Cheap"))
-    swatches.append(swatch("#facc15", "Mid"))
-    swatches.append(swatch("#f87171", "Expensive"))
+    # ── Charging window bars ─────────────────────────────────────────────────
+    bars_svg = ""
+    for w in wins:
+        x1 = PAD_L + hm_frac(w["start"]) * CHART_W
+        x2 = PAD_L + hm_frac(w["end"])   * CHART_W
+        bars_svg += (
+            f'<rect x="{x1:.1f}" y="{bar_top:.1f}" '
+            f'width="{x2-x1:.1f}" height="{BAR_H}" '
+            f'fill="#7c3aed" rx="2"/>'
+        )
 
+    # ── Legend ───────────────────────────────────────────────────────────────
+    leg_y  = bar_top + BAR_H + 28
     legend = (
-        '<table style="border-collapse:collapse;margin-top:6px">'
-        '<tr>' + "".join(swatches) + '</tr>'
-        '</table>'
+        f'<rect x="{PAD_L}" y="{leg_y-8}" width="12" height="8" fill="#f9a8b8" rx="1"/>'
+        f'<text x="{PAD_L+16}" y="{leg_y}" font-size="10" fill="#6b7280">Prices</text>'
+        f'<rect x="{PAD_L+62}" y="{leg_y-8}" width="12" height="8" fill="#7c3aed" rx="1"/>'
+        f'<text x="{PAD_L+78}" y="{leg_y}" font-size="10" fill="#6b7280">Charging</text>'
+    )
+    if pw_start and pw_end:
+        legend += (
+            f'<rect x="{PAD_L+152}" y="{leg_y-8}" width="12" height="8" fill="#bfdbfe" rx="1"/>'
+            f'<text x="{PAD_L+168}" y="{leg_y}" font-size="10" fill="#6b7280">Preferred window</text>'
+        )
+
+    # ── Y-axis label ─────────────────────────────────────────────────────────
+    mid_y  = PAD_T + CHART_H // 2
+    ylabel = (
+        f'<text x="10" y="{mid_y}" text-anchor="middle" font-size="10" fill="#d1d5db" '
+        f'transform="rotate(-90,10,{mid_y})">c€/kWh</text>'
     )
 
-    return outer + legend
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {W} {H}" width="{W}" height="{H}" '
+        f'style="font-family:sans-serif;background:#ffffff">'
+        f'{pw_rect}{grid_svg}'
+        f'<path d="{path_d}" fill="#fecdd3" fill-opacity="0.7" stroke="#fb7185" stroke-width="1.5"/>'
+        f'<rect x="{PAD_L}" y="{bar_top}" width="{CHART_W}" height="{BAR_H}" fill="#f3f4f6" rx="2"/>'
+        f'{bars_svg}'
+        f'<line x1="{PAD_L}" y1="{PAD_T}" x2="{PAD_L}" y2="{PAD_T+CHART_H}" stroke="#d1d5db" stroke-width="1"/>'
+        f'<line x1="{PAD_L}" y1="{PAD_T+CHART_H}" x2="{PAD_L+CHART_W}" y2="{PAD_T+CHART_H}" stroke="#d1d5db" stroke-width="1"/>'
+        f'{xaxis_svg}{ylabel}{legend}'
+        f'</svg>'
+    )
 
 
 def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
@@ -1296,9 +1288,17 @@ def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
         md += ["_No windows selected._", ""]
 
     if all_prices:
-        chart = render_html_chart(plan, all_prices)
-        if chart:
-            md += ["### Price profile", "", chart, ""]
+        svg = render_svg_chart(plan, all_prices)
+        if svg:
+            chart_path = "chart.svg"
+            try:
+                with open(chart_path, "w", encoding="utf-8") as _cf:
+                    _cf.write(svg)
+                log.info("Price chart saved to %s", chart_path)
+                md += ["### Price profile", "",
+                       "chart.svg is included in the run artifact.", ""]
+            except OSError as _ce:
+                log.warning("Could not save chart: %s", _ce)
 
     try:
         with open(summary_path, "a", encoding="utf-8") as f:
