@@ -20,7 +20,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
   ══════════════════════════════════════════════════════════════════
 ```
 
-Terminal output is colour-coded green→yellow→red by relative price.
+Terminal output is colour-coded: market price stats are shown in green (min) / yellow (avg) / red (max), and each charging window bar is coloured green→yellow→red by its price relative to the day's range.
 
 ---
 
@@ -255,4 +255,4 @@ Additional per-slot indicators:
 2. **Parse** — handles 15-, 30-, and 60-minute resolution data; deduplicates overlapping periods; trims today's slots to those within reach of the preferred window
 3. **Select** — picks the cheapest slots totalling `required_hours`, respecting `min_slot_minutes` block length and the optional price ceiling (`max_price_cents_kwh`); among equally priced options the latest slots are always preferred (closest to `preferred_window_end`); spills leftward into today's evening if needed
 4. **Plan** — bridges sub-`min_slot_minutes` gaps between blocks (trimming from the start of the merged block to preserve total charging time and push the window as late as possible), merges adjacent slots into contiguous windows, computes stats, writes JSON
-5. **Display** — prints a colour-coded terminal summary (header, market prices, scheduled windows); writes a markdown summary and saves `chart.svg` (pink area chart, preferred window shading, purple charging bar) for the GitHub Actions run artifact
+5. **Display** — prints a colour-coded terminal summary (header, market price stats in green/yellow/red, charging windows coloured by relative price); writes a markdown summary and saves `chart.svg` (pink area chart, preferred window shading, purple charging bar) for the GitHub Actions run artifact
