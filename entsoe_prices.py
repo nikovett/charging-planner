@@ -26,6 +26,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 import urllib.request
 import urllib.error
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # ---------------------------------------------------------------------------
 # Optional dependencies
@@ -291,7 +292,6 @@ def parse_config(raw: dict) -> "Config":
     # target_date, which is determined later in cmd_plan.
     tz_str = ch.get("timezone") or None
     if tz_str:
-        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
         try:
             ZoneInfo(tz_str)   # validate only; result discarded
         except (ZoneInfoNotFoundError, KeyError):
@@ -363,7 +363,7 @@ def fetch_entsoe_prices(
     api_key: str,
     area: str,
     target_date: date,
-) -> list[dict]:
+) -> list[Slot]:
     """Fetch day-ahead prices for today and tomorrow in a single API call.
 
     ENTSO-E always returns two complete 23:00–23:00 UTC TimeSeries periods:
@@ -726,7 +726,6 @@ def _hhmm_to_utc(hhmm: str, ref_date: date, tz) -> datetime:
     so windows set to e.g. "03:00" on a DST transition day are handled correctly.
     Returns a UTC datetime with tzinfo=timezone.utc.
     """
-    from zoneinfo import ZoneInfo
     h, m = map(int, hhmm.split(":"))
     local_dt = datetime(ref_date.year, ref_date.month, ref_date.day,
                         h, m, tzinfo=tz)
@@ -756,6 +755,78 @@ def filter_preferred_window(
              window_start_local, window_end_local, len(inside), len(outside))
 
     return inside, outside
+
+
+def _select_spillover(
+    outside: list[Slot],
+    selected: list[Slot],
+    contiguous_only: bool,
+    win_end_utc: datetime,
+    win_end_local: str,
+    required_minutes: int,
+    remaining: int,
+    max_price_eur: Optional[float],
+    min_slot_minutes: int,
+    all_prices: list[Slot],
+) -> list[Slot]:
+    """
+    Select spillover slots to cover `remaining` minutes when the preferred
+    window alone cannot satisfy `required_minutes`.
+
+    Rules:
+    - Never spill after win_end_utc.
+    - contiguous_only: extend the existing block leftward (earlier slots only).
+    - non-contiguous: pick cheapest slots from eligible outside slots.
+
+    win_end_local is passed only for log messages.
+    """
+    # Use start datetime as identity key (slot ordinal is only set by fetch_entsoe_prices).
+    selected_starts = {s.start for s in selected}
+    candidates = [s for s in outside if s.start not in selected_starts]
+
+    # Restrict to slots before the window end.
+    candidates = [s for s in candidates if s.end <= win_end_utc]
+    log.info(
+        "Spillover restricted to slots before window end %s (%d candidates)",
+        win_end_local, len(candidates),
+    )
+
+    if contiguous_only:
+        if selected:
+            # Extend leftward: take the slots immediately before the block start.
+            block_start_utc = min(s.start for s in selected)
+            before = sorted(
+                [s for s in candidates if s.end <= block_start_utc],
+                key=lambda x: x.start,
+                reverse=True,
+            )
+            slot_dur = all_prices[0].duration_minutes if all_prices else 15
+            n_extra  = (remaining + slot_dur - 1) // slot_dur
+            spillover = list(reversed(before[:n_extra]))
+            log.info(
+                "contiguous_only spill: extending block %d min earlier (%d slots)",
+                remaining, len(spillover),
+            )
+            return spillover
+        # No prior selected block — fall back to best contiguous block.
+        # Apply the same win_end_utc restriction used by the non-empty path so
+        # the result never spills after the preferred window end.
+        filtered = [
+            s for s in all_prices
+            if s.end <= win_end_utc
+            and (max_price_eur is None or s.price_eur_kwh <= max_price_eur)
+        ]
+        slot_dur = all_prices[0].duration_minutes if all_prices else 15
+        n_slots  = (remaining + slot_dur - 1) // slot_dur
+        return _best_contiguous_window(filtered, all_prices, n_slots)
+
+    return select_charging_windows(
+        candidates,
+        required_minutes=remaining,
+        contiguous_only=False,
+        max_price=max_price_eur,
+        min_slot_minutes=min_slot_minutes,
+    )
 
 
 def _group_contiguous(slots: list[Slot]) -> list[list[Slot]]:
@@ -899,8 +970,6 @@ def _resolve_tz(config_tz: str | None, ref_date: date):
     DST transitions are handled correctly because ZoneInfo resolves the
     actual offset for each specific datetime, not a fixed hourly value.
     """
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
     # Determine timezone name
     tz_name = config_tz
     if not tz_name:
@@ -1075,8 +1144,7 @@ def load_plan(path: str) -> dict:
 # ===========================================================================
 
 # ANSI colour helpers (auto-disabled when not a TTY or on Windows)
-import sys as _sys
-_USE_COLOR = _sys.stdout.isatty() and _sys.platform != "win32"
+_USE_COLOR = sys.stdout.isatty() and sys.platform != "win32"
 
 def _c(code: str, text: str) -> str:
     return f"\033[{code}m{text}\033[0m" if _USE_COLOR else text
@@ -1087,19 +1155,6 @@ def _red(t):    return _c("31", t)
 def _bold(t):   return _c("1",  t)
 def _dim(t):    return _c("2",  t)
 def _cyan(t):   return _c("36", t)
-
-
-def _price_color(price_eur: float, min_p: float, max_p: float) -> str:
-    """Return an ANSI colour based on relative price (green=cheap, red=expensive)."""
-    if max_p == min_p:
-        return "33"
-    ratio = (price_eur - min_p) / (max_p - min_p)
-    if ratio < 0.33:
-        return "32"   # green
-    elif ratio < 0.66:
-        return "33"   # yellow
-    else:
-        return "31"   # red
 
 
 
@@ -1172,8 +1227,6 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     else:
         print(f"  {_red('✗ No windows selected')}")
         print()
-
-
 
     print(_bold("  " + "═" * W))
     print()
@@ -1390,81 +1443,6 @@ def write_gha_summary(plan: dict, all_prices: list[Slot]) -> None:
             f.write("\n".join(md) + "\n")
     except OSError as exc:
         log.warning("Could not write GitHub Actions summary: %s", exc)
-
-# ===========================================================================
-# Top-level commands
-# ===========================================================================
-
-def _select_spillover(
-    outside: list[Slot],
-    selected: list[Slot],
-    contiguous_only: bool,
-    win_end_utc: datetime,
-    win_end_local: str,
-    required_minutes: int,
-    remaining: int,
-    max_price_eur: Optional[float],
-    min_slot_minutes: int,
-    all_prices: list[Slot],
-) -> list[Slot]:
-    """
-    Select spillover slots to cover `remaining` minutes when the preferred
-    window alone cannot satisfy `required_minutes`.
-
-    Rules:
-    - Never spill after win_end_utc.
-    - contiguous_only: extend the existing block leftward (earlier slots only).
-    - non-contiguous: pick cheapest slots from eligible outside slots.
-
-    win_end_local is passed only for log messages.
-    """
-    # Use start datetime as identity key (slot ordinal is only set by fetch_entsoe_prices).
-    selected_starts = {s.start for s in selected}
-    candidates = [s for s in outside if s.start not in selected_starts]
-
-    # Restrict to slots before the window end.
-    candidates = [s for s in candidates if s.end <= win_end_utc]
-    log.info(
-        "Spillover restricted to slots before window end %s (%d candidates)",
-        win_end_local, len(candidates),
-    )
-
-    if contiguous_only:
-        if selected:
-            # Extend leftward: take the slots immediately before the block start.
-            block_start_utc = min(s.start for s in selected)
-            before = sorted(
-                [s for s in candidates if s.end <= block_start_utc],
-                key=lambda x: x.start,
-                reverse=True,
-            )
-            slot_dur = all_prices[0].duration_minutes if all_prices else 15
-            n_extra  = (remaining + slot_dur - 1) // slot_dur
-            spillover = list(reversed(before[:n_extra]))
-            log.info(
-                "contiguous_only spill: extending block %d min earlier (%d slots)",
-                remaining, len(spillover),
-            )
-            return spillover
-        # No prior selected block — fall back to best contiguous block.
-        # Apply the same win_end_utc restriction used by the non-empty path so
-        # the result never spills after the preferred window end.
-        filtered = [
-            s for s in all_prices
-            if s.end <= win_end_utc
-            and (max_price_eur is None or s.price_eur_kwh <= max_price_eur)
-        ]
-        slot_dur = all_prices[0].duration_minutes if all_prices else 15
-        n_slots  = (remaining + slot_dur - 1) // slot_dur
-        return _best_contiguous_window(filtered, all_prices, n_slots)
-
-    return select_charging_windows(
-        candidates,
-        required_minutes=remaining,
-        contiguous_only=False,
-        max_price=max_price_eur,
-        min_slot_minutes=min_slot_minutes,
-    )
 
 
 # ---------------------------------------------------------------------------
