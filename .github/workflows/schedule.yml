@@ -2,7 +2,7 @@ name: ENTSO-E Charging Plan
 
 on:
   schedule:
-    - cron: '30 12 * * *'   # 12:30 UTC = 15:30 EEST (summer) / 14:30 EET (winter)
+    - cron: '0 12 * * *'   # 12:00 UTC = 15:00 EEST (summer) / 14:00 EET (winter)
                             # One run covers both DST states. Prices publish ~13:00 CET
                             # so this always lands after publication.
   workflow_dispatch:
@@ -145,10 +145,10 @@ jobs:
               lines = "No windows selected"
 
           message = (
-              f"{date}  ·  {tot} min  ·  avg {avg:.2f} c€/kWh\n\n"
+              f"{date}\n"
+              f"{lines}\n\n"
               f"{labels}\n"
-              f"{ruler_str}\n\n"
-              f"{lines}"
+              f"{ruler_str}"
           )
 
           req = urllib.request.Request(
