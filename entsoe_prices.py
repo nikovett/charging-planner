@@ -1261,7 +1261,7 @@ def render_svg_chart(plan: dict, all_prices: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
+def write_gha_summary(plan: dict, all_prices: list[dict], chart_path: str = "chart.svg") -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
@@ -1302,7 +1302,21 @@ def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
     if all_prices:
         svg = render_svg_chart(plan, all_prices)
         if svg:
-            md += ["### Price profile", "", svg, ""]
+            # Save SVG as a file; reference it in the summary.
+            # GitHub Actions summaries do not render inline SVG or data URIs,
+            # but the file is uploaded as a workflow artifact alongside plan.json.
+            try:
+                with open(chart_path, "w", encoding="utf-8") as _cf:
+                    _cf.write(svg)
+                log.info("Price chart saved to %s", chart_path)
+            except OSError as _ce:
+                log.warning("Could not save chart: %s", _ce)
+                chart_path = None
+            md += ["### Price profile", ""]
+            if chart_path:
+                md += [f"[View price chart]({chart_path})", ""]
+            else:
+                md += ["_(chart unavailable)_", ""]
 
 
     try:
@@ -1565,7 +1579,7 @@ def cmd_plan(config: dict, output_path: str) -> dict:
     print(f"  Plan saved to: {output_path}\n")
 
     # 10. GHA summary
-    write_gha_summary(plan, all_prices=tomorrow_prices)
+    write_gha_summary(plan, all_prices=tomorrow_prices, chart_path="chart.svg")
 
     return plan
 
