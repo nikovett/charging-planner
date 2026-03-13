@@ -96,7 +96,7 @@ charging:
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | — | **Required.** Start of preferred charging window (`HH:MM`, `00:00`–`23:59`) |
 | `charging.preferred_window_end` | — | **Required.** End of preferred charging window (`HH:MM`, must be after start). Use `23:59` for no restriction. Treat this as your departure time — charging is scheduled as late as possible within this window |
-| `charging.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from `/etc/timezone`. Used with `zoneinfo` for DST-correct window resolution — the correct UTC offset is applied for each specific date, including DST transition days |
+| `charging.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from `/etc/timezone`. Used with `zoneinfo` for DST-correct window resolution — the correct UTC offset is applied for each specific date, including DST transition days. An explicit but unrecognised name is a hard config error (exits with a clear message); auto-detection falling back to UTC is allowed silently |
 
 ### Preferred window
 
@@ -104,7 +104,7 @@ The planner fills as many slots as possible from within the preferred window fir
 
 **Spill direction** — spillover never goes *after* `preferred_window_end`. If extra slots are needed they are always taken from before the window start (i.e. earlier in the evening or the current day). The planner fetches today's remaining prices alongside tomorrow's so that spill can reach back into the current evening if necessary.
 
-**`contiguous_only` and spill** — when `contiguous_only: true` and `required_hours` exceeds the preferred window length, the single contiguous block is extended leftward: charging simply starts earlier than the window start rather than jumping to a separate block later in the day. If there are not enough hours available before the window the plan will be short by the deficit (a warning is logged).
+**`contiguous_only` and spill** — when `contiguous_only: true` and `required_hours` exceeds the preferred window length, the single contiguous block is extended leftward: charging simply starts earlier than the window start rather than jumping to a separate block later in the day. `preferred_window_end` is always respected as a hard ceiling — no slot will be scheduled after it even in this path. If there are not enough hours available before the window the plan will be short by the deficit (a warning is logged).
 
 ### Gap merging
 

@@ -680,12 +680,15 @@ def close_gap_merge(
 ) -> tuple[list[dict], set]:
     """
     If two selected blocks are separated by a gap smaller than min_slot_minutes,
-    bridge the gap by including those intervening slots, then trim from either
-    end of the newly formed continuous block until total selected minutes equals
-    required_minutes again.
+    bridge the gap by including those intervening slots, then trim endpoint slots
+    from the merged block until total selected minutes equals required_minutes again.
 
-    Trimming prefers removing the most expensive endpoint slot. On a tie the
-    earliest slot is dropped.
+    Trim rule — on each iteration compare the front (earliest) and back (latest)
+    slots of the merged block:
+      - Drop the back slot if it is strictly more expensive than the front.
+      - Otherwise drop the front slot (cheaper or equal price).
+    Tiebreaking by dropping the front pushes the charging window as late as
+    possible, closest to the departure time.
 
     Returns (slots, merged_starts) where merged_starts is a set of UTC start
     datetimes for windows that were produced by a gap merge.
@@ -736,15 +739,28 @@ def close_gap_merge(
                     gap_start.isoformat(), gap_end.isoformat(),
                     min_slot_minutes,
                 )
-                # Always trim from the beginning of the merged block (req 6).
-                # This pushes the charging window as late as possible,
-                # closest to the departure time (req 2).
-                slot_dur = merged_block[0]["duration_minutes"]
-                while extra_minutes >= slot_dur and len(merged_block) > 1:
-                    first = merged_block[0]
-                    log.info("Trimming leading slot %s (%.4f €/kWh)", first["start"].isoformat(), first["price_eur_kwh"])
-                    merged_block = merged_block[1:]
-                    extra_minutes -= slot_dur
+                # Trim one slot per iteration from whichever endpoint is more expensive.
+                # On a price tie always drop the front (earlier) slot — this pushes
+                # the charging window as late as possible, closest to departure time.
+                while extra_minutes > 0 and len(merged_block) > 1:
+                    front = merged_block[0]
+                    back  = merged_block[-1]
+                    # Drop back only if it is strictly more expensive than front.
+                    if back["price_eur_kwh"] > front["price_eur_kwh"]:
+                        log.info(
+                            "Trimming trailing slot %s (%.4f €/kWh) — more expensive than front (%.4f)",
+                            back["start"].isoformat(), back["price_eur_kwh"], front["price_eur_kwh"],
+                        )
+                        merged_block   = merged_block[:-1]
+                        extra_minutes -= back["duration_minutes"]
+                    else:
+                        log.info(
+                            "Trimming leading slot %s (%.4f €/kWh)%s",
+                            front["start"].isoformat(), front["price_eur_kwh"],
+                            " — tiebreak" if back["price_eur_kwh"] == front["price_eur_kwh"] else "",
+                        )
+                        merged_block   = merged_block[1:]
+                        extra_minutes -= front["duration_minutes"]
 
                 merged_starts.add(merged_block[0]["start"])
 
@@ -813,11 +829,20 @@ def _resolve_tz(config_tz: str | None, ref_date: date):
             pass
     tz_name = tz_name or "UTC"
 
-    # Resolve to a ZoneInfo object
+    # Resolve to a ZoneInfo object.
+    # If the caller explicitly supplied a timezone name (config_tz) and it is
+    # not recognised, that is a hard configuration error — silently falling back
+    # to UTC would produce quietly wrong window times.
+    # Auto-detected names (config_tz is None) are allowed to fall back to UTC.
     try:
         tz = ZoneInfo(tz_name)
     except (ZoneInfoNotFoundError, KeyError):
-        log.warning("Unknown timezone %r — falling back to UTC.", tz_name)
+        if config_tz:
+            raise ConfigError(
+                f"charging.timezone={config_tz!r} is not a recognised IANA timezone name "
+                f"(e.g. 'Europe/Helsinki', 'UTC'). Check https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+            )
+        log.warning("Could not resolve system timezone %r — falling back to UTC.", tz_name)
         tz_name = "UTC"
         tz = timezone.utc
 
@@ -1319,10 +1344,14 @@ def _select_spillover(
                 remaining, len(spillover),
             )
             return spillover
-        # No preferred window start — fall back to best contiguous block.
-        # Use select_charging_windows so max_price_eur is respected, and pass
-        # all_prices as the pool so boundary-spanning windows are visible.
-        filtered = [s for s in all_prices if max_price_eur is None or s["price_eur_kwh"] <= max_price_eur]
+        # No prior selected block — fall back to best contiguous block.
+        # Apply the same win_end_utc restriction used by the non-empty path so
+        # the result never spills after the preferred window end.
+        filtered = [
+            s for s in all_prices
+            if s["end"] <= win_end_utc
+            and (max_price_eur is None or s["price_eur_kwh"] <= max_price_eur)
+        ]
         slot_dur = all_prices[0]["duration_minutes"] if all_prices else 15
         n_slots  = (remaining + slot_dur - 1) // slot_dur
         return _best_contiguous_window(filtered, all_prices, n_slots)
