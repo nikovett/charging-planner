@@ -1302,7 +1302,10 @@ def write_gha_summary(plan: dict, all_prices: list[dict]) -> None:
     if all_prices:
         svg = render_svg_chart(plan, all_prices)
         if svg:
-            md += ["### Price profile", "", svg, ""]
+            import base64 as _b64
+            svg_b64 = _b64.b64encode(svg.encode("utf-8")).decode("ascii")
+            img_tag = f'<img src="data:image/svg+xml;base64,{svg_b64}" alt="Price profile" width="600"/>'
+            md += ["### Price profile", "", img_tag, ""]
 
 
     try:
