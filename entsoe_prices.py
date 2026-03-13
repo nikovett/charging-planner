@@ -253,6 +253,11 @@ class Config:
     All type conversions happen here (hours→minutes, cents→EUR, HH:MM strings
     kept as-is for log messages).  cmd_plan receives a Config and never
     touches the raw dict again.
+
+    timezone_str is the raw IANA name from config (or None for auto-detect).
+    It is NOT pre-resolved to a ZoneInfo here because the correct DST offset
+    depends on target_date, which is not known until after prices are fetched.
+    cmd_plan resolves it once with the actual target_date.
     """
     # ENTSO-E
     api_key:                str
@@ -266,8 +271,7 @@ class Config:
     max_price_eur:          Optional[float]   # None = no ceiling
     preferred_window_start: str               # validated HH:MM
     preferred_window_end:   str               # validated HH:MM
-    tz:                     object            # ZoneInfo or timezone.utc
-    tz_name:                str
+    timezone_str:           Optional[str]     # raw IANA name or None (auto-detect)
 
 
 def parse_config(raw: dict) -> "Config":
@@ -282,8 +286,20 @@ def parse_config(raw: dict) -> "Config":
     et = raw["entsoe"]
     ch = raw["charging"]
 
-    # Resolve timezone — may raise ConfigError for explicit bad names
-    tz_name, tz = _resolve_tz(ch.get("timezone"), date.today())
+    # Validate the timezone string now (raises ConfigError for bad explicit names)
+    # but do NOT resolve it to a ZoneInfo — the correct DST offset depends on
+    # target_date, which is determined later in cmd_plan.
+    tz_str = ch.get("timezone") or None
+    if tz_str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(tz_str)   # validate only; result discarded
+        except (ZoneInfoNotFoundError, KeyError):
+            raise ConfigError(
+                f"charging.timezone={tz_str!r} is not a recognised IANA timezone name "
+                f"(e.g. 'Europe/Helsinki', 'UTC'). "
+                f"Check https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+            )
 
     ceil_cents = ch.get("max_price_cents_kwh")
     return Config(
@@ -296,8 +312,7 @@ def parse_config(raw: dict) -> "Config":
         max_price_eur=ceil_cents / 100.0 if ceil_cents is not None else None,
         preferred_window_start=ch["preferred_window_start"],
         preferred_window_end=ch["preferred_window_end"],
-        tz=tz,
-        tz_name=tz_name,
+        timezone_str=tz_str,
     )
 
 
@@ -599,25 +614,28 @@ def _select_with_min_block(
     sorted_candidates = sorted(candidates, key=lambda x: (x.price_eur_kwh, -x.start.timestamp()))
     slot_dur = candidates[0].duration_minutes if candidates else 15
 
-    selected_set: set[int] = set()  # id() of selected Slot objects
-    disqualified: set[int] = set()
+    # Use start datetime as the identity key — guaranteed unique within any
+    # non-overlapping price series, and does not depend on the slot ordinal
+    # field (which is only assigned inside fetch_entsoe_prices).
+    selected_set: set  = set()   # Slot.start datetimes of selected slots
+    disqualified: set  = set()   # Slot.start datetimes of disqualified slots
 
-    def pick_next(n: int) -> list[dict]:
+    def pick_next(n: int) -> list[Slot]:
         result = []
         for s in sorted_candidates:
             if len(result) == n:
                 break
-            if id(s) not in selected_set and id(s) not in disqualified:
+            if s.start not in selected_set and s.start not in disqualified:
                 result.append(s)
         return result
 
     for s in pick_next(n_slots):
-        selected_set.add(id(s))
+        selected_set.add(s.start)
 
-    slot_by_id = {id(s): s for s in sorted_candidates}
+    slot_by_start = {s.start: s for s in sorted_candidates}
 
     for iteration in range(len(candidates)):
-        current = sorted([slot_by_id[i] for i in selected_set], key=lambda x: x.start)
+        current = sorted([slot_by_start[k] for k in selected_set], key=lambda x: x.start)
         blocks = _group_contiguous(current)
         short_blocks = [b for b in blocks if len(b) < min_slots_per_block]
         if not short_blocks:
@@ -625,8 +643,8 @@ def _select_with_min_block(
 
         for block in short_blocks:
             for s in block:
-                selected_set.discard(id(s))
-                disqualified.add(id(s))
+                selected_set.discard(s.start)
+                disqualified.add(s.start)
 
         deficit = n_slots - len(selected_set)
         if deficit <= 0:
@@ -637,11 +655,11 @@ def _select_with_min_block(
                         deficit, min_slots_per_block * slot_dur)
             break
         for s in backfill:
-            selected_set.add(id(s))
+            selected_set.add(s.start)
     else:
         log.warning("min_slot_minutes enforcement loop exhausted without converging.")
 
-    result = sorted([slot_by_id[i] for i in selected_set], key=lambda x: x.start)
+    result = sorted([slot_by_start[k] for k in selected_set], key=lambda x: x.start)
     final_blocks  = _group_contiguous(result)
     slot_dur      = candidates[0].duration_minutes if candidates else 15
     min_block_min = min_slots_per_block * slot_dur
@@ -1381,7 +1399,6 @@ def _select_spillover(
     outside: list[Slot],
     selected: list[Slot],
     contiguous_only: bool,
-    win_start_utc: datetime,
     win_end_utc: datetime,
     win_end_local: str,
     required_minutes: int,
@@ -1401,8 +1418,9 @@ def _select_spillover(
 
     win_end_local is passed only for log messages.
     """
-    selected_ids = {id(s) for s in selected}
-    candidates = [s for s in outside if id(s) not in selected_ids]
+    # Use start datetime as identity key (slot ordinal is only set by fetch_entsoe_prices).
+    selected_starts = {s.start for s in selected}
+    candidates = [s for s in outside if s.start not in selected_starts]
 
     # Restrict to slots before the window end.
     candidates = [s for s in candidates if s.end <= win_end_utc]
@@ -1453,15 +1471,24 @@ def _select_spillover(
 # cmd_plan helpers — each covers one named phase of the planning pipeline
 # ---------------------------------------------------------------------------
 
-def _plan_target_date(cfg: Config) -> date:
-    """Return the date to plan for: today if before local noon, tomorrow otherwise."""
-    now_utc   = datetime.now(tz=timezone.utc)
-    local_now = now_utc.astimezone(cfg.tz)
+def _plan_target_date(timezone_str: Optional[str]) -> date:
+    """Return the date to plan for: today if before local noon, tomorrow otherwise.
+
+    Uses today's DST offset as a bootstrap — target_date is not yet known.
+    This is correct in all practical cases: the only edge is a timezone whose
+    DST transition falls exactly at midnight on the day being planned, which
+    would require a clock reading within a few minutes of that boundary to
+    produce the wrong result.
+    """
+    now_utc        = datetime.now(tz=timezone.utc)
+    bootstrap_name, bootstrap_tz = _resolve_tz(timezone_str, now_utc.date())
+    local_now      = now_utc.astimezone(bootstrap_tz)
     if local_now.hour < 12:
         target = local_now.date()
     else:
         target = (local_now + timedelta(days=1)).date()
-    log.info("Target date: %s (local time: %s)", target, local_now.strftime("%Y-%m-%d %H:%M"))
+    log.info("Target date: %s (local time: %s, tz bootstrap: %s)",
+             target, local_now.strftime("%Y-%m-%d %H:%M"), bootstrap_name)
     return target
 
 
@@ -1484,11 +1511,10 @@ def _fetch_prices(cfg: Config, target_date: date) -> tuple[list[Slot], str]:
 
 
 def _select_slots(
-    cfg:             Config,
-    cfg_tz,                          # ZoneInfo for target_date
+    cfg:              Config,
     candidate_prices: list[Slot],
-    win_start_utc:   datetime,
-    win_end_utc:     datetime,
+    win_start_utc:    datetime,
+    win_end_utc:      datetime,
 ) -> tuple[list[Slot], set]:
     """Run the full slot-selection pipeline and return (selected, merged_starts).
 
@@ -1519,7 +1545,6 @@ def _select_slots(
             outside=outside,
             selected=selected,
             contiguous_only=cfg.contiguous_only,
-            win_start_utc=win_start_utc,
             win_end_utc=win_end_utc,
             win_end_local=cfg.preferred_window_end,
             required_minutes=cfg.required_minutes,
@@ -1562,13 +1587,13 @@ def cmd_plan(raw_config: dict, output_path: str) -> dict:
         log.error("%s", exc)
         sys.exit(1)
 
-    target_date = _plan_target_date(cfg)
+    target_date = _plan_target_date(cfg.timezone_str)
 
     all_prices, price_source = _fetch_prices(cfg, target_date)
 
-    # Re-resolve tz against the actual target_date: DST offset may differ from
-    # the today-based offset stored in cfg.tz (used only for target_date selection).
-    cfg_tz_name, cfg_tz = _resolve_tz(raw_config["charging"].get("timezone"), target_date)
+    # Resolve tz against target_date — the single authoritative resolve.
+    # DST offset is correct for the day being planned (not today's offset).
+    cfg_tz_name, cfg_tz = _resolve_tz(cfg.timezone_str, target_date)
     _noon = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=cfg_tz)
     log.info("Timezone: %s (UTC%+d)", cfg_tz_name,
              int(_noon.utcoffset().total_seconds() / 3600))
@@ -1586,7 +1611,7 @@ def cmd_plan(raw_config: dict, output_path: str) -> dict:
                  trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"))
 
     selected, merged_starts = _select_slots(
-        cfg, cfg_tz, candidate_prices, win_start_utc, win_end_utc
+        cfg, candidate_prices, win_start_utc, win_end_utc
     )
     windows = merge_contiguous_slots(selected)
 
