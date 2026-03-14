@@ -167,9 +167,11 @@ The saved plan is straightforward and easy to hand-edit:
       "gap_merged": false
     }
   ],
-  "selected_starts_utc": [
-    "2026-03-15T01:00:00+00:00",
-    "2026-03-15T01:15:00+00:00"
+  "window_starts_utc": [
+    "2026-03-15T01:00:00+00:00"
+  ],
+  "window_ends_utc": [
+    "2026-03-15T05:00:00+00:00"
   ]
 }
 ```
@@ -178,7 +180,7 @@ The saved plan is straightforward and easy to hand-edit:
 
 `utc_offset_hours` is derived from `zoneinfo` at noon on the target date — it represents the offset in effect for that day (e.g. `2` for EET, `3` for EEST) and is used for display purposes only. All internal scheduling is done in UTC.
 
-`selected_starts_utc` lists the UTC ISO 8601 start times of every individual 15-minute slot selected, in order. Useful for downstream systems that need to act on the schedule in UTC rather than local time.
+`window_starts_utc` lists the UTC ISO 8601 start time of each charging window, in order. `window_ends_utc` lists the corresponding stop times. Useful for downstream systems that need to start and stop charging at the right UTC times.
 
 `price_stats` reflects **tomorrow's prices only** — it does not include any spill slots pulled from today's evening. This means `avg_price_cents_kwh` (your scheduled average) can occasionally be lower than `price_stats.min_cents_kwh` when spillover selected unusually cheap slots from earlier today.
 
