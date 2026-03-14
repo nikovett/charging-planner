@@ -1471,6 +1471,57 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
 # ===========================================================================
 
 
+def _gha_fmt_hours(minutes: int) -> str:
+    """Format minutes as a compact hours string, e.g. 90 → '1h30min', 120 → '2h'."""
+    h, m = divmod(minutes, 60)
+    return f"{h}h{m:02d}min" if m else f"{h}h"
+
+
+def _gha_summary_header(plan: dict) -> list[str]:
+    """Return markdown lines for the run header table."""
+    ps = plan["price_stats"]
+    return [
+        f"## ✅ Charging Plan — {plan['date']}", "",
+        "| | |", "|---|---|",
+        f"| **Date** | {plan['date']} |",
+        f"| **Area** | {plan['area']} |",
+        f"| **Source** | {plan['price_source']} |",
+        f"| **Timezone** | {plan['timezone']} (UTC{plan['utc_offset_hours']:+d}) |",
+        f"| **Market prices** | {ps['min_cents_kwh']:.2f} – {ps['max_cents_kwh']:.2f} c€/kWh"
+        f" (avg {ps['avg_cents_kwh']:.2f}) |",
+        "",
+    ]
+
+
+def _gha_summary_profile(plan: dict, market_avg: float) -> list[str]:
+    """Return markdown lines for one charging profile section."""
+    profile = plan.get("profile", "default")
+    req, tot, avg = plan["required_minutes"], plan["total_minutes"], plan["avg_price_cents_kwh"]
+    wins = plan["windows"]
+    savings_pct = (1 - avg / market_avg) * 100 if market_avg else 0
+
+    incomplete = " ⚠️ **charge plan not possible**" if tot < req else ""
+    md = [
+        f"### {profile}", "",
+        f"| **Required** | {_gha_fmt_hours(req)} |",
+        f"| **Scheduled** | {_gha_fmt_hours(tot)}{incomplete} |",
+        f"| **Avg price** | **{avg:.2f} c€/kWh**"
+        f" ({abs(savings_pct):.0f}% {'below' if savings_pct >= 0 else 'above'} market avg) |",
+        "",
+    ]
+    if wins:
+        md += ["| # | Start | End | Duration | Avg price |", "|---|---|---|---|---|"]
+        for i, w in enumerate(wins, 1):
+            md.append(
+                f"| {i} | {w['start']} | {w['end']} | "
+                f"{w['duration_minutes']} min | {w['avg_price_cents_kwh']:.2f} c€/kWh |"
+            )
+        md.append("")
+    else:
+        md += ["_No windows selected._", ""]
+    return md
+
+
 def write_gha_summary(plans: "list[dict]", all_prices: list[Slot]) -> None:
     """Write a combined GitHub Actions job summary for all profiles."""
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
