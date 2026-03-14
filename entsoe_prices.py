@@ -73,6 +73,19 @@ class Slot:
 # Configuration
 # ===========================================================================
 
+# Default values applied to every charging profile.
+CHARGING_DEFAULTS = {
+    "name":                   "default",
+    "required_hours":         4,
+    "max_price_cents_kwh":    None,
+    "contiguous_only":        False,
+    "merge_gaps":             True,
+    "min_slot_minutes":       30,
+    "preferred_window_start": "00:00",
+    "preferred_window_end":   "23:59",
+    "timezone":               None,
+}
+
 DEFAULT_CONFIG = {
     # ENTSO-E settings — required for 'plan'
     "entsoe": {
@@ -80,22 +93,18 @@ DEFAULT_CONFIG = {
         "area": "10YFI-1--------U",
     },
 
-    # Charging window selection
-    "charging": {
-        "required_hours": 4,
-        "max_price_cents_kwh": None,
-        "contiguous_only": False,
-        "merge_gaps": True,
-        "min_slot_minutes": 30,
-        "preferred_window_start": "00:00",
-        "preferred_window_end":   "23:59",
-        "timezone": None,
-    },
+    # One or more charging profiles. A bare dict is treated as a single profile.
+    "charging": [CHARGING_DEFAULTS.copy()],
 }
 
 
 def load_config(path: str) -> dict:
-    """Load config from a YAML file, merging over defaults."""
+    """Load config from a YAML file, merging over defaults.
+
+    The charging key may be a single profile dict or a list of profile dicts.
+    A bare dict is normalised to a single-element list before returning.
+    Each profile is merged over CHARGING_DEFAULTS so omitted keys get defaults.
+    """
     config = json.loads(json.dumps(DEFAULT_CONFIG))
     if path:
         if yaml is None:
@@ -103,7 +112,24 @@ def load_config(path: str) -> dict:
             sys.exit(1)
         with open(path) as f:
             user_cfg = yaml.safe_load(f) or {}
+        # Deep-merge everything except charging, which we handle separately
+        charging_override = user_cfg.pop("charging", None)
         _deep_merge(config, user_cfg)
+        if charging_override is not None:
+            # Normalise bare dict to list
+            if isinstance(charging_override, dict):
+                charging_override = [charging_override]
+            # Apply CHARGING_DEFAULTS to each profile
+            profiles = []
+            for profile in charging_override:
+                merged = CHARGING_DEFAULTS.copy()
+                merged.update(profile)
+                profiles.append(merged)
+            config["charging"] = profiles
+    else:
+        # No config file — ensure list form
+        if isinstance(config["charging"], dict):
+            config["charging"] = [config["charging"]]
     return config
 
 
@@ -252,7 +278,7 @@ class Config:
     """Parsed, validated configuration ready for use in cmd_plan.
 
     All type conversions happen here (hours→minutes, cents→EUR, HH:MM strings
-    kept as-is for log messages).  cmd_plan receives a Config and never
+    kept as-is for log messages).  cmd_plan receives a list of Configs and never
     touches the raw dict again.
 
     timezone_str is the raw IANA name from config (or None for auto-detect).
@@ -263,6 +289,9 @@ class Config:
     # ENTSO-E
     api_key:                str
     area:                   str
+
+    # Profile
+    name:                   str               # profile name for filenames and display
 
     # Charging
     required_minutes:       int
@@ -275,21 +304,8 @@ class Config:
     timezone_str:           Optional[str]     # raw IANA name or None (auto-detect)
 
 
-def parse_config(raw: dict) -> "Config":
-    """Validate raw config dict and return a typed Config.
-
-    Raises ConfigError on any invalid field.  This is the single entry point
-    for config validation — callers should not call validate_plan_config
-    directly.
-    """
-    validate_plan_config(raw)          # raises ConfigError on any problem
-
-    et = raw["entsoe"]
-    ch = raw["charging"]
-
-    # Validate the timezone string now (raises ConfigError for bad explicit names)
-    # but do NOT resolve it to a ZoneInfo — the correct DST offset depends on
-    # target_date, which is determined later in cmd_plan.
+def _parse_one_profile(et: dict, ch: dict) -> "Config":
+    """Build a Config from a single validated charging profile dict."""
     tz_str = ch.get("timezone") or None
     if tz_str:
         try:
@@ -300,11 +316,11 @@ def parse_config(raw: dict) -> "Config":
                 f"(e.g. 'Europe/Helsinki', 'UTC'). "
                 f"Check https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
             )
-
     ceil_cents = ch.get("max_price_cents_kwh")
     return Config(
         api_key=et["api_key"],
         area=et["area"],
+        name=str(ch.get("name", "default")),
         required_minutes=int(ch["required_hours"] * 60),
         contiguous_only=bool(ch.get("contiguous_only", False)),
         merge_gaps=bool(ch.get("merge_gaps", True)),
@@ -314,6 +330,34 @@ def parse_config(raw: dict) -> "Config":
         preferred_window_end=ch["preferred_window_end"],
         timezone_str=tz_str,
     )
+
+
+def parse_configs(raw: dict) -> "list[Config]":
+    """Validate raw config dict and return a list of typed Configs, one per profile.
+
+    Raises ConfigError on any invalid field.  This is the single entry point
+    for config validation — callers should not call validate_plan_config
+    directly.
+    """
+    et = raw["entsoe"]
+    profiles = raw["charging"]   # always a list after load_config normalisation
+
+    configs = []
+    for ch in profiles:
+        # Build a synthetic full config for validate_plan_config
+        validate_plan_config({"entsoe": et, "charging": ch})
+        configs.append(_parse_one_profile(et, ch))
+
+    return configs
+
+
+def parse_config(raw: dict) -> "Config":
+    """Single-profile convenience wrapper around parse_configs.
+
+    Returns the first (and typically only) Config. Kept for backwards
+    compatibility with tests and external callers.
+    """
+    return parse_configs(raw)[0]
 
 
 # ===========================================================================
@@ -1382,50 +1426,54 @@ def render_svg_chart(plan: dict, all_prices: list[Slot]) -> str:
     )
 
 
-def write_gha_summary(plan: dict, all_prices: list[Slot]) -> None:
+def write_gha_summary(plans: "list[dict]", all_prices: list[Slot]) -> None:
+    """Write a combined GitHub Actions job summary for all profiles."""
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
 
-    ps   = plan["price_stats"]
-    req  = plan["required_minutes"]
-    tot  = plan["total_minutes"]
-    avg  = plan["avg_price_cents_kwh"]
-    wins = plan["windows"]
-    savings_pct = (1 - avg / ps["avg_cents_kwh"]) * 100 if ps["avg_cents_kwh"] else 0
-
-    md = [f"## \u2705 Charging Plan \u2014 {plan['date']}", ""]
-
-    md += [
+    first = plans[0]
+    ps    = first["price_stats"]
+    md    = [f"## ✅ Charging Plan — {first['date']}", ""]
+    md   += [
         "| | |", "|---|---|",
-        f"| **Date** | {plan['date']} |",
-        f"| **Area** | {plan['area']} |",
-        f"| **Source** | {plan['price_source']} |",
-        f"| **Timezone** | {plan['timezone']} (UTC{plan['utc_offset_hours']:+d}) |",
-        f"| **Market prices** | {ps['min_cents_kwh']:.2f} \u2013 {ps['max_cents_kwh']:.2f} c\u20ac/kWh (avg {ps['avg_cents_kwh']:.2f}) |",
-        f"| **Required** | {req} min |",
-        f"| **Scheduled** | {tot} min" +
-        (" ⚠️ **incomplete** — only {tot} of {req} min scheduled, tomorrow's prices may not be published yet" if tot < req else "") +
-        " |",
-        f"| **Avg price** | **{avg:.2f} c\u20ac/kWh** ({abs(savings_pct):.0f}% {'below' if savings_pct >= 0 else 'above'} market avg) |",
+        f"| **Date** | {first['date']} |",
+        f"| **Area** | {first['area']} |",
+        f"| **Source** | {first['price_source']} |",
+        f"| **Timezone** | {first['timezone']} (UTC{first['utc_offset_hours']:+d}) |",
+        f"| **Market prices** | {ps['min_cents_kwh']:.2f} – {ps['max_cents_kwh']:.2f} c€/kWh (avg {ps['avg_cents_kwh']:.2f}) |",
         "",
     ]
 
-    if wins:
-        md += ["### Charging windows", ""]
-        md.append("| # | Start | End | Duration | Avg price |")
-        md.append("|---|---|---|---|---|")
-        for i, w in enumerate(wins, 1):
-            md.append(
-                f"| {i} | {w['start']} | {w['end']} | "
-                f"{w['duration_minutes']} min | {w['avg_price_cents_kwh']:.2f} c\u20ac/kWh |"
-            )
-        md.append("")
-    else:
-        md += ["_No windows selected._", ""]
+    for plan in plans:
+        profile = plan.get("profile", "default")
+        req  = plan["required_minutes"]
+        tot  = plan["total_minutes"]
+        avg  = plan["avg_price_cents_kwh"]
+        wins = plan["windows"]
+        savings_pct = (1 - avg / ps["avg_cents_kwh"]) * 100 if ps["avg_cents_kwh"] else 0
+        md += [f"### {profile}", ""]
+        md += [
+            f"| **Required** | {req} min |",
+            f"| **Scheduled** | {tot} min" +
+            (f" ⚠️ **incomplete**" if tot < req else "") + " |",
+            f"| **Avg price** | **{avg:.2f} c€/kWh** ({abs(savings_pct):.0f}% {'below' if savings_pct >= 0 else 'above'} market avg) |",
+            "",
+        ]
+        if wins:
+            md.append("| # | Start | End | Duration | Avg price |")
+            md.append("|---|---|---|---|---|")
+            for i, w in enumerate(wins, 1):
+                md.append(
+                    f"| {i} | {w['start']} | {w['end']} | "
+                    f"{w['duration_minutes']} min | {w['avg_price_cents_kwh']:.2f} c€/kWh |"
+                )
+            md.append("")
+        else:
+            md += ["_No windows selected._", ""]
 
     if all_prices:
-        svg = render_svg_chart(plan, all_prices)
+        svg = render_svg_chart(first, all_prices)
         if svg:
             chart_path = "chart.svg"
             try:
@@ -1556,46 +1604,37 @@ def _select_slots(
 # Main planning command
 # ---------------------------------------------------------------------------
 
-def cmd_plan(raw_config: dict, output_path: str) -> dict:
-    """Fetch prices, select windows, print the plan, save plan.json."""
-    try:
-        cfg = parse_config(raw_config)
-    except ConfigError as exc:
-        log.error("%s", exc)
-        sys.exit(1)
+def _plan_one_profile(
+    cfg:             "Config",
+    target_date:     date,
+    cfg_tz,
+    cfg_tz_name:     str,
+    all_prices:      "list[Slot]",
+    display_prices:  "list[Slot]",
+    price_source:    str,
+    output_dir:      str,
+) -> dict:
+    """Run selection and build a plan dict for a single profile."""
+    log.info("=== Profile: %s ===", cfg.name)
 
-    target_date = _plan_target_date(cfg.timezone_str)
-
-    # Resolve tz before fetching — needed to classify display slots by local date.
-    cfg_tz_name, cfg_tz = _resolve_tz(cfg.timezone_str, target_date)
-    _noon = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=cfg_tz)
-    log.info("Timezone: %s (UTC%+d)", cfg_tz_name,
-             int(_noon.utcoffset().total_seconds() / 3600))
-
-    all_prices, tomorrow_prices, price_source = _fetch_prices(cfg, target_date, cfg_tz)
-
-    # Resolve preferred window HH:MM → UTC once; all downstream code uses UTC.
     win_start_utc = _hhmm_to_utc(cfg.preferred_window_start, target_date, cfg_tz)
     win_end_utc   = _hhmm_to_utc(cfg.preferred_window_end,   target_date, cfg_tz)
     log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
 
-    # Trim today's slots that can never be part of the plan (too early for leftward spill).
     earliest_useful  = win_start_utc - timedelta(minutes=cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
     if trimmed := len(all_prices) - len(candidate_prices):
         log.info("Trimmed %d unreachable today-slots (earliest useful: %s UTC)",
                  trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"))
 
-    selected, merged_starts = _select_slots(
-        cfg, candidate_prices, win_start_utc, win_end_utc
-    )
+    selected, merged_starts = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc)
     windows = merge_contiguous_slots(selected)
 
     plan = build_plan(PlanParams(
         target_date=target_date,
         area=cfg.area,
         price_source=price_source,
-        all_prices=tomorrow_prices,
+        all_prices=display_prices,
         selected=selected,
         windows=windows,
         required_minutes=cfg.required_minutes,
@@ -1605,13 +1644,44 @@ def cmd_plan(raw_config: dict, output_path: str) -> dict:
         preferred_window_start=cfg.preferred_window_start,
         preferred_window_end=cfg.preferred_window_end,
     ))
+    plan["profile"] = cfg.name
 
-    print_plan_summary(plan, tomorrow_prices)
+    print_plan_summary(plan, display_prices)
+    output_path = os.path.join(output_dir, f"plan-{cfg.name}.json")
     save_plan(plan, output_path)
     print(f"  Plan saved to: {output_path}\n")
-    write_gha_summary(plan, all_prices=tomorrow_prices)
-
     return plan
+
+
+def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
+    """Fetch prices once, run selection for each profile, save per-profile plans."""
+    try:
+        configs = parse_configs(raw_config)
+    except ConfigError as exc:
+        log.error("%s", exc)
+        sys.exit(1)
+
+    # All profiles share the same tz (use first profile's as authoritative)
+    cfg0 = configs[0]
+    target_date = _plan_target_date(cfg0.timezone_str)
+
+    cfg_tz_name, cfg_tz = _resolve_tz(cfg0.timezone_str, target_date)
+    _noon = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=cfg_tz)
+    log.info("Timezone: %s (UTC%+d)", cfg_tz_name,
+             int(_noon.utcoffset().total_seconds() / 3600))
+
+    all_prices, display_prices, price_source = _fetch_prices(cfg0, target_date, cfg_tz)
+
+    plans = []
+    for cfg in configs:
+        plan = _plan_one_profile(
+            cfg, target_date, cfg_tz, cfg_tz_name,
+            all_prices, display_prices, price_source, output_dir,
+        )
+        plans.append(plan)
+
+    write_gha_summary(plans, display_prices)
+    return plans
 
 
 # ===========================================================================
@@ -1624,8 +1694,8 @@ def main():
     )
     parser.add_argument("--config", "-c", default="config.yaml",
                         help="Path to YAML config file (default: config.yaml)")
-    parser.add_argument("--plan", "-p", default="plan.json",
-                        help="Path to output plan JSON file (default: plan.json)")
+    parser.add_argument("--output-dir", "-o", default=".",
+                        help="Directory for output plan JSON files (default: current dir)")
     parser.add_argument("--debug", action="store_true",
                         help="Enable debug logging")
     args = parser.parse_args()
@@ -1641,7 +1711,7 @@ def main():
         log.warning("No config.yaml found — using built-in defaults.")
 
     config = load_config(config_path)
-    cmd_plan(config, args.plan)
+    cmd_plan(config, args.output_dir)
 
 
 if __name__ == "__main__":

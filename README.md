@@ -47,41 +47,66 @@ Day-ahead prices are published at approximately 13:00 CET each day for the follo
 ## Usage
 
 ```bash
-# Run with defaults (reads config.yaml, writes plan.json)
+# Run with defaults (reads config.yaml, writes plan-*.json to current directory)
 python entsoe_prices.py
 
-# Specify paths explicitly
-python entsoe_prices.py --config my-config.yaml --plan output/plan.json
+# Specify config and output directory
+python entsoe_prices.py --config my-config.yaml --output-dir /tmp/plans
 
 # Enable debug logging
 python entsoe_prices.py --debug
 ```
 
-The script prints a formatted plan to stdout and writes the full plan to JSON. The JSON file can be reviewed, hand-edited, and consumed by downstream systems.
+The script prints a formatted summary to stdout for each profile and writes one `plan-{name}.json` file per profile. These files can be reviewed, hand-edited, and consumed by downstream systems.
 
 ---
 
 ## Configuration
 
-Create a `config.yaml` next to the script:
+Create a `config.yaml` next to the script. The `charging` key accepts either a single profile or a list of named profiles:
 
 ```yaml
 entsoe:
   api_key: "your-api-key-here"
   area: "FI"                    # see Supported areas below
 
+# Single profile (simple form):
 charging:
-  required_hours: 4             # total hours of charging needed
-  contiguous_only: false        # true = one unbroken block; false = cheapest individual slots
-  merge_gaps: true              # bridge gaps shorter than min_slot_minutes between selected blocks
-  min_slot_minutes: 30          # minimum block length (must be divisible by 15)
-  max_price_cents_kwh: null     # optional price ceiling, e.g. 5.0
-  preferred_window_start: "00:00"  # required: HH:MM, 00:00–23:59
-  preferred_window_end: "07:00"    # required: must be after start; use "23:59" for no restriction
-  timezone: "Europe/Helsinki"   # null = auto-detect from system
+  name: "default"               # optional; used in output filename and notifications
+  required_hours: 4
+  contiguous_only: false
+  merge_gaps: true
+  min_slot_minutes: 30
+  max_price_cents_kwh: null
+  preferred_window_start: "00:00"
+  preferred_window_end: "07:00"
+  timezone: "Europe/Helsinki"
 ```
 
-`entsoe.api_key`, `entsoe.area`, `preferred_window_start`, and `preferred_window_end` are required — all other fields have defaults.
+Or multiple named profiles — prices are fetched once and each profile runs its own selection:
+
+```yaml
+entsoe:
+  api_key: "your-api-key-here"
+  area: "FI"
+
+charging:
+  - name: "topup"
+    required_hours: 1
+    contiguous_only: true
+    preferred_window_start: "00:00"
+    preferred_window_end: "07:00"
+    timezone: "Europe/Helsinki"
+
+  - name: "overnight"
+    required_hours: 4
+    contiguous_only: false
+    preferred_window_start: "00:00"
+    preferred_window_end: "07:00"
+    timezone: "Europe/Helsinki"
+```
+
+`entsoe.api_key`, `entsoe.area`, `preferred_window_start`, and `preferred_window_end` are required — all other fields have defaults. Each profile produces its own `plan-{name}.json` output file.
 
 ### Configuration reference
 
@@ -89,6 +114,7 @@ charging:
 |---|---|---|
 | `entsoe.api_key` | — | **Required.** ENTSO-E security token |
 | `entsoe.area` | — | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
+| `charging.name` | `"default"` | Profile name. Used in the output filename (`plan-{name}.json`) and phone notification |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
 | `charging.contiguous_only` | `false` | `true` = one unbroken block; `false` = cheapest slots (may be split across the day) |
 | `charging.merge_gaps` | `true` | Bridge gaps shorter than `min_slot_minutes` between selected blocks. Ignored when `contiguous_only` is `true` |
@@ -138,7 +164,7 @@ You can also pass a full EIC code directly (e.g. `10YFI-1--------U`).
 
 ## Plan JSON format
 
-The saved plan is straightforward and easy to hand-edit:
+One `plan-{name}.json` file is written per profile. The format is straightforward and easy to hand-edit:
 
 ```json
 {
@@ -148,6 +174,7 @@ The saved plan is straightforward and easy to hand-edit:
   "price_source": "ENTSO-E",
   "timezone": "Europe/Helsinki",
   "utc_offset_hours": 2,
+  "profile": "overnight",
   "price_stats": {
     "min_cents_kwh": 0.82,
     "max_cents_kwh": 7.21,
@@ -175,6 +202,8 @@ The saved plan is straightforward and easy to hand-edit:
   ]
 }
 ```
+
+`profile` is the name of the charging profile that produced this plan, matching the `name` field in config.
 
 `gap_merged` is `true` when the window was formed by bridging a sub-`min_slot_minutes` gap between two originally separate blocks.
 
@@ -210,7 +239,7 @@ To trigger a run manually: **Actions → ENTSO-E Charging Plan → Run workflow*
 
 ### Job summary
 
-Each successful run writes a formatted summary into the GitHub Actions job view, and saves a `chart.svg` price chart to the workspace which is uploaded as part of the run artifact alongside `plan.json`.
+Each successful run writes a formatted summary into the GitHub Actions job view, and saves a `chart.svg` price chart to the workspace which is uploaded as part of the run artifact alongside all `plan-{name}.json` files.
 
 The SVG chart shows:
 
@@ -229,26 +258,21 @@ To view the chart: open any workflow run → click the run artifact → download
 
 The workflow sends a push notification via [ntfy.sh](https://ntfy.sh) after each successful run. Install the ntfy app on iOS or Android, subscribe to your topic, and you'll receive the plan each afternoon.
 
-The notification looks like this:
+The notification shows all profiles in a single message, ordered by required hours ascending (shortest first). Each profile has its own windows and ruler:
 
 ```
-⚡ Charging plan 2026-03-15
-2026-03-15  ·  120 min  ·  avg 0.18 c€/kWh
+⚡ Charging plan for 2026-03-15
 
-00:00      03:30       07:00
-▒▒▒▒▒▒▒▒████████▒▒▒▒▒▒▒▒▒▒▒▒
+topup
+03:30–04:30  0.62 c€/kWh
+00:00 ▒▒▒▒▒▒██▒▒▒▒▒▒▒▒ 07:00
 
-02:00–04:00  0.18 c€/kWh
+overnight
+00:00–04:00  0.50 c€/kWh
+00:00 ████████▒▒▒▒▒▒▒▒ 07:00
 ```
 
-The ruler spans the preferred charging window (`▒` = preferred window unscheduled, `░` = outside preferred window unscheduled, `█` = scheduled). If any slots fall outside the preferred window the ruler automatically expands to show them, and each affected slot is flagged:
-
-```
-00:00            05:00             10:00
-▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░████████
-
-08:00–10:00  0.54 c€/kWh  ⚠️ outside window
-```
+The ruler spans the preferred charging window (`▒` = preferred window unscheduled, `░` = outside preferred window unscheduled, `█` = scheduled). If any slots fall outside the preferred window the ruler automatically expands to show them, and each affected slot is flagged.
 
 Additional per-slot indicators:
 
