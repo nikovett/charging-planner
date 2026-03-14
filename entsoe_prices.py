@@ -232,11 +232,15 @@ def validate_plan_config(config: dict) -> None:
     pw_s = _parse_hhmm("preferred_window_start")
     pw_e = _parse_hhmm("preferred_window_end")
     if pw_s is not None and pw_e is not None:
-        if (pw_s[0] * 60 + pw_s[1]) >= (pw_e[0] * 60 + pw_e[1]):
+        s_min = pw_s[0] * 60 + pw_s[1]
+        e_min = pw_e[0] * 60 + pw_e[1]
+        if s_min == e_min:
             errors.append(
-                f"charging.preferred_window_start must be before preferred_window_end "
-                f"(got {ch['preferred_window_start']}–{ch['preferred_window_end']})."
+                f"charging.preferred_window_start and preferred_window_end are equal "
+                f"(got {ch['preferred_window_start']}–{ch['preferred_window_end']}), "
+                f"which gives a zero-length window."
             )
+        # s_min > e_min is an overnight window (e.g. 22:00–06:30) — allowed
 
     _emit_errors(errors)
 
@@ -247,7 +251,10 @@ def validate_plan_config(config: dict) -> None:
         try:
             sh, sm = map(int, win_start.split(":"))
             eh, em = map(int, win_end.split(":"))
-            win_minutes = (eh * 60 + em) - (sh * 60 + sm)
+            s_min = sh * 60 + sm
+            e_min = eh * 60 + em
+            # Overnight window wraps midnight: length = (24h - start) + end
+            win_minutes = (e_min - s_min) if e_min > s_min else (24 * 60 - s_min + e_min)
             req_minutes = int(ch.get("required_hours", 0) * 60)
             if req_minutes > win_minutes > 0:
                 log.warning(
@@ -774,6 +781,33 @@ def _hhmm_to_utc(hhmm: str, ref_date: date, tz) -> datetime:
     return local_dt.astimezone(timezone.utc)
 
 
+def _is_overnight(start_hhmm: str, end_hhmm: str) -> bool:
+    """Return True if start > end, indicating an overnight window (e.g. 22:00–06:30)."""
+    sh, sm = map(int, start_hhmm.split(":"))
+    eh, em = map(int, end_hhmm.split(":"))
+    return (sh * 60 + sm) > (eh * 60 + em)
+
+
+def _resolve_window_utc(
+    start_hhmm: str,
+    end_hhmm: str,
+    target_date: date,
+    tz,
+) -> tuple[datetime, datetime]:
+    """Resolve preferred window HH:MM strings to UTC datetimes.
+
+    For overnight windows (start > end, e.g. 22:00–06:30), win_end_utc is
+    resolved against target_date + 1 day so it falls after win_start_utc.
+    """
+    win_start_utc = _hhmm_to_utc(start_hhmm, target_date, tz)
+    if _is_overnight(start_hhmm, end_hhmm):
+        win_end_utc = _hhmm_to_utc(end_hhmm, target_date + timedelta(days=1), tz)
+        log.info("Overnight window detected (%s–%s): end resolved to next day", start_hhmm, end_hhmm)
+    else:
+        win_end_utc = _hhmm_to_utc(end_hhmm, target_date, tz)
+    return win_start_utc, win_end_utc
+
+
 def filter_preferred_window(
     prices: list[Slot],
     win_start_utc: datetime,
@@ -785,6 +819,9 @@ def filter_preferred_window(
 
     win_start_utc / win_end_utc are the pre-resolved UTC bounds.
     window_start_local / window_end_local are passed only for log messages.
+
+    For overnight windows win_end_utc > win_start_utc holds (end is next day),
+    so the same start <= slot < end condition works without special-casing.
     """
     inside, outside = [], []
     for slot in prices:
@@ -1617,8 +1654,9 @@ def _plan_one_profile(
     """Run selection and build a plan dict for a single profile."""
     log.info("=== Profile: %s ===", cfg.name)
 
-    win_start_utc = _hhmm_to_utc(cfg.preferred_window_start, target_date, cfg_tz)
-    win_end_utc   = _hhmm_to_utc(cfg.preferred_window_end,   target_date, cfg_tz)
+    win_start_utc, win_end_utc = _resolve_window_utc(
+        cfg.preferred_window_start, cfg.preferred_window_end, target_date, cfg_tz
+    )
     log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
 
     earliest_useful  = win_start_utc - timedelta(minutes=cfg.required_minutes)
