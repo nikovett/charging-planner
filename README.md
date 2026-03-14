@@ -128,6 +128,9 @@ Settings → Secrets and variables → Actions → New repository secret
 | Secret | Value |
 |---|---|
 | `ENTSOE_API_KEY` | Your ENTSO-E security token |
+| `NTFY_TOPIC` | Your ntfy topic name (e.g. `my-charging-plan`) |
+
+Never commit your API key to the repository. The `config.yaml` in the repo should always have an empty `api_key: ""` — the workflow overwrites it at runtime using the secret. The ntfy topic is also a secret so your notification endpoint is not exposed in a public repo.
 
 The workflow runs daily at 12:30 UTC — 14:30 Helsinki time in winter (EET, UTC+2) and 15:30 in summer (EEST, UTC+3). A single cron covers both DST states because 12:30 UTC always lands after ENTSO-E's ~12:00 UTC publication time.
 
