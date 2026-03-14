@@ -134,6 +134,8 @@ The planner fills as many slots as possible from within the preferred window fir
 
 **`contiguous_only` and spill** — when `contiguous_only: true` and `required_hours` exceeds the preferred window length, the single contiguous block is extended leftward: charging simply starts earlier than the window start rather than jumping to a separate block later in the day. `preferred_window_end` is always respected as a hard ceiling — no slot will be scheduled after it even in this path. If there are not enough hours available before the window the plan will be short by the deficit (a warning is logged).
 
+**Guaranteed charge until departure time** — setting `required_hours` longer than the preferred window combined with `contiguous_only: true` is a reliable pattern for ensuring the car is always fully charged by `preferred_window_end`. For example, `preferred_window_start: "01:00"`, `preferred_window_end: "06:30"`, `required_hours: 8` will always produce a single block ending at 06:30, starting as early as 22:30 the previous evening. The planner picks the cheapest available block of that length that fits before the deadline — price optimisation still applies, it just works over a longer search range. A side benefit for EVs in cold climates is that charging ends close to departure, leaving the battery warm and improving range.
+
 ### Gap merging
 
 After slot selection, if two chosen blocks are separated by a gap **shorter than `min_slot_minutes`**, the gap is bridged automatically. The intervening slots are included to form one continuous block, then slots are trimmed from the **beginning** of the merged block until the total charging time returns to `required_hours`. Trimming from the start pushes the charging window as late as possible — closer to your departure time. Merged windows are flagged with ⚡ in the terminal output, GitHub Actions summary, and phone notification.
@@ -260,19 +262,21 @@ To view the chart: open any workflow run → click the run artifact → download
 
 The workflow sends a push notification via [ntfy.sh](https://ntfy.sh) after each successful run. Install the ntfy app on iOS or Android, subscribe to your topic, and you'll receive the plan each afternoon.
 
-The notification shows all profiles in a single message, ordered by required hours ascending (shortest first). Each profile has its own windows and ruler:
+The notification shows all profiles in a single message, ordered by required hours ascending (shortest first). Each profile shows scheduled/required hours, its windows, and a ruler:
 
 ```
 ⚡ Charging plan for 2026-03-15
 
-topup
+topup  2h/2h
 03:30–04:30  0.62 c€/kWh
-00:00 ▒▒▒▒▒▒██▒▒▒▒▒▒▒▒ 07:00
+00:00 ▒▒▒▒▒▒██▒▒▒▒▒▒▒▒░ 07:00
 
-overnight
-00:00–04:00  0.50 c€/kWh
-00:00 ████████▒▒▒▒▒▒▒▒ 07:00
+overnight  6h/6h
+22:00–06:00  3.12 c€/kWh
+21:00 ░████████████▒░░ 07:00
 ```
+
+If a profile is incomplete (not enough data available yet), the hours are flagged: `topup  1h/2h ⚠️`.
 
 The ruler spans the preferred charging window (`▒` = preferred window unscheduled, `░` = outside preferred window unscheduled, `█` = scheduled). If any slots fall outside the preferred window the ruler automatically expands to show them, and each affected slot is flagged.
 
