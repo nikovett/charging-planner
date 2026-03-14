@@ -413,27 +413,24 @@ def _resolve_area(area: str) -> str:
 def fetch_entsoe_prices(
     api_key: str,
     area: str,
-    target_date: date,
-    tz=timezone.utc,
-) -> tuple[list[Slot], list[Slot]]:
-    """Fetch day-ahead prices for target_date in a single API call.
+) -> list[Slot]:
+    """Fetch all available day-ahead prices in a single API call.
 
-    Returns (schedulable, display) where:
-      - schedulable: all non-past slots available for window selection
-      - display: all target_date slots regardless of whether they are past,
-                 for use in charts and price stats (includes local-midnight slots)
+    Requests a wide window covering yesterday evening through the day after
+    tomorrow, so every possible preferred window (same-day or overnight) has
+    the slots it needs regardless of what time of day the script runs.
 
-    Requests a window wide enough to cover local midnight for UTC+ timezones.
-    If target_date has fewer than 23 h of slots, PricesNotYetAvailable is raised.
+    Returns all non-past slots, renumbered. Callers filter by their window.
+    Raises if no slots at all are returned (network/auth error).
     """
-    eic = _resolve_area(area)
+    eic   = _resolve_area(area)
+    today = datetime.now(tz=timezone.utc).date()
 
-    # Request window spans both periods in one call:
-    #   from: (target_date - 1) 20:00 UTC — 3h before ENTSO-E's 23:00 boundary,
-    #         covering local midnight for timezones up to UTC+3 (EEST)
-    #   to:   (target_date + 1) 23:00 UTC  (= end of tomorrow's period)
-    period_start = (target_date - timedelta(days=1)).strftime("%Y%m%d2000")
-    period_end   = (target_date + timedelta(days=1)).strftime("%Y%m%d2300")
+    # from: (today - 1) 20:00 UTC — covers local midnight for UTC+3 (EEST)
+    # to:   (today + 1) 23:00 UTC — covers tonight's overnight window morning
+    #       (e.g. 22:00–06:30: tonight's evening + tomorrow morning at 04:30 UTC)
+    period_start = (today - timedelta(days=1)).strftime("%Y%m%d2000")
+    period_end   = (today + timedelta(days=1)).strftime("%Y%m%d2300")
     url = (
         f"{ENTSOE_API}"
         f"?documentType=A44"
@@ -443,41 +440,26 @@ def fetch_entsoe_prices(
         f"&periodEnd={period_end}"
         f"&securityToken={api_key}"
     )
-    log.info("Fetching ENTSO-E prices: area=%s target_date=%s", area, target_date)
+    log.info("Fetching ENTSO-E prices: area=%s", area)
     req = urllib.request.Request(url, headers={"Accept": "application/xml"})
     try:
         raw = _http_request_with_retry(req, timeout=20, retries=3, label="ENTSO-E")
     except Exception as e:
         log.error("ENTSO-E request failed after retries: %s", e)
         raise
-    all_slots = _parse_entsoe_xml(raw, target_date, area)
+    all_slots = _parse_entsoe_xml(raw, today, area)
 
-    # Check that target_date's prices are actually published.
-    # ENTSO-E's day boundary is 23:00 UTC; target_date's slots start there.
-    tomorrow_start_utc = datetime.combine(
-        target_date - timedelta(days=1), time(23, 0), tzinfo=timezone.utc
-    )
-    target_slots   = [s for s in all_slots if s.start >= tomorrow_start_utc]
-    target_minutes = sum(s.duration_minutes for s in target_slots)
-    if target_minutes < 23 * 60:
-        raise PricesNotYetAvailable(
-            f"Only {target_minutes} min of data for {target_date} "
-            f"({len(target_slots)} slots) — tomorrow's prices not published yet."
-        )
+    if not all_slots:
+        raise PricesNotYetAvailable("No price slots returned from ENTSO-E.")
 
-    # schedulable: non-past slots for window selection
-    # display: all target_date local-date slots for charts/stats (includes past)
-    now_utc  = datetime.now(tz=timezone.utc)
-    usable   = [s for s in all_slots if s.start >= now_utc or s.start >= tomorrow_start_utc]
-    display  = [s for s in all_slots if s.start.astimezone(tz).date() == target_date]
-    log.info("Usable slots (schedulable): %d, display slots: %d", len(usable), len(display))
+    # Return all non-past slots; each profile's window filter picks what it needs.
+    now_utc = datetime.now(tz=timezone.utc)
+    usable  = [s for s in all_slots if s.start >= now_utc]
+    log.info("Fetched %d total slots, %d usable (not in the past)", len(all_slots), len(usable))
 
-    def renumber(slots):
-        return [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
-                     price_eur_kwh=s.price_eur_kwh, slot=i)
-                for i, s in enumerate(sorted(slots, key=lambda x: x.start))]
-
-    return renumber(usable), renumber(display)
+    return [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
+                 price_eur_kwh=s.price_eur_kwh, slot=i)
+            for i, s in enumerate(sorted(usable, key=lambda x: x.start))]
 
 
 def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[Slot]:
@@ -732,17 +714,18 @@ def _best_contiguous_window(
     list (e.g. overnight windows whose inside slots span an evening and a morning
     with a daytime gap in between).
 
-    If no fully-eligible window exists (e.g. max_price excludes too many slots),
-    logs a warning and returns the cheapest window ignoring the candidate filter.
+    If no fully-eligible n_slots window exists within candidates (e.g. because
+    next-day prices are not published yet and only part of the window is available),
+    returns the longest contiguous run available within candidates rather than
+    falling outside the window. Never returns slots outside the candidate set.
     """
     slots = all_prices
-    if len(slots) < n_slots:
-        return slots
     candidate_starts: set[datetime] = {s.start for s in candidates}
 
     def is_contiguous(window: list[Slot]) -> bool:
         return all(window[j].end == window[j + 1].start for j in range(len(window) - 1))
 
+    # First pass: find cheapest full n_slots contiguous window within candidates
     best_avg   = float("inf")
     best_start = None
     for i in range(len(slots) - n_slots, -1, -1):
@@ -758,23 +741,24 @@ def _best_contiguous_window(
     if best_start is not None:
         return slots[best_start:best_start + n_slots]
 
-    # No fully-eligible contiguous window found — fall back ignoring candidate filter
+    # No full window available — return the longest contiguous run within candidates.
+    # This happens when part of the window has no prices yet (e.g. overnight window
+    # where next-day morning prices aren't published). Never go outside candidates.
     log.warning(
-        "No contiguous %d-slot window found within candidate set "
-        "(price ceiling may be too low). Returning cheapest available window.",
+        "No contiguous %d-slot window found within candidate set — "
+        "returning longest available contiguous block within window.",
         n_slots,
     )
-    best_avg   = float("inf")
-    best_start = 0
-    for i in range(len(slots) - n_slots, -1, -1):
-        window = slots[i:i + n_slots]
-        if not is_contiguous(window):
-            continue
-        avg = sum(s.price_eur_kwh for s in window) / n_slots
-        if avg <= best_avg:
-            best_avg   = avg
-            best_start = i
-    return slots[best_start:best_start + n_slots]
+    candidate_slots = sorted(candidates, key=lambda s: s.start)
+    best_block: list[Slot] = []
+    current:    list[Slot] = []
+    for s in candidate_slots:
+        if current and s.start != current[-1].end:
+            current = []
+        current.append(s)
+        if len(current) > len(best_block):
+            best_block = list(current)
+    return best_block
 
 
 def _hhmm_to_utc(hhmm: str, ref_date: date, tz) -> datetime:
@@ -800,20 +784,37 @@ def _is_overnight(start_hhmm: str, end_hhmm: str) -> bool:
 def _resolve_window_utc(
     start_hhmm: str,
     end_hhmm: str,
-    target_date: date,
     tz,
+    _anchor_date: Optional[date] = None,
 ) -> tuple[datetime, datetime]:
     """Resolve preferred window HH:MM strings to UTC datetimes.
 
-    For overnight windows (start > end, e.g. 22:00–06:30), win_end_utc is
-    resolved against target_date + 1 day so it falls after win_start_utc.
+    Determines the anchor date automatically from the clock:
+    - Same-day windows: tomorrow after local noon, today before noon.
+    - Overnight windows (start > end, e.g. 22:00–06:30): today if the window
+      start is still in the future; tomorrow otherwise.
+
+    _anchor_date overrides the clock-based anchor (used in tests only).
+    For overnight windows, win_end_utc is resolved against anchor + 1 day.
     """
-    win_start_utc = _hhmm_to_utc(start_hhmm, target_date, tz)
-    if _is_overnight(start_hhmm, end_hhmm):
-        win_end_utc = _hhmm_to_utc(end_hhmm, target_date + timedelta(days=1), tz)
-        log.info("Overnight window detected (%s–%s): end resolved to next day", start_hhmm, end_hhmm)
+    if _anchor_date is not None:
+        anchor = _anchor_date
+        overnight = _is_overnight(start_hhmm, end_hhmm)
     else:
-        win_end_utc = _hhmm_to_utc(end_hhmm, target_date, tz)
+        now_utc   = datetime.now(tz=timezone.utc)
+        local_now = now_utc.astimezone(tz)
+        overnight = _is_overnight(start_hhmm, end_hhmm)
+        if overnight:
+            sh, sm = map(int, start_hhmm.split(":"))
+            win_start_today = local_now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+            anchor = local_now.date() if local_now < win_start_today                      else (local_now + timedelta(days=1)).date()
+            log.info("Overnight window %s–%s: anchor=%s (local now %s)",
+                     start_hhmm, end_hhmm, anchor, local_now.strftime("%H:%M"))
+        else:
+            anchor = local_now.date() if local_now.hour < 12                      else (local_now + timedelta(days=1)).date()
+
+    win_start_utc = _hhmm_to_utc(start_hhmm, anchor, tz)
+    win_end_utc   = _hhmm_to_utc(end_hhmm, anchor + timedelta(days=1), tz) if overnight                     else _hhmm_to_utc(end_hhmm, anchor, tz)
     return win_start_utc, win_end_utc
 
 
@@ -1500,9 +1501,10 @@ def write_gha_summary(plans: "list[dict]", all_prices: list[Slot]) -> None:
         savings_pct = (1 - avg / ps["avg_cents_kwh"]) * 100 if ps["avg_cents_kwh"] else 0
         md += [f"### {profile}", ""]
         md += [
-            f"| **Required** | {req} min |",
-            f"| **Scheduled** | {tot} min" +
-            (f" ⚠️ **incomplete**" if tot < req else "") + " |",
+            f"| **Required** | {req // 60}h {req % 60:02d}min |" if req % 60 else f"| **Required** | {req // 60}h |",
+            (f"| **Scheduled** | {tot // 60}h {tot % 60:02d}min ⚠️ **incomplete** |" if tot < req
+             else f"| **Scheduled** | {tot // 60}h |" if tot % 60 == 0
+             else f"| **Scheduled** | {tot // 60}h {tot % 60:02d}min |"),
             f"| **Avg price** | **{avg:.2f} c€/kWh** ({abs(savings_pct):.0f}% {'below' if savings_pct >= 0 else 'above'} market avg) |",
             "",
         ]
@@ -1542,40 +1544,14 @@ def write_gha_summary(plans: "list[dict]", all_prices: list[Slot]) -> None:
 # cmd_plan helpers — each covers one named phase of the planning pipeline
 # ---------------------------------------------------------------------------
 
-def _plan_target_date(timezone_str: Optional[str]) -> date:
-    """Return the date to plan for: today if before local noon, tomorrow otherwise.
-
-    Uses today's DST offset as a bootstrap — target_date is not yet known.
-    This is correct in all practical cases: the only edge is a timezone whose
-    DST transition falls exactly at midnight on the day being planned, which
-    would require a clock reading within a few minutes of that boundary to
-    produce the wrong result.
-    """
-    now_utc        = datetime.now(tz=timezone.utc)
-    bootstrap_name, bootstrap_tz = _resolve_tz(timezone_str, now_utc.date())
-    local_now      = now_utc.astimezone(bootstrap_tz)
-    if local_now.hour < 12:
-        target = local_now.date()
-    else:
-        target = (local_now + timedelta(days=1)).date()
-    log.info("Target date: %s (local time: %s, tz bootstrap: %s)",
-             target, local_now.strftime("%Y-%m-%d %H:%M"), bootstrap_name)
-    return target
-
-
-def _fetch_prices(cfg: Config, target_date: date, cfg_tz) -> tuple[list[Slot], list[Slot], str]:
-    """Fetch ENTSO-E prices for target_date.  Exits the process on failure."""
+def _fetch_prices(cfg: Config) -> tuple[list[Slot], str]:
+    """Fetch all available ENTSO-E prices.  Exits the process on failure."""
     try:
-        schedulable, display = fetch_entsoe_prices(cfg.api_key, cfg.area, target_date, tz=cfg_tz)
-        return schedulable, display, "ENTSO-E"
-    except PricesNotYetAvailable:
-        log.warning(
-            "Tomorrow's prices (%s) are not yet available. "
-            "ENTSO-E publishes next-day prices at ~13:00 CET. "
-            "The scheduled workflow runs after that — re-run then or wait for the cron.",
-            target_date,
-        )
-        sys.exit(0)
+        prices = fetch_entsoe_prices(cfg.api_key, cfg.area)
+        return prices, "ENTSO-E"
+    except PricesNotYetAvailable as exc:
+        log.error("No prices available: %s", exc)
+        sys.exit(1)
     except Exception as exc:
         log.error("ENTSO-E fetch failed: %s", exc)
         sys.exit(1)
@@ -1651,34 +1627,39 @@ def _select_slots(
 # ---------------------------------------------------------------------------
 
 def _plan_one_profile(
-    cfg:             "Config",
-    target_date:     date,
+    cfg:          "Config",
     cfg_tz,
-    cfg_tz_name:     str,
-    all_prices:      "list[Slot]",
-    display_prices:  "list[Slot]",
-    price_source:    str,
-    output_dir:      str,
+    cfg_tz_name:  str,
+    all_prices:   "list[Slot]",
+    price_source: str,
+    output_dir:   str,
 ) -> dict:
     """Run selection and build a plan dict for a single profile."""
     log.info("=== Profile: %s ===", cfg.name)
 
     win_start_utc, win_end_utc = _resolve_window_utc(
-        cfg.preferred_window_start, cfg.preferred_window_end, target_date, cfg_tz
+        cfg.preferred_window_start, cfg.preferred_window_end, cfg_tz
     )
     log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
+
+    # plan_date: the local calendar date the window starts on
+    plan_date = win_start_utc.astimezone(cfg_tz).date()
+
+    # display_prices: all fetched slots whose local date is plan_date (for chart/stats)
+    display_prices = [s for s in all_prices
+                      if s.start.astimezone(cfg_tz).date() == plan_date]
 
     earliest_useful  = win_start_utc - timedelta(minutes=cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
     if trimmed := len(all_prices) - len(candidate_prices):
-        log.info("Trimmed %d unreachable today-slots (earliest useful: %s UTC)",
+        log.info("Trimmed %d unreachable slots (earliest useful: %s UTC)",
                  trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"))
 
     selected, merged_starts = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc)
     windows = merge_contiguous_slots(selected)
 
     plan = build_plan(PlanParams(
-        target_date=target_date,
+        target_date=plan_date,
         area=cfg.area,
         price_source=price_source,
         all_prices=display_prices,
@@ -1697,39 +1678,36 @@ def _plan_one_profile(
     output_path = os.path.join(output_dir, f"plan-{cfg.name}.json")
     save_plan(plan, output_path)
     print(f"  Plan saved to: {output_path}\n")
-    return plan
+    return plan, display_prices
 
 
 def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
-    """Fetch prices once, run selection for each profile, save per-profile plans."""
+    """Fetch all available prices once, run selection for each profile."""
     try:
         configs = parse_configs(raw_config)
     except ConfigError as exc:
         log.error("%s", exc)
         sys.exit(1)
 
-    # All profiles share the same tz (use first profile's as authoritative)
     cfg0 = configs[0]
-    target_date = _plan_target_date(cfg0.timezone_str)
-
-    cfg_tz_name, cfg_tz = _resolve_tz(cfg0.timezone_str, target_date)
-    _noon = datetime(target_date.year, target_date.month, target_date.day, 12, 0, tzinfo=cfg_tz)
+    cfg_tz_name, cfg_tz = _resolve_tz(cfg0.timezone_str, datetime.now(tz=timezone.utc).date())
     log.info("Timezone: %s (UTC%+d)", cfg_tz_name,
-             int(_noon.utcoffset().total_seconds() / 3600))
+             int(datetime.now(tz=cfg_tz).utcoffset().total_seconds() / 3600))
 
-    all_prices, display_prices, price_source = _fetch_prices(cfg0, target_date, cfg_tz)
+    all_prices, price_source = _fetch_prices(cfg0)
 
     plans = []
+    display_for_summary = None
     for cfg in configs:
-        plan = _plan_one_profile(
-            cfg, target_date, cfg_tz, cfg_tz_name,
-            all_prices, display_prices, price_source, output_dir,
+        plan, display_prices = _plan_one_profile(
+            cfg, cfg_tz, cfg_tz_name, all_prices, price_source, output_dir,
         )
         plans.append(plan)
+        if display_for_summary is None:
+            display_for_summary = display_prices
 
-    write_gha_summary(plans, display_prices)
+    write_gha_summary(plans, display_for_summary or [])
     return plans
-
 
 # ===========================================================================
 # CLI entry point
