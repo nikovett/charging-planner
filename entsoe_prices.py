@@ -1211,6 +1211,104 @@ def build_plan(p: PlanParams) -> dict:
         "windows":                win_list,
         "window_starts_utc":      [w[0].isoformat() for w in p.windows],
         "window_ends_utc":        [w[1].isoformat() for w in p.windows],
+        "ocpp_charging_profile":  build_ocpp_charging_profile(
+            {"window_starts_utc": [w[0].isoformat() for w in p.windows],
+             "window_ends_utc":   [w[1].isoformat() for w in p.windows]},
+        ),
+    }
+
+
+def build_ocpp_charging_profile(
+    plan: dict,
+    charging_rate_unit: str = "W",
+    max_charging_rate: float = 11000.0,
+    profile_id: int = 1,
+    stack_level: int = 0,
+    ocpp_version: str = "1.6",
+) -> dict:
+    """Build an OCPP-compatible ChargingProfile from a plan.
+
+    Compatible with OCPP 1.6, 2.0.1, and 2.1. The only structural difference
+    between versions is that OCPP 2.1 renames `chargingProfileId` to `id` in
+    ChargingProfileType, and adds an `id` field to ChargingScheduleType.
+    All other fields — startPeriod, limit, startSchedule, chargingRateUnit,
+    validFrom/validTo — are identical across all three versions.
+
+    Produces an Absolute TxDefaultProfile. Charging windows run at
+    max_charging_rate; gaps between windows are set to 0 so the vehicle does
+    not charge outside the planned slots.
+
+    Args:
+        plan:               plan dict as returned by build_plan()
+        charging_rate_unit: "W" (watts, typical for DC / 3-phase AC) or
+                            "A" (amps per phase, typical for single-phase AC)
+        max_charging_rate:  limit during charging periods (W or A depending
+                            on charging_rate_unit). Default 11000 W = 11 kW.
+        profile_id:         profile identifier (must be unique on the charger)
+        stack_level:        higher values take precedence; 0 = lowest priority
+        ocpp_version:       "1.6", "2.0.1", or "2.1". OCPP 1.6 uses
+                            `chargingProfileId`; 2.0.1 and 2.1 use `id`.
+
+    Returns a dict matching the OCPP ChargingProfile structure, ready to be
+    sent as csChargingProfiles in a SetChargingProfile.req message.
+    """
+    starts = [datetime.fromisoformat(s) for s in plan.get("window_starts_utc", [])]
+    ends   = [datetime.fromisoformat(s) for s in plan.get("window_ends_utc",   [])]
+
+    if not starts:
+        log.warning("build_ocpp_charging_profile: no windows in plan, returning empty profile")
+        return {}
+
+    schedule_start = starts[0]
+    schedule_end   = ends[-1]
+    duration_sec   = int((schedule_end - schedule_start).total_seconds())
+
+    # Build ChargingSchedulePeriod list.
+    # startPeriod is seconds from schedule_start; periods alternate 0 ↔ max.
+    periods = []
+    cursor  = schedule_start
+
+    for win_start, win_end in zip(starts, ends):
+        if win_start > cursor:
+            periods.append({
+                "startPeriod": int((cursor - schedule_start).total_seconds()),
+                "limit": 0.0,
+            })
+        periods.append({
+            "startPeriod": int((win_start - schedule_start).total_seconds()),
+            "limit": float(max_charging_rate),
+        })
+        cursor = win_end
+
+    if cursor < schedule_end:
+        periods.append({
+            "startPeriod": int((cursor - schedule_start).total_seconds()),
+            "limit": 0.0,
+        })
+
+    # OCPP 2.0.1 and 2.1 both use "id" instead of "chargingProfileId", and
+    # require an "id" field on ChargingScheduleType. OCPP 1.6 uses
+    # "chargingProfileId" and has no id on ChargingSchedule.
+    is_v2 = not ocpp_version.startswith("1.6")
+    profile_id_key = "id" if is_v2 else "chargingProfileId"
+
+    schedule: dict = {
+        "startSchedule":          schedule_start.isoformat(),
+        "duration":               duration_sec,
+        "chargingRateUnit":       charging_rate_unit,
+        "chargingSchedulePeriod": periods,
+    }
+    if is_v2:
+        schedule["id"] = profile_id   # ChargingScheduleType.id in 2.0.1 and 2.1
+
+    return {
+        profile_id_key:           profile_id,
+        "stackLevel":             stack_level,
+        "chargingProfilePurpose": "TxDefaultProfile",
+        "chargingProfileKind":    "Absolute",
+        "validFrom":              schedule_start.isoformat(),
+        "validTo":                schedule_end.isoformat(),
+        "chargingSchedule":       schedule,
     }
 
 
