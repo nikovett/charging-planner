@@ -62,7 +62,6 @@ jobs:
           name: charging-plan-${{ steps.plan.outputs.plan_date }}
           path: |
             plan-*.json
-            chart.svg
           retention-days: 2
 
       - name: Notify via ntfy
