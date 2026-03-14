@@ -1007,22 +1007,20 @@ class TestWindowCoverageCheck(unittest.TestCase):
         # Should not raise SystemExit
         _check_window_coverage(slots, ws, we, "test")
 
-    def test_empty_slots_exits(self):
+    def test_empty_slots_raises(self):
         ws, we = self._window()
-        from charging_planner import _check_window_coverage
-        with self.assertRaises(SystemExit) as ctx:
+        from charging_planner import _check_window_coverage, PricesNotYetAvailable
+        with self.assertRaises(PricesNotYetAvailable):
             _check_window_coverage([], ws, we, "test")
-        self.assertEqual(ctx.exception.code, 0)
 
-    def test_partial_coverage_below_threshold_exits(self):
+    def test_partial_coverage_below_threshold_raises(self):
         ws, we = self._window()
         # Only cover 50% of the window
         window_min = int((we - ws).total_seconds() // 60)
         slots = slots_from(ws, window_min // 30)  # half the slots
-        from charging_planner import _check_window_coverage
-        with self.assertRaises(SystemExit) as ctx:
+        from charging_planner import _check_window_coverage, PricesNotYetAvailable
+        with self.assertRaises(PricesNotYetAvailable):
             _check_window_coverage(slots, ws, we, "test")
-        self.assertEqual(ctx.exception.code, 0)
 
     def test_coverage_above_threshold_does_not_exit(self):
         ws, we = self._window()
