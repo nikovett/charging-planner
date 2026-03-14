@@ -2,7 +2,7 @@ name: ENTSO-E Charging Plan
 
 on:
   schedule:
-    - cron: '0 12 * * *'   # 12:00 UTC = 15:00 EEST (summer) / 14:00 EET (winter)
+    - cron: '30 12 * * *'   # 12:30 UTC = 15:30 EEST (summer) / 14:30 EET (winter)
                             # One run covers both DST states. Prices publish ~13:00 CET
                             # so this always lands after publication.
   workflow_dispatch:
@@ -29,18 +29,18 @@ jobs:
             area: "FI"
           charging:
             - name: "topup"
-              required_hours: 1
-              contiguous_only: true
-              min_slot_minutes: 30
-              preferred_window_start: "00:00"
-              preferred_window_end: "07:00"
-              timezone: "Europe/Helsinki"
-            - name: "overnight"
-              required_hours: 4
+              required_hours: 2
               contiguous_only: false
               min_slot_minutes: 30
               preferred_window_start: "00:00"
-              preferred_window_end: "07:00"
+              preferred_window_end: "06:30"
+              timezone: "Europe/Helsinki"
+            - name: "overnight"
+              required_hours: 6
+              contiguous_only: true
+              min_slot_minutes: 30
+              preferred_window_start: "00:00"
+              preferred_window_end: "06:30"
               timezone: "Europe/Helsinki"
           YAML
 
