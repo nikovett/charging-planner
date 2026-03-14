@@ -727,21 +727,28 @@ def _best_contiguous_window(
 ) -> list[Slot]:
     """Return the cheapest contiguous run of n_slots from all_prices where every slot is a candidate.
 
+    "Contiguous" means temporally adjacent — each slot ends exactly when the next
+    begins. List-index adjacency is not sufficient; there may be time gaps in the
+    list (e.g. overnight windows whose inside slots span an evening and a morning
+    with a daytime gap in between).
+
     If no fully-eligible window exists (e.g. max_price excludes too many slots),
-    logs a warning and returns the cheapest window ignoring the candidate filter
-    so the caller always gets a result.
+    logs a warning and returns the cheapest window ignoring the candidate filter.
     """
     slots = all_prices
     if len(slots) < n_slots:
         return slots
     candidate_starts: set[datetime] = {s.start for s in candidates}
 
-    best_avg      = float("inf")
-    best_start    = None
-    # Iterate in reverse so that on equal avg price the latest window wins
-    # (closest to departure time).
+    def is_contiguous(window: list[Slot]) -> bool:
+        return all(window[j].end == window[j + 1].start for j in range(len(window) - 1))
+
+    best_avg   = float("inf")
+    best_start = None
     for i in range(len(slots) - n_slots, -1, -1):
         window = slots[i:i + n_slots]
+        if not is_contiguous(window):
+            continue
         if all(s.start in candidate_starts for s in window):
             avg = sum(s.price_eur_kwh for s in window) / n_slots
             if avg <= best_avg:
@@ -751,7 +758,7 @@ def _best_contiguous_window(
     if best_start is not None:
         return slots[best_start:best_start + n_slots]
 
-    # No fully-eligible window found — fall back to cheapest window ignoring filter
+    # No fully-eligible contiguous window found — fall back ignoring candidate filter
     log.warning(
         "No contiguous %d-slot window found within candidate set "
         "(price ceiling may be too low). Returning cheapest available window.",
@@ -761,6 +768,8 @@ def _best_contiguous_window(
     best_start = 0
     for i in range(len(slots) - n_slots, -1, -1):
         window = slots[i:i + n_slots]
+        if not is_contiguous(window):
+            continue
         avg = sum(s.price_eur_kwh for s in window) / n_slots
         if avg <= best_avg:
             best_avg   = avg
