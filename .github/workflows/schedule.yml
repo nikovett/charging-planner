@@ -178,6 +178,13 @@ jobs:
               summary = f"{fmt_h(tot)}/{fmt_h(req)}" + (" ⚠️ charge plan not possible" if tot < req else "")
               sections.append(f"{profile}  {summary}\n{win_lines}\n{make_ruler(plan)}")
 
+          skipped = "${{ steps.plan.outputs.skipped_profiles }}"
+          if skipped:
+              skipped_lines = "\n".join(
+                  f"- {n}: prices not yet published" for n in skipped.split(",")
+              )
+              sections.append(f"⏳ Skipped\n{skipped_lines}")
+
           message = "\n\n".join(sections)
 
           req = urllib.request.Request(
