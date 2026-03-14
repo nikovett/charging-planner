@@ -28,20 +28,29 @@ jobs:
             api_key: "${{ secrets.ENTSOE_API_KEY }}"
             area: "FI"
           charging:
-            required_hours: 2
-            min_slot_minutes: 30
-            preferred_window_start: "00:00"
-            preferred_window_end: "07:00"
-            timezone: "Europe/Helsinki"
+            - name: "topup"
+              required_hours: 1
+              contiguous_only: true
+              min_slot_minutes: 30
+              preferred_window_start: "00:00"
+              preferred_window_end: "07:00"
+              timezone: "Europe/Helsinki"
+            - name: "overnight"
+              required_hours: 4
+              contiguous_only: false
+              min_slot_minutes: 30
+              preferred_window_start: "00:00"
+              preferred_window_end: "07:00"
+              timezone: "Europe/Helsinki"
           YAML
 
       - name: Build plan
         id: plan
         run: |
-          python entsoe_prices.py --plan plan.json && {
+          python entsoe_prices.py --output-dir . && {
             echo "prices_available=true" >> $GITHUB_OUTPUT
-            echo "plan_date=$(python -c "import json; print(json.load(open('plan.json'))['date'])")" >> $GITHUB_OUTPUT
-            echo "=== plan.json ===" && cat plan.json
+            echo "plan_date=$(python -c "import glob,json; f=sorted(glob.glob('plan-*.json'))[0]; print(json.load(open(f))['date'])")" >> $GITHUB_OUTPUT
+            for f in plan-*.json; do echo "=== $f ===" && cat "$f"; done
           } || {
             echo "Prices not yet available or script error — skipping remaining steps."
           }
@@ -52,7 +61,7 @@ jobs:
         with:
           name: charging-plan-${{ steps.plan.outputs.plan_date }}
           path: |
-            plan.json
+            plan-*.json
             chart.svg
           retention-days: 2
 
@@ -60,80 +69,74 @@ jobs:
         if: steps.plan.outputs.prices_available == 'true'
         run: |
           python - << 'EOF'
-          import json, urllib.request
+          import glob, json, urllib.request
 
-          plan  = json.load(open("plan.json"))
-          date  = plan["date"]
-          avg   = plan["avg_price_cents_kwh"]
-          tot   = plan["total_minutes"]
-          wins  = plan["windows"]
-
-          chars   = 24
-          pw_start = plan["preferred_window_start"]
-          pw_end   = plan["preferred_window_end"]
+          # Load all profiles, sort by required_minutes ascending (shortest first)
+          plans = sorted(
+              [json.load(open(f)) for f in glob.glob("plan-*.json")],
+              key=lambda p: p["required_minutes"],
+          )
+          date = plans[0]["date"]
 
           def hm(s):
               h, m = map(int, s.split(":"))
               return h * 60 + m
 
-          pw_s = hm(pw_start)
-          pw_e = hm(pw_end) if pw_end != "24:00" else 24 * 60
+          def make_ruler(plan, chars=20):
+              wins     = plan["windows"]
+              pw_start = plan["preferred_window_start"]
+              pw_end   = plan["preferred_window_end"]
+              pw_s = hm(pw_start)
+              pw_e = hm(pw_end) if pw_end != "24:00" else 24 * 60
 
-          ruler_start_min = hm(pw_start)
-          ruler_end_min   = hm(pw_end) if pw_end != "24:00" else 24 * 60
+              # Span: preferred window expanded to cover any spill windows
+              r_start = hm(pw_start)
+              r_end   = hm(pw_end) if pw_end != "24:00" else 24 * 60
+              for w in wins:
+                  r_start = min(r_start, hm(w["start"]))
+                  r_end   = max(r_end, hm(w["end"]) if w["end"] != "00:00" else 24 * 60)
+              r_start = (r_start // 60) * 60
+              r_end   = ((r_end + 59) // 60) * 60
 
-          for w in wins:
-              ruler_start_min = min(ruler_start_min, hm(w["start"]))
-              ruler_end_min   = max(ruler_end_min,
-                                    hm(w["end"]) if w["end"] != "00:00" else 24 * 60)
+              span    = r_end - r_start
+              bucket  = max(15, (span + chars - 1) // chars)
+              bucket  = ((bucket + 14) // 15) * 15
+              n_chars = span // bucket
 
-          ruler_start_min = (ruler_start_min // 60) * 60
-          ruler_end_min   = ((ruler_end_min + 59) // 60) * 60
+              ruler = []
+              for i in range(n_chars):
+                  slot_min = r_start + i * bucket
+                  ruler.append("▒" if pw_s <= slot_min < pw_e else "░")
+              for w in wins:
+                  s_idx = (hm(w["start"]) - r_start) // bucket
+                  e_idx = ((hm(w["end"]) if w["end"] != "00:00" else 24 * 60) - r_start) // bucket
+                  for i in range(max(0, s_idx), min(e_idx, n_chars)):
+                      ruler[i] = "█"
 
-          _span   = ruler_end_min - ruler_start_min
-          _bucket = max(15, (_span + chars - 1) // chars)
-          _bucket = ((_bucket + 14) // 15) * 15
-          ruler_start_min = max(0,       ruler_start_min - _bucket)
-          ruler_end_min   = min(24 * 60, ruler_end_min   + _bucket)
-          ruler_start_min = (ruler_start_min // 60) * 60
-          ruler_end_min   = ((ruler_end_min + 59) // 60) * 60
-          ruler_span_min  = ruler_end_min - ruler_start_min
+              start_label = f"{r_start // 60:02d}:00"
+              end_label   = f"{r_end // 60:02d}:00" if r_end < 24 * 60 else "24:00"
+              return f"{start_label} {''.join(ruler)} {end_label}"
 
-          bucket  = max(15, (ruler_span_min + chars - 1) // chars)
-          bucket  = ((bucket + 14) // 15) * 15
-          n_chars = ruler_span_min // bucket
+          sections = []
+          for plan in plans:
+              profile = plan.get("profile", "default")
+              wins    = plan["windows"]
+              pw_s    = hm(plan["preferred_window_start"])
+              pw_e    = hm(plan["preferred_window_end"]) if plan["preferred_window_end"] != "24:00" else 24 * 60
 
-          ruler = []
-          for i in range(n_chars):
-              slot_min = ruler_start_min + i * bucket
-              ruler.append("▒" if pw_s <= slot_min < pw_e else "░")
-          for w in wins:
-              s_idx = (hm(w["start"]) - ruler_start_min) // bucket
-              e_idx = ((hm(w["end"]) if w["end"] != "00:00" else 24 * 60)
-                       - ruler_start_min) // bucket
-              for i in range(max(0, s_idx), min(e_idx, n_chars)):
-                  ruler[i] = "█"
-          ruler_str = "".join(ruler)
+              if wins:
+                  win_lines = "\n".join(
+                      f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
+                      + (" ⚡ merged" if w.get("gap_merged") else "")
+                      + (" ⚠️ outside window" if (hm(w["start"]) >= pw_e or hm(w["end"]) <= pw_s) else "")
+                      for w in wins
+                  )
+              else:
+                  win_lines = "No windows selected"
 
-          start_label = f"{ruler_start_min // 60:02d}:00"
-          end_label   = f"{ruler_end_min // 60:02d}:00" if ruler_end_min < 24 * 60 else "24:00"
+              sections.append(f"{profile}\n{win_lines}\n{make_ruler(plan)}")
 
-          if wins:
-              lines = "\n".join(
-                  f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
-                  + (" ⚡ merged" if w.get("gap_merged") else "")
-                  + (" ⚠️ outside window" if (
-                      hm(w["start"]) >= pw_e or hm(w["end"]) <= pw_s
-                  ) else "")
-                  for w in wins
-              )
-          else:
-              lines = "No windows selected"
-
-          message = (
-              f"{lines}\n\n"
-              f"{start_label} {ruler_str} {end_label}"
-          )
+          message = "\n\n".join(sections)
 
           req = urllib.request.Request(
               "https://ntfy.sh/entsoe-charging-f7x3k2",
