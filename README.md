@@ -211,16 +211,11 @@ Charging windows run at `max_charging_rate` (default 11 kW); gaps between window
 
 **OCPP 2.0.1 and 2.1** use `id` instead of `chargingProfileId` — generate the correct version with `build_ocpp_charging_profile(plan, ocpp_version="2.0.1")`.
 
-**Sending the profile** requires direct OCPP access to the charger — either your own CSMS pointed at the charger via WebSocket (`ws://your-server/ocpp/{chargePointId}`), or a local controller on the same LAN. Charge Amps' cloud REST API (eapi.charge.space) does not expose `SetChargingProfile`.
-
 ### Price chart
 
 The `chart.svg` included in each GitHub Actions run artifact shows the full day's prices alongside the scheduled windows:
 
-- **Pink filled area** — day-ahead prices at 15-minute resolution (c€/kWh)
-- **Blue shading** — preferred charging window
-- **Purple bar** — scheduled charging windows
-- **Y-axis** — price in c€/kWh; x-axis spans 00:00–24:00 local time
+![Price chart](example_chart.svg)
 
 ### Phone notification (ntfy)
 
