@@ -43,7 +43,7 @@ No other dependencies. The script uses only the standard library, including [`zo
 2. Email [transparency@entsoe.eu](mailto:transparency@entsoe.eu) to request API access
 3. Your key will appear under **My Account → Security Tokens**
 
-Day-ahead prices are published at approximately 12:00 UTC each day. A run before publication will return a partial plan — whatever slots are already available — with a warning if the required hours could not be fully scheduled.
+Day-ahead prices are published at approximately 12:00 UTC each day. If the script runs before publication, or ENTSO-E is delayed, the fetched data will not cover the full preferred window — the script detects this and exits cleanly with a warning rather than producing a meaningless partial plan. Once prices are available the next scheduled run will succeed.
 
 ---
 
@@ -302,7 +302,7 @@ overnight  6h/6h
 21:00 ░████████████▒░░ 07:00
 ```
 
-If a profile is incomplete (not enough price data yet), the hours are flagged: `topup  1h/2h ⚠️`.
+If a profile cannot meet `required_hours` despite prices being available — for example because `max_price_cents_kwh` excludes too many slots, or the window is shorter than required — the hours are flagged: `topup  1h/2h ⚠️`. This indicates a configuration issue rather than missing data.
 
 The ruler spans the preferred charging window: `█` = scheduled, `▒` = unscheduled inside window, `░` = outside window. The ruler expands automatically if any slots fall outside the preferred window.
 
@@ -341,7 +341,8 @@ python3 -m unittest discover -s test -v
 | Window filtering | 5 |
 | Time utilities | 10 |
 | End-to-end pipeline | 6 |
-| **Total** | **104** |
+| Window coverage check | 5 |
+| **Total** | **109** |
 
 The 3 OCPP schema validation tests require the spec zip files placed in `test/ocpp16/`, `test/ocpp201/`, `test/ocpp21/` — they skip cleanly without them. All other tests run with no dependencies beyond `pyyaml`.
 

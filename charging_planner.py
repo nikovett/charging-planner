@@ -1503,6 +1503,44 @@ def _fetch_prices(cfg: Config) -> tuple[list[Slot], str]:
         sys.exit(1)
 
 
+def _check_window_coverage(
+    inside: list[Slot],
+    win_start_utc: datetime,
+    win_end_utc: datetime,
+    profile_name: str,
+) -> None:
+    """Exit early if the fetched prices do not cover the preferred window.
+
+    Compares the duration of slots available inside the window against the
+    full window length.  If coverage is below 90% the prices for this window
+    have not been published yet — the script exits cleanly with a warning
+    rather than producing a meaningless partial plan.
+
+    This is a data availability problem (script ran too early, or ENTSO-E
+    publication was delayed), not a configuration problem.
+    """
+    window_minutes  = int((win_end_utc - win_start_utc).total_seconds() / 60)
+    covered_minutes = sum(s.duration_minutes for s in inside)
+    coverage        = covered_minutes / window_minutes if window_minutes else 0.0
+
+    if coverage < 0.90:
+        log.warning(
+            "Profile '%s': only %d of %d min covered in window %s–%s "
+            "(%.0f%% — prices not yet published). "
+            "ENTSO-E publishes next-day prices at ~12:00 UTC. Exiting.",
+            profile_name,
+            covered_minutes, window_minutes,
+            win_start_utc.strftime("%H:%M UTC"),
+            win_end_utc.strftime("%H:%M UTC"),
+            coverage * 100,
+        )
+        sys.exit(0)
+
+    log.info("Profile '%s': window coverage %d/%d min (%.0f%%).",
+             profile_name, covered_minutes, window_minutes, coverage * 100)
+
+
+
 def _select_slots(
     cfg:              Config,
     candidate_prices: list[Slot],
@@ -1522,6 +1560,8 @@ def _select_slots(
         window_start_local=cfg.preferred_window_start,
         window_end_local=cfg.preferred_window_end,
     )
+
+    _check_window_coverage(inside, win_start_utc, win_end_utc, cfg.name)
 
     selected = select_charging_windows(
         inside,
@@ -1555,14 +1595,16 @@ def _select_slots(
         )
 
     if not selected:
-        log.error("No slots selected.")
+        log.error("Profile '%s': no slots selected — check preferred window and price ceiling.",
+                  cfg.name)
     else:
         scheduled_min = sum(s.duration_minutes for s in selected)
         if scheduled_min < cfg.required_minutes:
             log.warning(
-                "⚠ Only %d min scheduled of %d min required — "
-                "not enough price data available yet (tomorrow's prices may not be published).",
-                scheduled_min, cfg.required_minutes,
+                "⚠ Profile '%s': only %d min scheduled of %d min required. "
+                "Window prices may all be above max_price_cents_kwh, or the window "
+                "is too short for the required hours.",
+                cfg.name, scheduled_min, cfg.required_minutes,
             )
 
     return selected, merged_starts
