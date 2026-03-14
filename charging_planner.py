@@ -918,7 +918,11 @@ def _resolve_window_utc(
             log.info("Overnight window %s–%s: anchor=%s (local now %s)",
                      start_hhmm, end_hhmm, anchor, local_now.strftime("%H:%M"))
         else:
-            anchor = local_now.date() if local_now.hour < 12                      else (local_now + timedelta(days=1)).date()
+            # Same-day window: use today if the window start is still in the
+            # future today, otherwise plan for tomorrow.
+            sh, sm = map(int, start_hhmm.split(":"))
+            win_start_today = local_now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+            anchor = local_now.date() if local_now < win_start_today                      else (local_now + timedelta(days=1)).date()
 
     win_start_utc = _hhmm_to_utc(start_hhmm, anchor, tz)
     win_end_utc   = _hhmm_to_utc(end_hhmm, anchor + timedelta(days=1), tz) if overnight                     else _hhmm_to_utc(end_hhmm, anchor, tz)
@@ -1509,32 +1513,25 @@ def _check_window_coverage(
     win_end_utc: datetime,
     profile_name: str,
 ) -> None:
-    """Exit early if the fetched prices do not cover the preferred window.
+    """Raise PricesNotYetAvailable if fetched prices do not cover the window.
 
     Compares the duration of slots available inside the window against the
-    full window length.  If coverage is below 90% the prices for this window
-    have not been published yet — the script exits cleanly with a warning
-    rather than producing a meaningless partial plan.
-
-    This is a data availability problem (script ran too early, or ENTSO-E
-    publication was delayed), not a configuration problem.
+    full window length. If coverage is below 90%, prices for this window have
+    not been published yet. The caller handles the exception per-profile so
+    other profiles are not affected.
     """
     window_minutes  = int((win_end_utc - win_start_utc).total_seconds() / 60)
     covered_minutes = sum(s.duration_minutes for s in inside)
     coverage        = covered_minutes / window_minutes if window_minutes else 0.0
 
     if coverage < 0.90:
-        log.warning(
-            "Profile '%s': only %d of %d min covered in window %s–%s "
-            "(%.0f%% — prices not yet published). "
-            "ENTSO-E publishes next-day prices at ~12:00 UTC. Exiting.",
-            profile_name,
-            covered_minutes, window_minutes,
-            win_start_utc.strftime("%H:%M UTC"),
-            win_end_utc.strftime("%H:%M UTC"),
-            coverage * 100,
+        raise PricesNotYetAvailable(
+            f"Profile '{profile_name}': only {covered_minutes} of {window_minutes} min "
+            f"covered in window {win_start_utc.strftime('%H:%M UTC')}–"
+            f"{win_end_utc.strftime('%H:%M UTC')} "
+            f"({coverage*100:.0f}% — prices not yet published). "
+            f"ENTSO-E publishes next-day prices at ~12:00 UTC."
         )
-        sys.exit(0)
 
     log.info("Profile '%s': window coverage %d/%d min (%.0f%%).",
              profile_name, covered_minutes, window_minutes, coverage * 100)
@@ -1685,13 +1682,28 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
 
     plans = []
     display_for_summary = None
+    skipped = []
     for cfg in configs:
-        plan, display_prices = _plan_one_profile(
-            cfg, tz, all_prices, price_source, output_dir,
+        try:
+            plan, display_prices = _plan_one_profile(
+                cfg, tz, all_prices, price_source, output_dir,
+            )
+            plans.append(plan)
+            if display_for_summary is None:
+                display_for_summary = display_prices
+        except PricesNotYetAvailable as exc:
+            log.warning("%s — skipping profile.", exc)
+            skipped.append(cfg.name)
+
+    if not plans:
+        log.warning(
+            "No profiles could be planned — prices not yet available for any window. "
+            "ENTSO-E publishes next-day prices at ~12:00 UTC."
         )
-        plans.append(plan)
-        if display_for_summary is None:
-            display_for_summary = display_prices
+        sys.exit(0)
+
+    if skipped:
+        log.warning("Skipped profiles (prices not yet available): %s", ", ".join(skipped))
 
     write_gha_summary(plans, display_for_summary or [])
     return plans
