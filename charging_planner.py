@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-ENTSO-E Day-Ahead Price Planner
-================================
+Charging Planner
+================
 Fetches day-ahead electricity prices from the ENTSO-E Transparency Platform,
-finds the cheapest charging windows, and saves a plan to a JSON file for
-review and optional editing.
+selects the cheapest charging windows for each configured profile, and writes
+a plan to JSON for review and downstream use (e.g. OCPP smart charging).
 
 Usage:
-    python charging_planner.py plan [--config config.yaml] [--plan plan.json]
+    python charging_planner.py [--config config.yaml] [--output-dir .]
 
-Schedule the 'plan' step to run daily at ~13:30 local time so the next day's
-ENTSO-E prices are available.
+Run daily after ~12:00 UTC when ENTSO-E publishes next-day prices.
 """
 
 import argparse
@@ -21,7 +20,6 @@ import os
 import sys
 import time
 import xml.etree.ElementTree as ET
-from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
 import urllib.request
@@ -186,12 +184,8 @@ def _http_request_with_retry(
 # Config validation
 # ===========================================================================
 
-def validate_plan_config(config: dict) -> None:
-    """Validate settings required for the 'plan' step (ENTSO-E + charging)."""
-    errors = []
-    et = config.get("entsoe", {})
-    ch = config.get("charging", {})
-
+def _validate_entsoe_config(et: dict, errors: list) -> None:
+    """Validate the entsoe: block, appending errors in-place."""
     if not et.get("api_key"):
         errors.append(
             "entsoe.api_key is required. "
@@ -200,6 +194,25 @@ def validate_plan_config(config: dict) -> None:
     if not et.get("area"):
         errors.append("entsoe.area is required (e.g. 'FI').")
 
+
+def _validate_hhmm(ch: dict, key: str, errors: list) -> Optional[tuple[int, int]]:
+    """Parse and validate a HH:MM config field. Appends to errors and returns None on failure."""
+    val = ch.get(key)
+    if val is None:
+        errors.append(f"charging.{key} is required. Use 'HH:MM' (e.g. '00:00').")
+        return None
+    try:
+        h, m = map(int, str(val).split(":"))
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError
+        return h, m
+    except (ValueError, AttributeError):
+        errors.append(f"charging.{key}={val!r} is not valid. Use 'HH:MM' (00:00–23:59).")
+        return None
+
+
+def _validate_charging_profile(ch: dict, errors: list) -> None:
+    """Validate a single charging profile dict, appending errors in-place."""
     req_hours = ch.get("required_hours")
     if not isinstance(req_hours, (int, float)) or req_hours <= 0:
         errors.append(f"charging.required_hours must be a positive number, got: {req_hours!r}.")
@@ -214,22 +227,8 @@ def validate_plan_config(config: dict) -> None:
     if ceil is not None and (not isinstance(ceil, (int, float)) or ceil <= 0):
         errors.append(f"charging.max_price_cents_kwh={ceil!r} must be a positive number or null.")
 
-    def _parse_hhmm(key: str) -> Optional[tuple[int, int]]:
-        val = ch.get(key)
-        if val is None:
-            errors.append(f"charging.{key} is required. Use 'HH:MM' (e.g. '00:00').")
-            return None
-        try:
-            h, m = map(int, str(val).split(":"))
-            if not (0 <= h <= 23 and 0 <= m <= 59):
-                raise ValueError
-            return h, m
-        except (ValueError, AttributeError):
-            errors.append(f"charging.{key}={val!r} is not valid. Use 'HH:MM' (00:00–23:59).")
-            return None
-
-    pw_s = _parse_hhmm("preferred_window_start")
-    pw_e = _parse_hhmm("preferred_window_end")
+    pw_s = _validate_hhmm(ch, "preferred_window_start", errors)
+    pw_e = _validate_hhmm(ch, "preferred_window_end", errors)
     if pw_s is not None and pw_e is not None:
         s_min = pw_s[0] * 60 + pw_s[1]
         e_min = pw_e[0] * 60 + pw_e[1]
@@ -241,29 +240,38 @@ def validate_plan_config(config: dict) -> None:
             )
         # s_min > e_min is an overnight window (e.g. 22:00–06:30) — allowed
 
-    _emit_errors(errors)
 
-    # Advisory warnings — only reached when config is valid (no ConfigError raised above)
+def _warn_if_continuous_overflows_window(ch: dict) -> None:
+    """Log an advisory warning when continuous_only and required_hours exceeds window length."""
     win_start = ch.get("preferred_window_start")
     win_end   = ch.get("preferred_window_end")
-    if ch.get("continuous_only") and win_start and win_end:  # both always present after validation
-        try:
-            sh, sm = map(int, win_start.split(":"))
-            eh, em = map(int, win_end.split(":"))
-            s_min = sh * 60 + sm
-            e_min = eh * 60 + em
-            # Overnight window wraps midnight: length = (24h - start) + end
-            win_minutes = (e_min - s_min) if e_min > s_min else (24 * 60 - s_min + e_min)
-            req_minutes = int(ch.get("required_hours", 0) * 60)
-            if req_minutes > win_minutes > 0:
-                log.warning(
-                    "continuous_only=true but required_hours=%.1f (%.0f min) exceeds "
-                    "preferred window %s–%s (%.0f min). "
-                    "Charging will start before the window.",
-                    ch["required_hours"], req_minutes, win_start, win_end, win_minutes,
-                )
-        except (ValueError, TypeError):
-            pass
+    if not (ch.get("continuous_only") and win_start and win_end):
+        return
+    try:
+        sh, sm = map(int, win_start.split(":"))
+        eh, em = map(int, win_end.split(":"))
+        s_min = sh * 60 + sm
+        e_min = eh * 60 + em
+        win_minutes = (e_min - s_min) if e_min > s_min else (24 * 60 - s_min + e_min)
+        req_minutes = int(ch.get("required_hours", 0) * 60)
+        if req_minutes > win_minutes > 0:
+            log.warning(
+                "continuous_only=true but required_hours=%.1f (%.0f min) exceeds "
+                "preferred window %s–%s (%.0f min). "
+                "Charging will start before the window.",
+                ch["required_hours"], req_minutes, win_start, win_end, win_minutes,
+            )
+    except (ValueError, TypeError):
+        pass
+
+
+def validate_plan_config(config: dict) -> None:
+    """Validate ENTSO-E and charging profile settings, raising ConfigError on failure."""
+    errors: list = []
+    _validate_entsoe_config(config.get("entsoe", {}), errors)
+    _validate_charging_profile(config.get("charging", {}), errors)
+    _emit_errors(errors)
+    _warn_if_continuous_overflows_window(config.get("charging", {}))
 
 
 def _emit_errors(errors: list) -> None:
@@ -459,128 +467,230 @@ def fetch_entsoe_prices(
             for i, s in enumerate(sorted(usable, key=lambda x: x.start))]
 
 
-def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[Slot]:
+def _xml_parse_root(xml_text: str):
+    """Parse XML text and return (root, ns_uri). Raises on parse error or API error response."""
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
         raise ValueError(f"ENTSO-E response is not valid XML: {e}\n{xml_text[:300]}")
 
-    ns_uri = ""
-    if root.tag.startswith("{"):
-        ns_uri = root.tag[1:root.tag.index("}")]
+    ns_uri = root.tag[1:root.tag.index("}")] if root.tag.startswith("{") else ""
 
     if "Acknowledgement_MarketDocument" in root.tag:
-        reason = ""
-        for elem in root.iter():
-            if elem.tag.endswith("}text") or elem.tag == "text":
-                reason = elem.text or ""
-                break
+        reason = next(
+            (elem.text or "" for elem in root.iter()
+             if elem.tag.endswith("}text") or elem.tag == "text"),
+            ""
+        )
         raise ValueError(f"ENTSO-E returned an error: {reason or xml_text[:300]}")
 
+    return root, ns_uri
+
+
+def _xml_finders(ns_uri: str):
+    """Return (find_all, find_text) helpers bound to the given namespace."""
     ns = {"ns": ns_uri} if ns_uri else {}
 
     def find_all(parent, tag):
-        if ns_uri:
-            return parent.findall(f"ns:{tag}", ns)
-        return parent.findall(tag)
+        return parent.findall(f"ns:{tag}", ns) if ns_uri else parent.findall(tag)
 
     def find_text(parent, tag):
-        if ns_uri:
-            return parent.findtext(f"ns:{tag}", namespaces=ns)
-        return parent.findtext(tag)
+        return parent.findtext(f"ns:{tag}", namespaces=ns) if ns_uri else parent.findtext(tag)
 
-    prices = []
+    return find_all, find_text
 
-    for ts in find_all(root, "TimeSeries"):
-        period = None
-        for child in ts:
-            if child.tag.endswith("}Period") or child.tag == "Period":
-                period = child
-                break
-        if period is None:
+
+def _xml_resolution_minutes(resolution_str: str) -> int:
+    """Convert ENTSO-E resolution string (e.g. PT15M) to minutes."""
+    if "15" in resolution_str:
+        return 15
+    if "30" in resolution_str:
+        return 30
+    return 60
+
+
+def _xml_period_interval(period) -> tuple:
+    """Return (period_start_utc, period_end_utc) from a Period element, or (None, None)."""
+    interval = next(
+        (c for c in period if c.tag.endswith("}timeInterval") or c.tag == "timeInterval"), None
+    )
+    if interval is None:
+        return None, None
+    start_str = interval.findtext("{*}start") or interval.findtext("start")
+    end_str   = interval.findtext("{*}end")   or interval.findtext("end")
+    if not start_str:
+        return None, None
+    start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+    end   = datetime.fromisoformat(end_str.replace("Z", "+00:00")) if end_str else None
+    return start, end
+
+
+def _xml_extract_points(period, find_all, find_text) -> dict[int, float]:
+    """Return {position: price_eur_mwh} from Point elements in a Period."""
+    explicit: dict[int, float] = {}
+    for point in find_all(period, "Point"):
+        pos_text   = find_text(point, "position")
+        price_text = find_text(point, "price.amount")
+        if pos_text is None or price_text is None:
             continue
-
-        interval = None
-        for child in period:
-            if child.tag.endswith("}timeInterval") or child.tag == "timeInterval":
-                interval = child
-                break
-        if interval is None:
+        try:
+            explicit[int(pos_text)] = float(price_text)
+        except ValueError:
             continue
+    return explicit
 
-        start_str = find_text(interval, "start") or interval.findtext("start")
-        end_str   = find_text(interval, "end")   or interval.findtext("end")
-        if not start_str:
-            continue
 
-        period_start_utc = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-        period_end_utc   = datetime.fromisoformat(end_str.replace("Z", "+00:00")) if end_str else None
+def _xml_parse_time_series(ts, find_all, find_text) -> list[Slot]:
+    """Extract Slots from a single TimeSeries XML element."""
+    period = next(
+        (c for c in ts if c.tag.endswith("}Period") or c.tag == "Period"), None
+    )
+    if period is None:
+        return []
 
-        # Accept any TimeSeries whose period overlaps the requested date range.
-        # The API request already constrains the window so no further date
-        # filtering is needed here.
+    period_start_utc, period_end_utc = _xml_period_interval(period)
+    if period_start_utc is None:
+        return []
 
-        resolution_str = find_text(period, "resolution") or "PT60M"
-        if "15" in resolution_str:
-            slot_minutes = 15
-        elif "30" in resolution_str:
-            slot_minutes = 30
-        else:
-            slot_minutes = 60
+    slot_minutes = _xml_resolution_minutes(find_text(period, "resolution") or "PT60M")
+    explicit     = _xml_extract_points(period, find_all, find_text)
+    if not explicit:
+        return []
 
-        explicit: dict[int, float] = {}
-        for point in find_all(period, "Point"):
-            pos_text   = find_text(point, "position")
-            price_text = find_text(point, "price.amount")
-            if pos_text is None or price_text is None:
-                continue
-            try:
-                explicit[int(pos_text)] = float(price_text)
-            except ValueError:
-                continue
+    return _xml_interpolate_slots(explicit, period_start_utc, period_end_utc, slot_minutes)
 
-        if not explicit:
-            continue
 
-        total_slots = max(explicit.keys())
-        last_price = explicit[min(explicit.keys())]
-        for pos in range(1, total_slots + 1):
-            if pos in explicit:
-                last_price = explicit[pos]
-            slot_start = period_start_utc + timedelta(minutes=slot_minutes * (pos - 1))
-            slot_end   = slot_start + timedelta(minutes=slot_minutes)
-            if slot_start < period_start_utc:
-                continue
-            if period_end_utc and slot_end > period_end_utc:
-                continue
-            prices.append(Slot(
-                slot=len(prices),
-                start=slot_start,
-                end=slot_end,
-                duration_minutes=slot_minutes,
-                price_eur_kwh=last_price / 1000.0,
-            ))
+def _xml_interpolate_slots(
+    explicit: dict[int, float],
+    period_start_utc: datetime,
+    period_end_utc,
+    slot_minutes: int,
+) -> list[Slot]:
+    """Expand sparse {position: price} dict into a full Slot list via forward-fill."""
+    slots      = []
+    last_price = explicit[min(explicit.keys())]
+    for pos in range(1, max(explicit.keys()) + 1):
+        if pos in explicit:
+            last_price = explicit[pos]
+        slot_start = period_start_utc + timedelta(minutes=slot_minutes * (pos - 1))
+        slot_end   = slot_start + timedelta(minutes=slot_minutes)
+        if period_end_utc and slot_end > period_end_utc:
+            break
+        slots.append(Slot(
+            slot=0,
+            start=slot_start,
+            end=slot_end,
+            duration_minutes=slot_minutes,
+            price_eur_kwh=last_price / 1000.0,
+        ))
+    return slots
 
+
+def _xml_deduplicate(slots: list[Slot]) -> list[Slot]:
+    """Sort, deduplicate by start time, and assign sequential ordinals."""
     seen: set[datetime] = set()
-    unique: list[Slot] = []
-    for p in sorted(prices, key=lambda x: x.start):
-        if p.start not in seen:
-            seen.add(p.start)
-            unique.append(p)
+    unique = []
+    for s in sorted(slots, key=lambda x: x.start):
+        if s.start not in seen:
+            seen.add(s.start)
+            unique.append(s)
+    return [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
+                 price_eur_kwh=s.price_eur_kwh, slot=i)
+            for i, s in enumerate(unique)]
 
-    # Re-assign sequential slot ordinals after deduplication
-    unique = [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
-                   price_eur_kwh=s.price_eur_kwh, slot=i)
-              for i, s in enumerate(unique)]
+
+def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[Slot]:
+    """Parse an ENTSO-E Publication_MarketDocument XML response into a Slot list."""
+    root, ns_uri   = _xml_parse_root(xml_text)
+    find_all, find_text = _xml_finders(ns_uri)
+
+    raw: list[Slot] = []
+    for ts in find_all(root, "TimeSeries"):
+        raw.extend(_xml_parse_time_series(ts, find_all, find_text))
+
+    unique = _xml_deduplicate(raw)
 
     if not unique:
         raise PricesNotYetAvailable(
             f"No price slots found for area={area} date={target_date}."
         )
 
-    slot_dur = unique[0].duration_minutes
-    log.info("Fetched %d price slots for %s (resolution: %d-minute)", len(unique), target_date, slot_dur)
+    log.info("Fetched %d price slots for %s (resolution: %d-minute)",
+             len(unique), target_date, unique[0].duration_minutes)
     return unique
+
+
+# ===========================================================================
+# Timezone helpers
+# ===========================================================================
+
+class TzInfo:
+    """Resolved timezone: name (for display) and ZoneInfo object (for conversion)."""
+    __slots__ = ("name", "zone")
+
+    def __init__(self, name: str, zone):
+        self.name = name
+        self.zone = zone
+
+    def __repr__(self) -> str:
+        return f"TzInfo({self.name!r})"
+
+
+def _resolve_tz(config_tz: str | None, ref_date: date) -> "TzInfo":
+    """Return a TzInfo for the given timezone config string.
+
+    config_tz may be an explicit IANA name (e.g. "Europe/Helsinki") or None
+    to auto-detect from the host system. Falls back to UTC if nothing can be
+    determined. An explicit but unrecognised name raises ConfigError.
+    """
+    # Determine timezone name
+    tz_name = config_tz
+    if not tz_name:
+        try:
+            with open("/etc/timezone") as f:
+                tz_name = f.read().strip() or None
+        except OSError:
+            pass
+    if not tz_name:
+        try:
+            import os as _os
+            link = _os.path.realpath("/etc/localtime")
+            marker = "/zoneinfo/"
+            idx = link.find(marker)
+            if idx != -1:
+                tz_name = link[idx + len(marker):] or None
+        except Exception:
+            pass
+    if not tz_name:
+        try:
+            off = datetime.now().astimezone().utcoffset()
+            if off is not None:
+                total_min = int(off.total_seconds() / 60)
+                sign = "+" if total_min >= 0 else "-"
+                h, m = divmod(abs(total_min), 60)
+                tz_name = f"UTC{sign}{h:02d}:{m:02d}"
+        except Exception:
+            pass
+    tz_name = tz_name or "UTC"
+
+    # Resolve to a ZoneInfo object.
+    # If the caller explicitly supplied a timezone name (config_tz) and it is
+    # not recognised, that is a hard configuration error — silently falling back
+    # to UTC would produce quietly wrong window times.
+    # Auto-detected names (config_tz is None) are allowed to fall back to UTC.
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, KeyError):
+        if config_tz:
+            raise ConfigError(
+                f"charging.timezone={config_tz!r} is not a recognised IANA timezone name "
+                f"(e.g. 'Europe/Helsinki', 'UTC'). Check https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+            )
+        log.warning("Could not resolve system timezone %r — falling back to UTC.", tz_name)
+        tz_name = "UTC"
+        tz = timezone.utc
+
+    return TzInfo(tz_name, tz)
 
 
 # ===========================================================================
@@ -1042,71 +1152,6 @@ def merge_continuous_slots(slots: list[Slot]) -> list[tuple[datetime, datetime]]
 
 
 # ===========================================================================
-# Timezone helpers
-# ===========================================================================
-
-def _resolve_tz(config_tz: str | None, ref_date: date):
-    """Return (tz_name, ZoneInfo) for the given timezone config string.
-
-    config_tz may be an explicit IANA name (e.g. "Europe/Helsinki"), a
-    UTC-offset string (e.g. "UTC+02:00"), or None to auto-detect from the
-    host system.  Falls back to UTC if nothing can be determined.
-
-    Returns a ZoneInfo (or timezone.utc) object — not an integer offset.
-    DST transitions are handled correctly because ZoneInfo resolves the
-    actual offset for each specific datetime, not a fixed hourly value.
-    """
-    # Determine timezone name
-    tz_name = config_tz
-    if not tz_name:
-        try:
-            with open("/etc/timezone") as f:
-                tz_name = f.read().strip() or None
-        except OSError:
-            pass
-    if not tz_name:
-        try:
-            import os as _os
-            link = _os.path.realpath("/etc/localtime")
-            marker = "/zoneinfo/"
-            idx = link.find(marker)
-            if idx != -1:
-                tz_name = link[idx + len(marker):] or None
-        except Exception:
-            pass
-    if not tz_name:
-        try:
-            off = datetime.now().astimezone().utcoffset()
-            if off is not None:
-                total_min = int(off.total_seconds() / 60)
-                sign = "+" if total_min >= 0 else "-"
-                h, m = divmod(abs(total_min), 60)
-                tz_name = f"UTC{sign}{h:02d}:{m:02d}"
-        except Exception:
-            pass
-    tz_name = tz_name or "UTC"
-
-    # Resolve to a ZoneInfo object.
-    # If the caller explicitly supplied a timezone name (config_tz) and it is
-    # not recognised, that is a hard configuration error — silently falling back
-    # to UTC would produce quietly wrong window times.
-    # Auto-detected names (config_tz is None) are allowed to fall back to UTC.
-    try:
-        tz = ZoneInfo(tz_name)
-    except (ZoneInfoNotFoundError, KeyError):
-        if config_tz:
-            raise ConfigError(
-                f"charging.timezone={config_tz!r} is not a recognised IANA timezone name "
-                f"(e.g. 'Europe/Helsinki', 'UTC'). Check https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
-            )
-        log.warning("Could not resolve system timezone %r — falling back to UTC.", tz_name)
-        tz_name = "UTC"
-        tz = timezone.utc
-
-    return tz_name, tz
-
-
-# ===========================================================================
 # Plan file — serialise / deserialise
 # ===========================================================================
 
@@ -1421,152 +1466,6 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
 # GitHub Actions job summary
 # ===========================================================================
 
-def render_svg_chart(plan: dict, all_prices: list[Slot]) -> str:
-    """
-    Render an SVG price-area chart with charging windows marked as a bar
-    along the x-axis.  Returns a raw SVG string suitable for saving as
-    chart.svg and uploading as a GitHub Actions artifact.
-
-    Layout (600×220 px):
-      - Filled pink area  : hourly average prices (step chart)
-      - Blue shading      : preferred charging window (if configured)
-      - Purple bar        : scheduled charging windows (bottom strip)
-      - Gridlines + axes  : y = c€/kWh, x = 00:00–24:00 local time
-    """
-    if not all_prices:
-        return ""
-
-    W, H    = 600, 220
-    PAD_L   = 48
-    PAD_R   = 12
-    PAD_T   = 18
-    PAD_B   = 52
-    BAR_H   = 10
-    CHART_W = W - PAD_L - PAD_R
-    CHART_H = H - PAD_T - PAD_B - BAR_H - 4
-
-    offset   = plan["utc_offset_hours"]
-    wins     = plan["windows"]
-    pw_start = plan.get("preferred_window_start")
-    pw_end   = plan.get("preferred_window_end")
-
-    hourly: dict[int, list[float]] = defaultdict(list)
-    for slot in all_prices:
-        h = (slot.start + timedelta(hours=offset)).hour
-        hourly[h].append(slot.price_eur_kwh * 100)
-
-    all_c = [v for vals in hourly.values() for v in vals]
-    if not all_c:
-        return ""
-    max_c   = max(all_c) * 1.15
-    c_range = max_c or 1.0
-
-    def x(hour: float) -> float:
-        return PAD_L + hour / 24 * CHART_W
-
-    def y(price_c: float) -> float:
-        return PAD_T + CHART_H * (1 - price_c / c_range)
-
-    def hm_frac(hhmm: str) -> float:
-        hh, mm = map(int, hhmm.split(":"))
-        return (hh + mm / 60) / 24
-
-    bar_top = PAD_T + CHART_H + 4
-
-    # ── Area path (step chart, one step per slot) ────────────────────────────
-    points: list[tuple[float, float]] = []
-    for slot in sorted(all_prices, key=lambda s: s.start):
-        h_local = (slot.start + timedelta(hours=offset)).hour +                   (slot.start + timedelta(hours=offset)).minute / 60
-        h_end   = h_local + slot.duration_minutes / 60
-        price_c = slot.price_eur_kwh * 100
-        points.append((x(h_local), y(price_c)))
-        points.append((x(h_end),   y(price_c)))
-
-    base_y  = y(0)
-    path_d  = f"M {points[0][0]:.1f},{base_y:.1f} "
-    for px, py in points:
-        path_d += f"L {px:.1f},{py:.1f} "
-    path_d += f"L {points[-1][0]:.1f},{base_y:.1f} Z"
-
-    # ── Preferred window shading ─────────────────────────────────────────────
-    pw_rect = ""
-    if pw_start and pw_end:
-        px1 = x(hm_frac(pw_start) * 24)
-        px2 = x(hm_frac(pw_end)   * 24)
-        pw_rect = (
-            f'<rect x="{px1:.1f}" y="{PAD_T}" '
-            f'width="{px2-px1:.1f}" height="{CHART_H}" '
-            f'fill="#bfdbfe" fill-opacity="0.35"/>'
-        )
-
-    # ── Gridlines & y-labels ─────────────────────────────────────────────────
-    grid_svg = ""
-    for i in range(4):
-        price = max_c * i / 3
-        gy    = y(price)
-        grid_svg += (
-            f'<line x1="{PAD_L:.1f}" y1="{gy:.1f}" '
-            f'x2="{PAD_L+CHART_W:.1f}" y2="{gy:.1f}" '
-            f'stroke="#e5e7eb" stroke-width="1"/>'
-            f'<text x="{PAD_L-4:.1f}" y="{gy+4:.1f}" '
-            f'text-anchor="end" font-size="10" fill="#9ca3af">{price:.1f}</text>'
-        )
-
-    # ── X-axis labels ────────────────────────────────────────────────────────
-    xaxis_svg = ""
-    for h in (0, 6, 12, 18, 24):
-        xv = x(h)
-        xaxis_svg += (
-            f'<text x="{xv:.1f}" y="{bar_top+BAR_H+14:.1f}" '
-            f'text-anchor="middle" font-size="10" fill="#9ca3af">{h}</text>'
-        )
-
-    # ── Charging window bars ─────────────────────────────────────────────────
-    bars_svg = ""
-    for w in wins:
-        x1 = PAD_L + hm_frac(w["start"]) * CHART_W
-        x2 = PAD_L + hm_frac(w["end"])   * CHART_W
-        bars_svg += (
-            f'<rect x="{x1:.1f}" y="{bar_top:.1f}" '
-            f'width="{x2-x1:.1f}" height="{BAR_H}" '
-            f'fill="#7c3aed" rx="2"/>'
-        )
-
-    # ── Legend ───────────────────────────────────────────────────────────────
-    leg_y  = bar_top + BAR_H + 28
-    legend = (
-        f'<rect x="{PAD_L}" y="{leg_y-8}" width="12" height="8" fill="#f9a8b8" rx="1"/>'
-        f'<text x="{PAD_L+16}" y="{leg_y}" font-size="10" fill="#6b7280">Prices</text>'
-        f'<rect x="{PAD_L+62}" y="{leg_y-8}" width="12" height="8" fill="#7c3aed" rx="1"/>'
-        f'<text x="{PAD_L+78}" y="{leg_y}" font-size="10" fill="#6b7280">Charging</text>'
-    )
-    if pw_start and pw_end:
-        legend += (
-            f'<rect x="{PAD_L+152}" y="{leg_y-8}" width="12" height="8" fill="#bfdbfe" rx="1"/>'
-            f'<text x="{PAD_L+168}" y="{leg_y}" font-size="10" fill="#6b7280">Preferred window</text>'
-        )
-
-    # ── Y-axis label ─────────────────────────────────────────────────────────
-    mid_y  = PAD_T + CHART_H // 2
-    ylabel = (
-        f'<text x="10" y="{mid_y}" text-anchor="middle" font-size="10" fill="#d1d5db" '
-        f'transform="rotate(-90,10,{mid_y})">c€/kWh</text>'
-    )
-
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" '
-        f'viewBox="0 0 {W} {H}" width="{W}" height="{H}" '
-        f'style="font-family:sans-serif;background:#ffffff">'
-        f'{pw_rect}{grid_svg}'
-        f'<path d="{path_d}" fill="#fecdd3" fill-opacity="0.7" stroke="#fb7185" stroke-width="1.5"/>'
-        f'<rect x="{PAD_L}" y="{bar_top}" width="{CHART_W}" height="{BAR_H}" fill="#f3f4f6" rx="2"/>'
-        f'{bars_svg}'
-        f'<line x1="{PAD_L}" y1="{PAD_T}" x2="{PAD_L}" y2="{PAD_T+CHART_H}" stroke="#d1d5db" stroke-width="1"/>'
-        f'<line x1="{PAD_L}" y1="{PAD_T+CHART_H}" x2="{PAD_L+CHART_W}" y2="{PAD_T+CHART_H}" stroke="#d1d5db" stroke-width="1"/>'
-        f'{xaxis_svg}{ylabel}{legend}'
-        f'</svg>'
-    )
-
 
 def write_gha_summary(plans: "list[dict]", all_prices: list[Slot]) -> None:
     """Write a combined GitHub Actions job summary for all profiles."""
@@ -1574,59 +1473,11 @@ def write_gha_summary(plans: "list[dict]", all_prices: list[Slot]) -> None:
     if not summary_path:
         return
 
-    first = plans[0]
-    ps    = first["price_stats"]
-    md    = [f"## ✅ Charging Plan — {first['date']}", ""]
-    md   += [
-        "| | |", "|---|---|",
-        f"| **Date** | {first['date']} |",
-        f"| **Area** | {first['area']} |",
-        f"| **Source** | {first['price_source']} |",
-        f"| **Timezone** | {first['timezone']} (UTC{first['utc_offset_hours']:+d}) |",
-        f"| **Market prices** | {ps['min_cents_kwh']:.2f} – {ps['max_cents_kwh']:.2f} c€/kWh (avg {ps['avg_cents_kwh']:.2f}) |",
-        "",
-    ]
-
+    first       = plans[0]
+    market_avg  = first["price_stats"]["avg_cents_kwh"]
+    md          = _gha_summary_header(first)
     for plan in plans:
-        profile = plan.get("profile", "default")
-        req  = plan["required_minutes"]
-        tot  = plan["total_minutes"]
-        avg  = plan["avg_price_cents_kwh"]
-        wins = plan["windows"]
-        savings_pct = (1 - avg / ps["avg_cents_kwh"]) * 100 if ps["avg_cents_kwh"] else 0
-        md += [f"### {profile}", ""]
-        md += [
-            f"| **Required** | {req // 60}h {req % 60:02d}min |" if req % 60 else f"| **Required** | {req // 60}h |",
-            (f"| **Scheduled** | {tot // 60}h {tot % 60:02d}min ⚠️ **incomplete** |" if tot < req
-             else f"| **Scheduled** | {tot // 60}h |" if tot % 60 == 0
-             else f"| **Scheduled** | {tot // 60}h {tot % 60:02d}min |"),
-            f"| **Avg price** | **{avg:.2f} c€/kWh** ({abs(savings_pct):.0f}% {'below' if savings_pct >= 0 else 'above'} market avg) |",
-            "",
-        ]
-        if wins:
-            md.append("| # | Start | End | Duration | Avg price |")
-            md.append("|---|---|---|---|---|")
-            for i, w in enumerate(wins, 1):
-                md.append(
-                    f"| {i} | {w['start']} | {w['end']} | "
-                    f"{w['duration_minutes']} min | {w['avg_price_cents_kwh']:.2f} c€/kWh |"
-                )
-            md.append("")
-        else:
-            md += ["_No windows selected._", ""]
-
-    if all_prices:
-        svg = render_svg_chart(first, all_prices)
-        if svg:
-            chart_path = "chart.svg"
-            try:
-                with open(chart_path, "w", encoding="utf-8") as _cf:
-                    _cf.write(svg)
-                log.info("Price chart saved to %s", chart_path)
-                md += ["### Price profile", "",
-                       "chart.svg is included in the run artifact.", ""]
-            except OSError as _ce:
-                log.warning("Could not save chart: %s", _ce)
+        md += _gha_summary_profile(plan, market_avg)
 
     try:
         with open(summary_path, "a", encoding="utf-8") as f:
@@ -1723,8 +1574,7 @@ def _select_slots(
 
 def _plan_one_profile(
     cfg:          "Config",
-    cfg_tz,
-    cfg_tz_name:  str,
+    tz:           "TzInfo",
     all_prices:   "list[Slot]",
     price_source: str,
     output_dir:   str,
@@ -1733,16 +1583,16 @@ def _plan_one_profile(
     log.info("=== Profile: %s ===", cfg.name)
 
     win_start_utc, win_end_utc = _resolve_window_utc(
-        cfg.preferred_window_start, cfg.preferred_window_end, cfg_tz
+        cfg.preferred_window_start, cfg.preferred_window_end, tz.zone
     )
     log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
 
     # plan_date: the local calendar date the window starts on
-    plan_date = win_start_utc.astimezone(cfg_tz).date()
+    plan_date = win_start_utc.astimezone(tz.zone).date()
 
-    # display_prices: all fetched slots whose local date is plan_date (for chart/stats)
+    # display_prices: all fetched slots whose local date is plan_date (for price stats)
     display_prices = [s for s in all_prices
-                      if s.start.astimezone(cfg_tz).date() == plan_date]
+                      if s.start.astimezone(tz.zone).date() == plan_date]
 
     earliest_useful  = win_start_utc - timedelta(minutes=cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
@@ -1761,8 +1611,8 @@ def _plan_one_profile(
         selected=selected,
         windows=windows,
         required_minutes=cfg.required_minutes,
-        tz=cfg_tz,
-        timezone_name=cfg_tz_name,
+        tz=tz.zone,
+        timezone_name=tz.name,
         merged_starts=merged_starts,
         preferred_window_start=cfg.preferred_window_start,
         preferred_window_end=cfg.preferred_window_end,
@@ -1785,9 +1635,9 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
         sys.exit(1)
 
     cfg0 = configs[0]
-    cfg_tz_name, cfg_tz = _resolve_tz(cfg0.timezone_str, datetime.now(tz=timezone.utc).date())
-    log.info("Timezone: %s (UTC%+d)", cfg_tz_name,
-             int(datetime.now(tz=cfg_tz).utcoffset().total_seconds() / 3600))
+    tz = _resolve_tz(cfg0.timezone_str, datetime.now(tz=timezone.utc).date())
+    log.info("Timezone: %s (UTC%+d)", tz.name,
+             int(datetime.now(tz=tz.zone).utcoffset().total_seconds() / 3600))
 
     all_prices, price_source = _fetch_prices(cfg0)
 
@@ -1795,7 +1645,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     display_for_summary = None
     for cfg in configs:
         plan, display_prices = _plan_one_profile(
-            cfg, cfg_tz, cfg_tz_name, all_prices, price_source, output_dir,
+            cfg, tz, all_prices, price_source, output_dir,
         )
         plans.append(plan)
         if display_for_summary is None:

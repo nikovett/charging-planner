@@ -26,7 +26,6 @@ The script makes a single API call to fetch all available day-ahead prices, then
   ══════════════════════════════════════════════════════════════════
 ```
 
-Terminal output is colour-coded: market price stats are shown in green (min) / yellow (avg) / red (max), and each charging window bar is coloured green→yellow→red by its price relative to the day's range.
 
 ---
 
@@ -134,7 +133,7 @@ The workflow runs daily at 12:30 UTC — 14:30 Helsinki time in winter (EET, UTC
 
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 
-Each successful run writes a formatted markdown summary to the GitHub Actions job view and uploads a run artifact containing all `plan-{name}.json` files and a `chart.svg` price chart. To view the chart: open any workflow run → click the artifact → download the zip → open `chart.svg` in a browser.
+Each successful run writes a formatted markdown summary to the GitHub Actions job view and uploads a run artifact containing all `plan-{name}.json` files.
 
 ---
 
@@ -180,7 +179,7 @@ One `plan-{name}.json` file is written per profile:
 
 `window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems. `utc_offset_hours` is for display only; all internal scheduling is UTC-native.
 
-`price_stats` reflects the plan date's prices only and does not include spill slots from the current evening. This means `avg_price_cents_kwh` can occasionally be lower than `price_stats.min_cents_kwh` when spillover selected cheap slots from earlier today.
+`price_stats` reflects the plan date's prices only and does not include any spill slots from the current evening.
 
 ### OCPP smart charging
 
@@ -209,17 +208,82 @@ This is compatible with **OCPP 1.6**, **2.0.1**, and **2.1** — pass as `csChar
 
 Charging windows run at `max_charging_rate` (default 11 kW); gaps between windows are explicitly set to `limit: 0` so the charger does not charge outside the planned slots. `validFrom`/`validTo` bound the profile to the planned day.
 
-**OCPP 2.0.1 and 2.1** use `id` instead of `chargingProfileId` — generate the correct version with `build_ocpp_charging_profile(plan, ocpp_version="2.0.1")`.
+**OCPP 2.0.1 and 2.1** use `id` instead of `chargingProfileId`. If you are integrating directly with the script, call `build_ocpp_charging_profile(plan, ocpp_version="2.0.1")` to generate the correct structure for your CSMS.
 
-### Price chart
+### Plan JSON
 
-The `chart.svg` included in each GitHub Actions run artifact shows the full day's prices alongside the scheduled windows:
+One `plan-{name}.json` file is written per profile:
 
-![Price chart](example_chart.svg)
+```json
+{
+  "version": 1,
+  "date": "2026-03-15",
+  "area": "FI",
+  "price_source": "ENTSO-E",
+  "timezone": "Europe/Helsinki",
+  "utc_offset_hours": 2,
+  "profile": "overnight",
+  "price_stats": {
+    "min_cents_kwh": 0.82,
+    "max_cents_kwh": 7.21,
+    "avg_cents_kwh": 3.14
+  },
+  "required_minutes": 360,
+  "total_minutes": 360,
+  "avg_price_cents_kwh": 0.91,
+  "preferred_window_start": "22:00",
+  "preferred_window_end": "06:30",
+  "windows": [
+    {
+      "start": "00:00",
+      "end": "06:00",
+      "duration_minutes": 360,
+      "avg_price_cents_kwh": 0.91,
+      "gap_merged": false
+    }
+  ],
+  "window_starts_utc": ["2026-03-14T22:00:00+00:00"],
+  "window_ends_utc":   ["2026-03-15T04:00:00+00:00"],
+  "ocpp_charging_profile": { ... }
+}
+```
+
+`window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems. `utc_offset_hours` is for display only; all internal scheduling is UTC-native.
+
+`price_stats` reflects the plan date's prices only and does not include any spill slots from the current evening.
+
+### OCPP smart charging
+
+Each plan includes an `ocpp_charging_profile` field containing a ready-to-use OCPP `ChargingProfile` object:
+
+```json
+"ocpp_charging_profile": {
+  "chargingProfileId": 1,
+  "stackLevel": 0,
+  "chargingProfilePurpose": "TxDefaultProfile",
+  "chargingProfileKind": "Absolute",
+  "validFrom": "2026-03-14T22:00:00+00:00",
+  "validTo":   "2026-03-15T04:00:00+00:00",
+  "chargingSchedule": {
+    "startSchedule":    "2026-03-14T22:00:00+00:00",
+    "duration":         21600,
+    "chargingRateUnit": "W",
+    "chargingSchedulePeriod": [
+      { "startPeriod": 0, "limit": 11000.0 }
+    ]
+  }
+}
+```
+
+This is compatible with **OCPP 1.6**, **2.0.1**, and **2.1** — pass as `csChargingProfiles` in a `SetChargingProfile.req` message. The profile is `TxDefaultProfile` (`Absolute` kind), meaning it applies automatically to any transaction started on the EVSE without needing a transaction ID in advance.
+
+Charging windows run at `max_charging_rate` (default 11 kW); gaps between windows are explicitly set to `limit: 0` so the charger does not charge outside the planned slots. `validFrom`/`validTo` bound the profile to the planned day.
+
+**OCPP 2.0.1 and 2.1** use `id` instead of `chargingProfileId`. If you are integrating directly with the script, call `build_ocpp_charging_profile(plan, ocpp_version="2.0.1")` to generate the correct structure for your CSMS.
 
 ### Phone notification (ntfy)
 
-The GitHub Actions workflow sends a push notification via [ntfy.sh](https://ntfy.sh) after each successful run. Install the ntfy app on iOS or Android and subscribe to your topic.
+The GitHub Actions workflow sends a push notification via [ntfy.sh](https://ntfy.sh) after each successful run. The topic name is set in `schedule.yml` — replace `entsoe-charging-f7x3k2` with your own. Install the ntfy app on iOS or Android, subscribe to that topic, and you will receive the plan each afternoon.
 
 All profiles are included in a single message, ordered by required hours ascending:
 
