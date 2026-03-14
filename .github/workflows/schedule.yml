@@ -172,7 +172,12 @@ jobs:
               else:
                   win_lines = "No windows selected"
 
-              sections.append(f"{profile}\n{win_lines}\n{make_ruler(plan)}")
+              req = plan["required_minutes"]
+              tot = plan["total_minutes"]
+              def fmt_h(m):
+                  return f"{m // 60}h" if m % 60 == 0 else f"{m // 60}h{m % 60:02d}m"
+              summary = f"{fmt_h(tot)}/{fmt_h(req)}" + (" ⚠️" if tot < req else "")
+              sections.append(f"{profile}  {summary}\n{win_lines}\n{make_ruler(plan)}")
 
           message = "\n\n".join(sections)
 
