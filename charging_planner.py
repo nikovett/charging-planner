@@ -1522,7 +1522,8 @@ def _gha_summary_profile(plan: dict, market_avg: float) -> list[str]:
     return md
 
 
-def write_gha_summary(plans: "list[dict]", all_prices: list[Slot]) -> None:
+def write_gha_summary(plans: "list[dict]", all_prices: list[Slot],
+                      skipped: "list[str] | None" = None) -> None:
     """Write a combined GitHub Actions job summary for all profiles."""
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
@@ -1533,6 +1534,17 @@ def write_gha_summary(plans: "list[dict]", all_prices: list[Slot]) -> None:
     md          = _gha_summary_header(first)
     for plan in plans:
         md += _gha_summary_profile(plan, market_avg)
+
+    if skipped:
+        md += [
+            "### ⏳ Skipped profiles", "",
+            "Prices not yet published for the following profiles — "
+            "they will be planned in tomorrow's run:",
+            "",
+        ]
+        for name in skipped:
+            md.append(f"- **{name}**")
+        md.append("")
 
     try:
         with open(summary_path, "a", encoding="utf-8") as f:
@@ -1755,8 +1767,15 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
 
     if skipped:
         log.warning("Skipped profiles (prices not yet available): %s", ", ".join(skipped))
+        github_output = os.environ.get("GITHUB_OUTPUT")
+        if github_output:
+            try:
+                with open(github_output, "a") as f:
+                    f.write(f"skipped_profiles={','.join(skipped)}\n")
+            except OSError as exc:
+                log.warning("Could not write skipped_profiles to GITHUB_OUTPUT: %s", exc)
 
-    write_gha_summary(plans, display_for_summary or [])
+    write_gha_summary(plans, display_for_summary or [], skipped=skipped)
     return plans
 
 # ===========================================================================
