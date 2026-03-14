@@ -110,9 +110,20 @@ jobs:
               r_start = (r_start // 60) * 60
               r_end   = ((r_end + 59) // 60) * 60
 
+              # Compute bucket size from the unpadded span, then add one bucket
+              # of padding on each side for context.
               span    = r_end - r_start
               bucket  = max(15, (span + chars - 1) // chars)
               bucket  = ((bucket + 14) // 15) * 15
+              if overnight:
+                  r_start = max(0, r_start - bucket)
+                  r_end   = min(pw_s + DAY, r_end + bucket)
+              else:
+                  r_start = max(0, r_start - bucket)
+                  r_end   = min(DAY, r_end + bucket)
+              r_start = (r_start // 60) * 60
+              r_end   = ((r_end + 59) // 60) * 60
+              span    = r_end - r_start
               n_chars = span // bucket
 
               def in_window(slot_min):
