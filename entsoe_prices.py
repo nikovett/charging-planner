@@ -363,27 +363,21 @@ def fetch_entsoe_prices(
     api_key: str,
     area: str,
     target_date: date,
-    tz=timezone.utc,
 ) -> list[Slot]:
-    """Fetch day-ahead prices for today and tomorrow in a single API call.
+    """Fetch day-ahead prices for target_date in a single API call.
 
-    ENTSO-E always returns two complete 23:00–23:00 UTC TimeSeries periods:
-      - (target_date - 1)T23:00Z – target_dateT23:00Z  →  today's prices
-      - target_dateT23:00Z – (target_date + 1)T23:00Z  →  tomorrow's prices
-
-    Both periods arrive in one response.  Today's slots whose local date equals
-    target_date are included so that the 00:00–01:00 local slot (which belongs
-    to the previous UTC day's TimeSeries for UTC+ timezones) is never omitted.
-    Remaining today slots >= now are also included for leftward spillover.
-    If tomorrow's TimeSeries contains fewer than 23 h of slots, prices have
-    not been published yet and PricesNotYetAvailable is raised.
+    Requests a window wide enough to cover local midnight for UTC+ timezones.
+    Returns all slots that are not already in the past, plus all target_date
+    slots regardless — so local-midnight slots are never dropped.
+    If target_date has fewer than 23 h of slots, PricesNotYetAvailable is raised.
     """
     eic = _resolve_area(area)
 
     # Request window spans both periods in one call:
-    #   from: (target_date - 1) 23:00 UTC  (= start of today's period)
+    #   from: (target_date - 1) 20:00 UTC — 3h before ENTSO-E's 23:00 boundary,
+    #         covering local midnight for timezones up to UTC+3 (EEST)
     #   to:   (target_date + 1) 23:00 UTC  (= end of tomorrow's period)
-    period_start = (target_date - timedelta(days=1)).strftime("%Y%m%d2300")
+    period_start = (target_date - timedelta(days=1)).strftime("%Y%m%d2000")
     period_end   = (target_date + timedelta(days=1)).strftime("%Y%m%d2300")
     url = (
         f"{ENTSOE_API}"
@@ -403,13 +397,8 @@ def fetch_entsoe_prices(
         raise
     all_slots = _parse_entsoe_xml(raw, target_date, area)
 
-    # Check that tomorrow's period is actually published.
-    # ENTSO-E TimeSeries boundary: today  = (target_date-1)T23:00Z – target_dateT23:00Z
-    #                              tomorrow= (target_date-1)T23:00Z is the START of today,
-    # so tomorrow's slots begin at (target_date-1)T23:00Z local-day boundary.
-    # target_date=2026-03-14 → today's TS: 2026-03-12T23:00Z–2026-03-13T23:00Z
-    #                          tomorrow's TS: 2026-03-13T23:00Z–2026-03-14T23:00Z
-    # So tomorrow starts at (target_date - 1)T23:00Z.
+    # Check that target_date's prices are actually published.
+    # ENTSO-E's day boundary is 23:00 UTC; target_date's slots start there.
     tomorrow_start_utc = datetime.combine(
         target_date - timedelta(days=1), time(23, 0), tzinfo=timezone.utc
     )
@@ -421,22 +410,16 @@ def fetch_entsoe_prices(
             f"({len(target_slots)} slots) — tomorrow's prices not published yet."
         )
 
-    # Include today's slots that are either:
-    #   (a) local date == target_date — catches the 00:00–01:00 local slot that
-    #       starts before tomorrow_start_utc in UTC+ timezones, or
-    #   (b) >= now — remaining slots available for leftward spillover.
-    now_utc     = datetime.now(tz=timezone.utc)
-    today_slots = [
-        s for s in all_slots
-        if s.start < tomorrow_start_utc
-        and (s.start.astimezone(tz).date() == target_date or s.start >= now_utc)
-    ]
-    log.info("Today's slots included (local target_date or >= now): %d", len(today_slots))
+    # Keep all slots that are not already in the past — don't filter by period
+    # boundaries or local date. Whatever ENTSO-E returned in our request window
+    # is valid data; discarding any of it risks dropping local-midnight slots.
+    now_utc = datetime.now(tz=timezone.utc)
+    usable  = [s for s in all_slots if s.start >= now_utc or s.start >= tomorrow_start_utc]
+    log.info("Usable slots (not in the past): %d", len(usable))
 
-    combined_raw = sorted(today_slots + target_slots, key=lambda x: x.start)
     combined = [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
                      price_eur_kwh=s.price_eur_kwh, slot=i)
-                for i, s in enumerate(combined_raw)]
+                for i, s in enumerate(sorted(usable, key=lambda x: x.start))]
     return combined
 
 
@@ -1479,10 +1462,10 @@ def _plan_target_date(timezone_str: Optional[str]) -> date:
     return target
 
 
-def _fetch_prices(cfg: Config, target_date: date, cfg_tz) -> tuple[list[Slot], str]:
+def _fetch_prices(cfg: Config, target_date: date) -> tuple[list[Slot], str]:
     """Fetch ENTSO-E prices for target_date.  Exits the process on failure."""
     try:
-        prices = fetch_entsoe_prices(cfg.api_key, cfg.area, target_date, tz=cfg_tz)
+        prices = fetch_entsoe_prices(cfg.api_key, cfg.area, target_date)
         return prices, "ENTSO-E"
     except PricesNotYetAvailable:
         log.warning(
@@ -1583,7 +1566,7 @@ def cmd_plan(raw_config: dict, output_path: str) -> dict:
     log.info("Timezone: %s (UTC%+d)", cfg_tz_name,
              int(_noon.utcoffset().total_seconds() / 3600))
 
-    all_prices, price_source = _fetch_prices(cfg, target_date, cfg_tz)
+    all_prices, price_source = _fetch_prices(cfg, target_date)
 
     # Resolve preferred window HH:MM → UTC once; all downstream code uses UTC.
     win_start_utc = _hhmm_to_utc(cfg.preferred_window_start, target_date, cfg_tz)
