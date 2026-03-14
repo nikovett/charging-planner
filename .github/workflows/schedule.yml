@@ -165,7 +165,7 @@ jobs:
                   win_lines = "\n".join(
                       f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
                       + (" ⚡ merged" if w.get("gap_merged") else "")
-                      + (" ⚠️ outside window" if outside_window(w) else "")
+                      + (" ↖ outside window" if outside_window(w) else "")
                       for w in wins
                   )
               else:
@@ -175,7 +175,7 @@ jobs:
               tot = plan["total_minutes"]
               def fmt_h(m):
                   return f"{m // 60}h" if m % 60 == 0 else f"{m // 60}h{m % 60:02d}m"
-              summary = f"{fmt_h(tot)}/{fmt_h(req)}" + (" ⚠️" if tot < req else "")
+              summary = f"{fmt_h(tot)}/{fmt_h(req)}" + (" ⚠️ charge plan not possible" if tot < req else "")
               sections.append(f"{profile}  {summary}\n{win_lines}\n{make_ruler(plan)}")
 
           message = "\n\n".join(sections)
