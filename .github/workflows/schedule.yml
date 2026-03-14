@@ -1,9 +1,9 @@
-name: ENTSO-E Charging Plan
+name: Charging Planner
 
 on:
   schedule:
     - cron: '30 12 * * *'   # 12:30 UTC = 15:30 EEST (summer) / 14:30 EET (winter)
-                            # One run covers both DST states. Prices publish ~13:00 CET
+                            # One run covers both DST states. Prices publish ~12:00 UTC
                             # so this always lands after publication.
   workflow_dispatch:
 
@@ -30,14 +30,14 @@ jobs:
           charging:
             - name: "topup"
               required_hours: 2
-              contiguous_only: false
+              continuous_only: false
               min_slot_minutes: 30
               preferred_window_start: "00:00"
               preferred_window_end: "06:30"
               timezone: "Europe/Helsinki"
             - name: "overnight"
               required_hours: 6
-              contiguous_only: true
+              continuous_only: true
               min_slot_minutes: 30
               preferred_window_start: "22:00"
               preferred_window_end: "06:30"
@@ -47,7 +47,7 @@ jobs:
       - name: Build plan
         id: plan
         run: |
-          python entsoe_prices.py --output-dir . && {
+          python charging_planner.py --output-dir . && {
             echo "prices_available=true" >> $GITHUB_OUTPUT
             echo "plan_date=$(python -c "import glob,json; f=sorted(glob.glob('plan-*.json'))[0]; print(json.load(open(f))['date'])")" >> $GITHUB_OUTPUT
             for f in plan-*.json; do echo "=== $f ===" && cat "$f"; done
