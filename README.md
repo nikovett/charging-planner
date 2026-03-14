@@ -93,11 +93,20 @@ Each profile produces its own `plan-{name}.json` output file.
 
 ### Preferred window behaviour
 
-The planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`. To impose no restriction on timing, set `preferred_window_start: "00:00"` and `preferred_window_end: "23:59"`.
+**Which night is planned** — the planner always targets the next possible upcoming occurrence of the window:
 
-**Overnight windows** — if `preferred_window_end` is earlier in the day than `preferred_window_start`, the window wraps midnight. For example, `22:00`–`06:30` covers 22:00 tonight through 06:30 tomorrow morning.
+| Time | Window | Plans |
+|---|---|---|
+| 14:30 | `20:30–23:45` | tonight (window not yet started) |
+| 22:00 | `20:30–23:45` | tomorrow (window already started) |
+| 14:30 | `00:00–06:30` | tomorrow (window passed earlier today) |
+| 14:30 | `22:00–06:30` | tonight (overnight, window not yet started) |
 
-**`continuous_only` and spill** — when `continuous_only: true` and `required_hours` exceeds the window length, the single block extends leftward past the window start. `preferred_window_end` is always the hard ceiling — no slot is ever scheduled after it.
+The scheduled cron at 12:30 UTC lands after price publication and before any reasonable evening window start, so in normal operation the target is always predictable.
+
+**Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`. To impose no restriction on timing, set `preferred_window_start: "00:00"` and `preferred_window_end: "23:59"`.
+
+**Continuous block and spill** — when `continuous_only: true` and `required_hours` exceeds the window length, the single block extends leftward past the window start. `preferred_window_end` is always the hard ceiling — no slot is ever scheduled after it.
 
 **Guaranteed charge until departure time** — setting `required_hours` longer than the window with `continuous_only: true` ensures the block always ends exactly at `preferred_window_end`. For example, `preferred_window_start: "01:00"`, `preferred_window_end: "06:30"`, `required_hours: 8` always produces a block ending at 06:30 and starting as early as 22:30 the previous evening. The planner finds the cheapest available 8h slot that fits before the deadline. A practical benefit for EVs in cold climates is that charging ends close to departure, leaving the battery warm and improving range.
 
@@ -302,14 +311,14 @@ overnight  6h/6h
 21:00 ░████████████▒░░ 07:00
 ```
 
-If a profile cannot meet `required_hours` despite prices being available — for example because `max_price_cents_kwh` excludes too many slots, or the window is shorter than required — the hours are flagged: `topup  1h/2h ⚠️`. This indicates a configuration issue rather than missing data.
+If a profile cannot meet `required_hours` despite prices being available — for example because `max_price_cents_kwh` excludes too many slots — the hours are flagged: `topup  1h/2h ⚠️ charge plan not possible`.
 
 The ruler spans the preferred charging window: `█` = scheduled, `▒` = unscheduled inside window, `░` = outside window. The ruler expands automatically if any slots fall outside the preferred window.
 
 | Indicator | Meaning |
 |---|---|
 | `⚡ merged` | Gap between two blocks was bridged by gap merging |
-| `⚠️ outside window` | Window falls outside the preferred charging window |
+| `↖ outside window` | Slots were scheduled outside the preferred window because `required_hours` exceeded the window length — this is expected behaviour, not an error |
 
 ---
 
