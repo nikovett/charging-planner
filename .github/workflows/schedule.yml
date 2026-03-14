@@ -181,7 +181,7 @@ jobs:
           message = "\n\n".join(sections)
 
           req = urllib.request.Request(
-              "https://ntfy.sh/entsoe-charging-f7x3k2",
+              "https://ntfy.sh/${{ secrets.NTFY_TOPIC }}",
               data=message.encode(),
               method="POST",
               headers={
