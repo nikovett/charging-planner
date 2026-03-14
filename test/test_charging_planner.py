@@ -992,6 +992,68 @@ class TestSelectWithMinBlock(unittest.TestCase):
             self.assertGreaterEqual(duration, 30,
                 f"Block of {duration} min is shorter than min_slot_minutes=30")
 
+
+class TestWindowCoverageCheck(unittest.TestCase):
+    """_check_window_coverage exits cleanly when prices are not yet published."""
+
+    def _window(self):
+        return _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=REF_DATE)
+
+    def test_full_coverage_does_not_exit(self):
+        ws, we = self._window()
+        # Build slots covering the full window
+        slots = slots_from(ws, int((we - ws).total_seconds() // 900))
+        from charging_planner import _check_window_coverage
+        # Should not raise SystemExit
+        _check_window_coverage(slots, ws, we, "test")
+
+    def test_empty_slots_exits(self):
+        ws, we = self._window()
+        from charging_planner import _check_window_coverage
+        with self.assertRaises(SystemExit) as ctx:
+            _check_window_coverage([], ws, we, "test")
+        self.assertEqual(ctx.exception.code, 0)
+
+    def test_partial_coverage_below_threshold_exits(self):
+        ws, we = self._window()
+        # Only cover 50% of the window
+        window_min = int((we - ws).total_seconds() // 60)
+        slots = slots_from(ws, window_min // 30)  # half the slots
+        from charging_planner import _check_window_coverage
+        with self.assertRaises(SystemExit) as ctx:
+            _check_window_coverage(slots, ws, we, "test")
+        self.assertEqual(ctx.exception.code, 0)
+
+    def test_coverage_above_threshold_does_not_exit(self):
+        ws, we = self._window()
+        # Cover 95% of window
+        window_min = int((we - ws).total_seconds() // 60)
+        slots = slots_from(ws, int(window_min * 0.95 // 15))
+        from charging_planner import _check_window_coverage
+        _check_window_coverage(slots, ws, we, "test")  # must not raise
+
+    def test_cmd_plan_exits_when_prices_missing(self):
+        """cmd_plan exits cleanly if fetched prices don't cover any profile's window."""
+        from charging_planner import cmd_plan
+        import unittest.mock as mock
+
+        # Only 1h of prices — far below 90% of any window
+        one_hour = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 4)
+        with mock.patch("charging_planner.fetch_entsoe_prices",
+                        return_value=one_hour):
+            with self.assertRaises(SystemExit) as ctx:
+                cmd_plan({
+                    "entsoe": {"api_key": "x", "area": "FI"},
+                    "charging": [{
+                        "name": "topup",
+                        "required_hours": 2,
+                        "preferred_window_start": "00:00",
+                        "preferred_window_end": "06:30",
+                        "timezone": "Europe/Helsinki",
+                    }],
+                }, output_dir="/tmp")
+        self.assertEqual(ctx.exception.code, 0)
+
 # ===========================================================================
 # 10. End-to-end pipeline
 # ===========================================================================
@@ -1024,10 +1086,14 @@ class TestEndToEnd(unittest.TestCase):
     }
 
     def _make_prices(self):
-        """96 slots covering a full day, cheap 22:00–07:00 Helsinki."""
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)  # 00:00 Helsinki
+        """192 slots covering 48h, cheap 22:00–07:00 Helsinki.
+
+        Wide enough to cover both same-day windows (00:00–06:30 tomorrow)
+        and overnight windows (22:00 tonight – 06:30 tomorrow morning).
+        """
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)  # 22:00 Helsinki
         slots = []
-        for i in range(96):
+        for i in range(192):
             t = base + timedelta(minutes=15 * i)
             local_h = t.astimezone(FI_TZ).hour
             price = 1.5 if (local_h < 7 or local_h >= 22) else 8.0
