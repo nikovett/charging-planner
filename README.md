@@ -79,7 +79,7 @@ charging:
   min_slot_minutes: 30
   max_price_cents_kwh: null
   preferred_window_start: "00:00"
-  preferred_window_end: "07:00"
+  preferred_window_end: "06:30"
   timezone: "Europe/Helsinki"
 ```
 
@@ -92,17 +92,17 @@ entsoe:
 
 charging:
   - name: "topup"
-    required_hours: 1
-    contiguous_only: true
+    required_hours: 2
+    contiguous_only: false
     preferred_window_start: "00:00"
-    preferred_window_end: "07:00"
+    preferred_window_end: "06:30"
     timezone: "Europe/Helsinki"
 
   - name: "overnight"
-    required_hours: 4
-    contiguous_only: false
+    required_hours: 6
+    contiguous_only: true
     preferred_window_start: "00:00"
-    preferred_window_end: "07:00"
+    preferred_window_end: "06:30"
     timezone: "Europe/Helsinki"
 ```
 
@@ -121,14 +121,16 @@ charging:
 | `charging.min_slot_minutes` | `30` | Minimum contiguous block length. Must be a multiple of 15 |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | — | **Required.** Start of preferred charging window (`HH:MM`, `00:00`–`23:59`) |
-| `charging.preferred_window_end` | — | **Required.** End of preferred charging window (`HH:MM`, must be after start). Use `23:59` for no restriction. Treat this as your departure time — charging is scheduled as late as possible within this window |
+| `charging.preferred_window_end` | — | **Required.** End of preferred charging window (`HH:MM`). If end is before start the window is treated as overnight and wraps midnight (e.g. `22:00`–`06:30`). Equal start and end is an error. Treat the end time as your departure — charging is scheduled as late as possible within the window |
 | `charging.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from `/etc/timezone`. Used with `zoneinfo` for DST-correct window resolution — the correct UTC offset is applied for each specific date, including DST transition days. An explicit but unrecognised name is a hard config error (exits with a clear message); auto-detection falling back to UTC is allowed silently |
 
 ### Preferred window
 
-The planner fills as many slots as possible from within the preferred window first, then spills over outside it only if needed to meet `required_hours`. This is useful for preferring overnight off-peak hours while still guaranteeing a full charge. To impose no restriction on timing, set `preferred_window_start: "00:00"` and `preferred_window_end: "23:59"`.
+The planner fills as many slots as possible from within the preferred window first, then spills over outside it only if needed to meet `required_hours`. To impose no restriction on timing, set `preferred_window_start: "00:00"` and `preferred_window_end: "23:59"`.
 
-**Spill direction** — spillover never goes *after* `preferred_window_end`. If extra slots are needed they are always taken from before the window start (i.e. earlier in the evening or the current day). The planner fetches today's remaining prices alongside tomorrow's so that spill can reach back into the current evening if necessary.
+**Overnight windows** — if `preferred_window_end` is earlier in the day than `preferred_window_start`, the window is treated as crossing midnight. For example, `22:00`–`06:30` covers 22:00 on the plan date through 06:30 the following morning. Equal start and end times are an error (zero-length window).
+
+**Spill direction** — spillover never goes *after* `preferred_window_end`. If extra slots are needed they are always taken from before the window start. The planner fetches today's remaining prices alongside tomorrow's so that spill can reach back into the current evening if necessary.
 
 **`contiguous_only` and spill** — when `contiguous_only: true` and `required_hours` exceeds the preferred window length, the single contiguous block is extended leftward: charging simply starts earlier than the window start rather than jumping to a separate block later in the day. `preferred_window_end` is always respected as a hard ceiling — no slot will be scheduled after it even in this path. If there are not enough hours available before the window the plan will be short by the deficit (a warning is logged).
 
