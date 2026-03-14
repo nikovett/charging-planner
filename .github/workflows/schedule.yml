@@ -83,18 +83,30 @@ jobs:
               return h * 60 + m
 
           def make_ruler(plan, chars=20):
-              wins     = plan["windows"]
-              pw_start = plan["preferred_window_start"]
-              pw_end   = plan["preferred_window_end"]
-              pw_s = hm(pw_start)
-              pw_e = hm(pw_end) if pw_end != "24:00" else 24 * 60
+              wins      = plan["windows"]
+              pw_start  = plan["preferred_window_start"]
+              pw_end    = plan["preferred_window_end"]
+              pw_s      = hm(pw_start)
+              pw_e_raw  = hm(pw_end) if pw_end != "24:00" else 24 * 60
+              overnight = pw_s > pw_e_raw   # e.g. 22:00–06:30
+              # For overnight windows, shift end into the next-day number line
+              # so all arithmetic stays positive and monotone.
+              DAY = 24 * 60
+              pw_e = pw_e_raw + DAY if overnight else pw_e_raw
+
+              def win_end_min(w):
+                  """Return window end in minutes, shifted +DAY for overnight windows."""
+                  e = hm(w["end"]) if w["end"] != "00:00" else DAY
+                  # A window end that is <= its start is a next-day time
+                  s = hm(w["start"])
+                  return e + DAY if overnight and e <= s else e
 
               # Span: preferred window expanded to cover any spill windows
-              r_start = hm(pw_start)
-              r_end   = hm(pw_end) if pw_end != "24:00" else 24 * 60
+              r_start = pw_s
+              r_end   = pw_e
               for w in wins:
                   r_start = min(r_start, hm(w["start"]))
-                  r_end   = max(r_end, hm(w["end"]) if w["end"] != "00:00" else 24 * 60)
+                  r_end   = max(r_end, win_end_min(w))
               r_start = (r_start // 60) * 60
               r_end   = ((r_end + 59) // 60) * 60
 
@@ -103,32 +115,47 @@ jobs:
               bucket  = ((bucket + 14) // 15) * 15
               n_chars = span // bucket
 
+              def in_window(slot_min):
+                  if overnight:
+                      return slot_min >= pw_s or slot_min < pw_e_raw
+                  return pw_s <= slot_min < pw_e
+
               ruler = []
               for i in range(n_chars):
-                  slot_min = r_start + i * bucket
-                  ruler.append("▒" if pw_s <= slot_min < pw_e else "░")
+                  slot_min = (r_start + i * bucket) % DAY
+                  ruler.append("▒" if in_window(slot_min) else "░")
               for w in wins:
                   s_idx = (hm(w["start"]) - r_start) // bucket
-                  e_idx = ((hm(w["end"]) if w["end"] != "00:00" else 24 * 60) - r_start) // bucket
+                  e_idx = (win_end_min(w) - r_start) // bucket
                   for i in range(max(0, s_idx), min(e_idx, n_chars)):
                       ruler[i] = "█"
 
-              start_label = f"{r_start // 60:02d}:00"
-              end_label   = f"{r_end // 60:02d}:00" if r_end < 24 * 60 else "24:00"
-              return f"{start_label} {''.join(ruler)} {end_label}"
+              # Labels: wrap modulo DAY so e.g. 1560 min shows as 02:00
+              def fmt_min(m):
+                  m = m % DAY
+                  return f"{m // 60:02d}:00"
+              return f"{fmt_min(r_start)} {''.join(ruler)} {fmt_min(r_end)}"
 
           sections = []
           for plan in plans:
-              profile = plan.get("profile", "default")
-              wins    = plan["windows"]
-              pw_s    = hm(plan["preferred_window_start"])
-              pw_e    = hm(plan["preferred_window_end"]) if plan["preferred_window_end"] != "24:00" else 24 * 60
+              profile   = plan.get("profile", "default")
+              wins      = plan["windows"]
+              pw_s      = hm(plan["preferred_window_start"])
+              pw_e_raw  = hm(plan["preferred_window_end"]) if plan["preferred_window_end"] != "24:00" else 24 * 60
+              overnight = pw_s > pw_e_raw
+
+              def outside_window(w):
+                  ws, we = hm(w["start"]), hm(w["end"]) if w["end"] != "00:00" else 24 * 60
+                  if overnight:
+                      # Inside if start >= pw_s OR end <= pw_e_raw
+                      return not (ws >= pw_s or we <= pw_e_raw)
+                  return ws >= pw_e_raw or we <= pw_s
 
               if wins:
                   win_lines = "\n".join(
                       f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
                       + (" ⚡ merged" if w.get("gap_merged") else "")
-                      + (" ⚠️ outside window" if (hm(w["start"]) >= pw_e or hm(w["end"]) <= pw_s) else "")
+                      + (" ⚠️ outside window" if outside_window(w) else "")
                       for w in wins
                   )
               else:
