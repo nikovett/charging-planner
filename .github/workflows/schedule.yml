@@ -28,6 +28,15 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python charging_planner.py --output-dir .
 
+      - name: Deliver to Charge Amps
+        if: steps.plan.outputs.prices_available == 'true'
+        env:
+          CHARGEAMPS_EMAIL:        ${{ secrets.CHARGEAMPS_EMAIL }}
+          CHARGEAMPS_PASSWORD:     ${{ secrets.CHARGEAMPS_PASSWORD }}
+          CHARGEAMPS_CP_TOPUP:     ${{ secrets.CHARGEAMPS_CP_TOPUP }}
+          CHARGEAMPS_CP_OVERNIGHT: ${{ secrets.CHARGEAMPS_CP_OVERNIGHT }}
+        run: python chargeamps/deliver_chargeamps.py plan-*.json --config chargeamps/chargeamps.yaml
+
       - name: Upload plan artifact
         if: steps.plan.outputs.prices_available == 'true'
         uses: actions/upload-artifact@v6
