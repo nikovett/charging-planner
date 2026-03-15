@@ -24,6 +24,8 @@ import argparse
 import json
 import logging
 import os
+import random
+import string
 import sys
 import time
 import urllib.request
@@ -147,36 +149,46 @@ def _ca_request(
 
 
 def ca_login(email: str, password: str) -> tuple[str, str]:
-    """POST /api/auth/login → (token, entitlements_token)."""
+    """Authenticate and return (token, entitlements_token).
+
+    Two-step flow:
+      1. POST /api/auth/login -> bearer token + organizationId from user.claims
+      2. POST /api/entitlements/context -> entitlements token
+    """
+    # Step 1 — login
     resp = _ca_request(
         "/auth/login",
         method="POST",
         body={"email": email, "password": password, "hostName": "my.charge.space"},
     )
     token = resp.get("token", "")
-    entitlements_token = resp.get("entitlementsToken", "")
     if not token:
-        raise RuntimeError(
-            f"Charge Amps login failed — no token in response: {resp}"
-        )
-    log.info("Charge Amps login OK (expires: %s)", resp.get("tokenExpires", "?"))
-    return token, entitlements_token
+        raise RuntimeError(f"Charge Amps login failed — no token in response: {resp}")
+    log.info("Charge Amps login OK")
 
+    # Step 2 — extract organizationId from user.claims (format: "<uuid>:Role")
+    claims = (resp.get("user") or {}).get("claims", [])
+    org_id = ""
+    for claim in claims:
+        if ":" in claim:
+            org_id = claim.split(":")[0]
+            break
+    if not org_id:
+        raise RuntimeError(f"Could not extract organizationId from claims: {claims}")
 
-def ca_get_schedule(
-    charge_point_id: str,
-    token: str,
-    entitlements_token: str,
-) -> dict | None:
-    """GET schedule for a charge point → first schedule dict, or None."""
-    resp = _ca_request(
-        f"/smartChargingSchedules/chargepoint/{charge_point_id}",
+    # Step 3 — fetch entitlements token
+    ent_resp = _ca_request(
+        "/entitlements/context",
+        method="POST",
+        body={"organizationId": org_id},
         token=token,
-        entitlements_token=entitlements_token,
     )
-    if isinstance(resp, list):
-        return resp[0] if resp else None
-    return resp or None
+    entitlements_token = ent_resp.get("token", "")
+    if not entitlements_token:
+        raise RuntimeError(f"No entitlements token in response: {ent_resp}")
+    log.info("Charge Amps entitlements token OK (org: %s)", org_id)
+
+    return token, entitlements_token
 
 
 def ca_week_anchor(tz_name: str, ref_utc: datetime) -> datetime:
@@ -193,13 +205,22 @@ def ca_week_anchor(tz_name: str, ref_utc: datetime) -> datetime:
     return sunday_local.astimezone(timezone.utc)
 
 
+
+_NANOID_CHARS = string.ascii_letters + string.digits
+
+
+def _nanoid(size: int = 21) -> str:
+    """Generate a random nanoid-style ID matching the format used by the web app."""
+    return "".join(random.choices(_NANOID_CHARS, k=size))
+
+
 def ca_build_periods(
     plan: dict,
     tz_name: str,
     max_current: float,
     ref_utc: datetime,
 ) -> tuple[list[dict], str]:
-    """Convert plan windows → Charge Amps schedulePeriods.
+    """Convert plan windows -> Charge Amps schedulePeriods.
 
     Returns (periods, startOfSchedule_iso).
     startOfSchedule is the Sunday anchor formatted as '%Y-%m-%dT%H:%M:%SZ'.
@@ -218,18 +239,23 @@ def ca_build_periods(
         to_sec    = int((end_utc   - anchor_utc).total_seconds())
         if from_sec < 0 or to_sec < 0:
             log.warning(
-                "Window %s–%s is before Sunday anchor %s — skipping period.",
+                "Window %s-%s is before Sunday anchor %s -- skipping period.",
                 start_iso, end_iso, anchor_iso,
             )
             continue
-        periods.append({"from": from_sec, "to": to_sec, "maxCurrent": max_current})
+        periods.append({
+            "id":         _nanoid(),
+            "from":       from_sec,
+            "to":         to_sec,
+            "maxCurrent": max_current,
+        })
 
     return periods, anchor_iso
 
 
+
 def ca_put_schedule(
     plan: dict,
-    existing: dict,
     charge_point_id: str,
     connector_id: int,
     tz_name: str,
@@ -238,17 +264,21 @@ def ca_put_schedule(
     entitlements_token: str,
     ref_utc: datetime,
 ) -> None:
-    """Build and PUT the updated schedule."""
+    """Build and PUT the updated schedule.
+
+    The server assigns a new scheduleId on every PUT regardless of the value
+    sent, so we use 0. No prior GET is needed.
+    """
     periods, anchor_iso = ca_build_periods(plan, tz_name, max_current, ref_utc)
     if not periods:
         raise ValueError("No valid periods generated from plan windows.")
 
     payload = {
-        "scheduleId":      existing["scheduleId"],
+        "scheduleId":      0,
         "chargePointId":   charge_point_id,
         "connectorId":     connector_id,
-        "validFrom":       existing.get("validFrom"),
-        "validTo":         existing.get("validTo"),
+        "validFrom":       None,
+        "validTo":         None,
         "defaultCurrent":  0.0,
         "schedulePeriods": periods,
         "isActive":        True,
@@ -266,13 +296,14 @@ def ca_put_schedule(
     )
 
     windows_str = ", ".join(
-        f"{s}–{e}"
+        f"{s}-{e}"
         for s, e in zip(plan["window_starts_utc"], plan["window_ends_utc"])
     )
     log.info(
         "Delivered: charger=%s connector=%s  windows=%s",
         charge_point_id, connector_id, windows_str,
     )
+
 
 
 # ===========================================================================
@@ -345,33 +376,15 @@ def deliver(plans_by_profile: dict[str, dict], deliveries: list[dict]) -> bool:
             all_ok = False
             continue
 
-        # Fetch existing schedule (need scheduleId)
-        try:
-            existing = ca_get_schedule(cp_id, token, ent_token)
-        except Exception as exc:
-            log.error(
-                "Failed to fetch schedule for %s (profile '%s'): %s",
-                cp_id, profile, exc,
-            )
-            all_ok = False
-            continue
-
-        if existing is None:
-            log.error(
-                "No existing schedule for %s (profile '%s') — cannot update.",
-                cp_id, profile,
-            )
-            all_ok = False
-            continue
 
         log.info(
-            "Delivering profile '%s' → charger %s connector %s (scheduleId=%s)",
-            profile, cp_id, connector_id, existing.get("scheduleId"),
+            "Delivering profile '%s' -> charger %s connector %s",
+            profile, cp_id, connector_id,
         )
 
         try:
             ca_put_schedule(
-                plan, existing, cp_id, connector_id,
+                plan, cp_id, connector_id,
                 tz_name, max_current, token, ent_token, ref_utc,
             )
         except Exception as exc:
