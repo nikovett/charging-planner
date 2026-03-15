@@ -25,3 +25,13 @@ charging:
 ntfy:
   enabled: true
   topic: ""    # never commit — injected at runtime via NTFY_TOPIC environment variable
+
+chargeamps:
+  enabled: true
+  email: ""           # never commit — injected at runtime via CHARGEAMPS_EMAIL env var
+  password: ""        # never commit — injected at runtime via CHARGEAMPS_PASSWORD env var
+  charge_point_id: "020100002836L"
+  connector_id: 1
+  timezone: "Europe/Helsinki"
+  max_current: 16.0
+  profile_name: ""    # leave empty to use the first plan; or set to a profile name e.g. "overnight"
