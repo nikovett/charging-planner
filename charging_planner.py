@@ -1916,6 +1916,20 @@ def _plan_one_profile(
     return plan, display_prices
 
 
+def _write_gha_outputs(plans: "list[dict]") -> None:
+    """Write prices_available and plan_date step outputs to GITHUB_OUTPUT."""
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if not github_output or not plans:
+        return
+    try:
+        with open(github_output, "a") as f:
+            f.write("prices_available=true\n")
+            f.write(f"plan_date={plans[0]['date']}\n")
+    except OSError as exc:
+        log.warning("Could not write to GITHUB_OUTPUT: %s", exc)
+
+
+
 def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     """Fetch all available prices once, run selection for each profile."""
     try:
@@ -1958,6 +1972,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
 
     write_gha_summary(plans, display_for_summary or [], skipped=skipped)
     send_ntfy(plans, skipped, raw_config.get("ntfy", {}))
+    _write_gha_outputs(plans)
     return plans
 
 # ===========================================================================
