@@ -98,6 +98,7 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "topic":   "",   # never commit — use environment variable NTFY_TOPIC
     },
+
 }
 
 
@@ -1927,6 +1928,7 @@ def _write_run_outputs(plans: "list[dict]") -> None:
             f.write(f"plan_date={plans[0]['date']}\n")
     except OSError as exc:
         log.warning("Could not write to GITHUB_OUTPUT: %s", exc)
+
 
 
 
