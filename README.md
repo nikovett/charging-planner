@@ -34,6 +34,7 @@ The script makes a single API call to fetch all available day-ahead prices, then
 - Python 3.11+
 - [`pyyaml`](https://pypi.org/project/PyYAML/) — `pip install pyyaml`
 - An ENTSO-E API key (free)
+- [ntfy app](https://ntfy.sh) on iOS or Android (optional — for push notifications)
 
 No other dependencies. The script uses only the standard library, including [`zoneinfo`](https://docs.python.org/3/library/zoneinfo.html) (stdlib since Python 3.9) for DST-correct timezone handling.
 
@@ -43,7 +44,6 @@ No other dependencies. The script uses only the standard library, including [`zo
 2. Email [transparency@entsoe.eu](mailto:transparency@entsoe.eu) to request API access
 3. Your key will appear under **My Account → Security Tokens**
 
-Day-ahead prices are published at approximately 12:00 UTC each day. If the script runs before publication, or ENTSO-E is delayed, the fetched data will not cover the full preferred window — the script detects this and exits cleanly with a warning rather than producing a meaningless partial plan. Once prices are available the next scheduled run will succeed.
 
 ---
 
@@ -72,6 +72,10 @@ charging:
     preferred_window_start: "22:00"
     preferred_window_end: "06:30"
     timezone: "Europe/Helsinki"
+
+ntfy:
+  enabled: true
+  topic: ""    # never commit — set via NTFY_TOPIC environment variable
 ```
 
 Each profile produces its own `plan-{name}.json` output file.
@@ -90,6 +94,8 @@ Each profile produces its own `plan-{name}.json` output file.
 | `charging.preferred_window_start` | — | **Required.** Start of preferred charging window (`HH:MM`) |
 | `charging.preferred_window_end` | — | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight (overnight). Equal start and end is an error |
 | `charging.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from system. DST transitions are handled correctly via `zoneinfo` |
+| `ntfy.enabled` | `false` | Set to `true` to enable push notifications |
+| `ntfy.topic` | `""` | ntfy topic name — set via `NTFY_TOPIC` environment variable, never commit |
 
 ### Preferred window behaviour
 
@@ -128,7 +134,7 @@ python charging_planner.py --debug
 
 ### GitHub Actions
 
-Place `schedule.yml` in `.github/workflows/`. Add a single repository secret:
+Place `schedule.yml` in `.github/workflows/`. Add the following repository secrets:
 
 ```
 Settings → Secrets and variables → Actions → New repository secret
@@ -137,11 +143,13 @@ Settings → Secrets and variables → Actions → New repository secret
 | Secret | Value |
 |---|---|
 | `ENTSOE_API_KEY` | Your ENTSO-E security token |
-| `NTFY_TOPIC` | Your ntfy topic name (e.g. `my-charging-plan`) |
+| `NTFY_TOPIC` | Your ntfy topic name (e.g. `my-charging-plan`) — optional, only needed if `ntfy.enabled: true` |
 
 Never commit your API key to the repository. The `config.yaml` in the repo should always have an empty `api_key: ""` — the workflow overwrites it at runtime using the secret. The ntfy topic is also a secret so your notification endpoint is not exposed in a public repo.
 
 The workflow runs daily at 12:30 UTC — 14:30 Helsinki time in winter (EET, UTC+2) and 15:30 in summer (EEST, UTC+3). A single cron covers both DST states because 12:30 UTC always lands after ENTSO-E's ~12:00 UTC publication time.
+
+Day-ahead prices are published at approximately 12:00 UTC each day. If the script runs before publication, or ENTSO-E is delayed, the fetched data will not cover the full preferred window — the script detects this and exits cleanly with a warning rather than producing a meaningless partial plan. Once prices are available the next scheduled run will succeed.
 
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 
@@ -222,88 +230,8 @@ Charging windows run at `max_charging_rate` (default 11 kW); gaps between window
 
 **OCPP 2.0.1 and 2.1** use `id` instead of `chargingProfileId`. If you are integrating directly with the script, call `build_ocpp_charging_profile(plan, ocpp_version="2.0.1")` to generate the correct structure for your CSMS.
 
-### Plan JSON
-
-One `plan-{name}.json` file is written per profile:
-
-```json
-{
-  "version": 1,
-  "date": "2026-03-15",
-  "area": "FI",
-  "price_source": "ENTSO-E",
-  "timezone": "Europe/Helsinki",
-  "utc_offset_hours": 2,
-  "profile": "overnight",
-  "price_stats": {
-    "min_cents_kwh": 0.82,
-    "max_cents_kwh": 7.21,
-    "avg_cents_kwh": 3.14
-  },
-  "required_minutes": 360,
-  "total_minutes": 360,
-  "avg_price_cents_kwh": 0.91,
-  "preferred_window_start": "22:00",
-  "preferred_window_end": "06:30",
-  "windows": [
-    {
-      "start": "00:00",
-      "end": "06:00",
-      "duration_minutes": 360,
-      "avg_price_cents_kwh": 0.91,
-      "gap_merged": false
-    }
-  ],
-  "window_starts_utc": ["2026-03-14T22:00:00+00:00"],
-  "window_ends_utc":   ["2026-03-15T04:00:00+00:00"],
-  "ocpp_charging_profile": { ... }
-}
-```
-
-`window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems. `utc_offset_hours` is for display only; all internal scheduling is UTC-native.
-
-`price_stats` reflects the plan date's prices only and does not include any spill slots from the current evening.
-
-### OCPP smart charging
-
-Each plan includes an `ocpp_charging_profile` field containing a ready-to-use OCPP `ChargingProfile` object:
-
-```json
-"ocpp_charging_profile": {
-  "chargingProfileId": 1,
-  "stackLevel": 0,
-  "chargingProfilePurpose": "TxDefaultProfile",
-  "chargingProfileKind": "Absolute",
-  "validFrom": "2026-03-14T22:00:00+00:00",
-  "validTo":   "2026-03-15T04:00:00+00:00",
-  "chargingSchedule": {
-    "startSchedule":    "2026-03-14T22:00:00+00:00",
-    "duration":         21600,
-    "chargingRateUnit": "W",
-    "chargingSchedulePeriod": [
-      { "startPeriod": 0, "limit": 11000.0 }
-    ]
-  }
-}
-```
-
-This is compatible with **OCPP 1.6**, **2.0.1**, and **2.1** — pass as `csChargingProfiles` in a `SetChargingProfile.req` message. The profile is `TxDefaultProfile` (`Absolute` kind), meaning it applies automatically to any transaction started on the EVSE without needing a transaction ID in advance.
-
-Charging windows run at `max_charging_rate` (default 11 kW); gaps between windows are explicitly set to `limit: 0` so the charger does not charge outside the planned slots. `validFrom`/`validTo` bound the profile to the planned day.
-
-**OCPP 2.0.1 and 2.1** use `id` instead of `chargingProfileId`. If you are integrating directly with the script, call `build_ocpp_charging_profile(plan, ocpp_version="2.0.1")` to generate the correct structure for your CSMS.
-
+---
 ### Phone notification (ntfy)
-
-The planner sends a push notification via [ntfy.sh](https://ntfy.sh) after each run. Enable it in `config.yaml`:
-
-```yaml
-ntfy:
-  enabled: true
-  topic: ""    # set via NTFY_TOPIC environment variable — never commit the actual value
-```
-
-The topic is read from the `NTFY_TOPIC` environment variable at runtime, which is set as a GitHub Actions secret. Install the ntfy app on iOS or Android and subscribe to your topic to receive the plan each afternoon.
 
 All profiles are included in a single message, ordered by required hours ascending:
 
@@ -319,7 +247,6 @@ overnight  6h/6h
 21:00 ░████████████▒░░ 07:00
 ```
 
-If a profile cannot meet `required_hours` despite prices being available — for example because `max_price_cents_kwh` excludes too many slots — the hours are flagged: `topup  1h/2h ⚠️ charge plan not possible`.
 
 The ruler spans the preferred charging window: `█` = scheduled, `▒` = unscheduled inside window, `░` = outside window. The ruler expands automatically if any slots fall outside the preferred window.
 
@@ -329,9 +256,6 @@ The ruler spans the preferred charging window: `█` = scheduled, `▒` = unsche
 | `↖ outside window` | Slots were scheduled outside the preferred window because `required_hours` exceeded the window length — this is expected behaviour, not an error |
 | `⚠️ charge plan not possible` | Required hours could not be met — typically because `max_price_cents_kwh` excludes too many slots or the window is too short |
 
----
-
----
 
 ## Code quality
 
