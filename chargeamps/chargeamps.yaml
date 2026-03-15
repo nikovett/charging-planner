@@ -1,0 +1,28 @@
+# Charge Amps schedule delivery configuration
+#
+# Each entry under 'deliveries' maps a charging profile (from config.yaml)
+# to a specific Charge Amps charger.
+#
+# Credentials are injected via environment variables — never commit real values:
+#   CHARGEAMPS_EMAIL       my.charge.space login email
+#   CHARGEAMPS_PASSWORD    my.charge.space login password
+#
+# Charger IDs are also injected via env vars (charge_point_id_env below).
+# Add each as a GitHub Actions secret, e.g. CHARGEAMPS_CP_TOPUP.
+#
+# Usage:
+#   python deliver_chargeamps.py plan-topup.json plan-overnight.json
+#   python deliver_chargeamps.py plan-*.json
+
+deliveries:
+  - profile: "topup"
+    charge_point_id_env: "CHARGEAMPS_CP_TOPUP"   # env var holding the charger ID
+    connector_id: 1
+    max_current: 16.0
+    timezone: "Europe/Helsinki"
+
+  - profile: "overnight"
+    charge_point_id_env: "CHARGEAMPS_CP_OVERNIGHT"
+    connector_id: 1
+    max_current: 16.0
+    timezone: "Europe/Helsinki"
