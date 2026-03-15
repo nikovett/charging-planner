@@ -20,6 +20,8 @@ Environment variables:
     <charge_point_id_env>  per-delivery env var named in chargeamps.yaml
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -191,21 +193,6 @@ def ca_login(email: str, password: str) -> tuple[str, str]:
     return token, entitlements_token
 
 
-def ca_week_anchor(tz_name: str, ref_utc: datetime) -> datetime:
-    """Return the most recent Sunday 00:00:00 local time as UTC-aware datetime.
-
-    Charge Amps schedule periods are expressed as seconds from this anchor.
-    """
-    zone = ZoneInfo(tz_name)
-    local_now = ref_utc.astimezone(zone)
-    days_since_sunday = local_now.isoweekday() % 7   # Mon=1…Sun=7 → Sun=0
-    sunday_local = (local_now - timedelta(days=days_since_sunday)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    return sunday_local.astimezone(timezone.utc)
-
-
-
 _NANOID_CHARS = string.ascii_letters + string.digits
 
 
@@ -218,31 +205,37 @@ def ca_build_periods(
     plan: dict,
     tz_name: str,
     max_current: float,
-    ref_utc: datetime,
 ) -> tuple[list[dict], str]:
     """Convert plan windows -> Charge Amps schedulePeriods.
 
+    The Charge Amps schedule is anchored to Monday 00:00 local time (expressed
+    as UTC), matching the weekly calendar the web app displays and sends.
     Returns (periods, startOfSchedule_iso).
-    startOfSchedule is the Sunday anchor formatted as '%Y-%m-%dT%H:%M:%SZ'.
     """
-    anchor_utc = ca_week_anchor(tz_name, ref_utc)
+    window_starts = plan.get("window_starts_utc", [])
+    window_ends   = plan.get("window_ends_utc", [])
+
+    if not window_starts:
+        return [], ""
+
+    # Anchor = most recent Monday 00:00 local time, expressed as UTC
+    zone = ZoneInfo(tz_name)
+    first_start = datetime.fromisoformat(window_starts[0].replace("Z", "+00:00"))
+    local_start = first_start.astimezone(zone)
+    # isoweekday(): Mon=1 ... Sun=7; days since Monday = isoweekday() - 1
+    days_since_monday = local_start.isoweekday() - 1
+    monday_local = (local_start - timedelta(days=days_since_monday)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    anchor_utc = monday_local.astimezone(timezone.utc)
     anchor_iso = anchor_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     periods = []
-    for start_iso, end_iso in zip(
-        plan.get("window_starts_utc", []),
-        plan.get("window_ends_utc", []),
-    ):
+    for start_iso, end_iso in zip(window_starts, window_ends):
         start_utc = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
         end_utc   = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
         from_sec  = int((start_utc - anchor_utc).total_seconds())
         to_sec    = int((end_utc   - anchor_utc).total_seconds())
-        if from_sec < 0 or to_sec < 0:
-            log.warning(
-                "Window %s-%s is before Sunday anchor %s -- skipping period.",
-                start_iso, end_iso, anchor_iso,
-            )
-            continue
         periods.append({
             "id":         _nanoid(),
             "from":       from_sec,
@@ -250,6 +243,7 @@ def ca_build_periods(
             "maxCurrent": max_current,
         })
 
+    log.debug("Anchor: %s  periods: %s", anchor_iso, periods)
     return periods, anchor_iso
 
 
@@ -262,14 +256,13 @@ def ca_put_schedule(
     max_current: float,
     token: str,
     entitlements_token: str,
-    ref_utc: datetime,
 ) -> None:
     """Build and PUT the updated schedule.
 
     The server assigns a new scheduleId on every PUT regardless of the value
     sent, so we use 0. No prior GET is needed.
     """
-    periods, anchor_iso = ca_build_periods(plan, tz_name, max_current, ref_utc)
+    periods, anchor_iso = ca_build_periods(plan, tz_name, max_current)
     if not periods:
         raise ValueError("No valid periods generated from plan windows.")
 
@@ -330,7 +323,6 @@ def deliver(plans_by_profile: dict[str, dict], deliveries: list[dict]) -> bool:
         log.error("Login failed: %s", exc)
         return False
 
-    ref_utc = datetime.now(tz=timezone.utc)
     all_ok = True
 
     for entry in deliveries:
@@ -385,7 +377,7 @@ def deliver(plans_by_profile: dict[str, dict], deliveries: list[dict]) -> bool:
         try:
             ca_put_schedule(
                 plan, cp_id, connector_id,
-                tz_name, max_current, token, ent_token, ref_utc,
+                tz_name, max_current, token, ent_token,
             )
         except Exception as exc:
             log.error(
