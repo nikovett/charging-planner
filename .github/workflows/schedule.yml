@@ -21,32 +21,10 @@ jobs:
       - name: Install dependencies
         run: pip install pyyaml
 
-      - name: Write config
-        run: |
-          cat > config.yaml << 'YAML'
-          entsoe:
-            api_key: "${{ secrets.ENTSOE_API_KEY }}"
-            area: "FI"
-          charging:
-            - name: "topup"
-              required_hours: 2
-              continuous_only: false
-              min_slot_minutes: 30
-              preferred_window_start: "00:00"
-              preferred_window_end: "06:30"
-              timezone: "Europe/Helsinki"
-            - name: "overnight"
-              required_hours: 6
-              continuous_only: true
-              min_slot_minutes: 30
-              preferred_window_start: "22:00"
-              preferred_window_end: "06:30"
-              timezone: "Europe/Helsinki"
-          YAML
-
       - name: Build plan
         id: plan
         env:
+          ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
           python charging_planner.py --output-dir . && {
@@ -62,7 +40,5 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: charging-plan-${{ steps.plan.outputs.plan_date }}
-          path: |
-            plan-*.json
+          path: plan-*.json
           retention-days: 2
-
