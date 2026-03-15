@@ -21,3 +21,7 @@ charging:
     preferred_window_start: "22:00"  # Overnight window — wraps midnight
     preferred_window_end: "06:30"
     timezone: "Europe/Helsinki"
+
+ntfy:
+  enabled: true
+  topic: ""    # never commit — injected at runtime via NTFY_TOPIC environment variable

@@ -295,7 +295,15 @@ Charging windows run at `max_charging_rate` (default 11 kW); gaps between window
 
 ### Phone notification (ntfy)
 
-The GitHub Actions workflow sends a push notification via [ntfy.sh](https://ntfy.sh) after each successful run. The topic name is set in `schedule.yml` — replace `entsoe-charging-f7x3k2` with your own. Install the ntfy app on iOS or Android, subscribe to that topic, and you will receive the plan each afternoon.
+The planner sends a push notification via [ntfy.sh](https://ntfy.sh) after each run. Enable it in `config.yaml`:
+
+```yaml
+ntfy:
+  enabled: true
+  topic: ""    # set via NTFY_TOPIC environment variable — never commit the actual value
+```
+
+The topic is read from the `NTFY_TOPIC` environment variable at runtime, which is set as a GitHub Actions secret. Install the ntfy app on iOS or Android and subscribe to your topic to receive the plan each afternoon.
 
 All profiles are included in a single message, ordered by required hours ascending:
 
@@ -319,6 +327,7 @@ The ruler spans the preferred charging window: `█` = scheduled, `▒` = unsche
 |---|---|
 | `⚡ merged` | Gap between two blocks was bridged by gap merging |
 | `↖ outside window` | Slots were scheduled outside the preferred window because `required_hours` exceeded the window length — this is expected behaviour, not an error |
+| `⚠️ charge plan not possible` | Required hours could not be met — typically because `max_price_cents_kwh` excludes too many slots or the window is too short |
 
 ---
 
@@ -351,7 +360,8 @@ python3 -m unittest discover -s test -v
 | Time utilities | 10 |
 | End-to-end pipeline | 6 |
 | Window coverage check | 5 |
-| **Total** | **109** |
+| ntfy notification | 8 |
+| **Total** | **117** |
 
 The 3 OCPP schema validation tests require the spec zip files placed in `test/ocpp16/`, `test/ocpp201/`, `test/ocpp21/` — they skip cleanly without them. All other tests run with no dependencies beyond `pyyaml`.
 
