@@ -38,6 +38,8 @@ The script makes a single API call to fetch all available day-ahead prices, then
 
 No other dependencies. The script uses only the standard library, including [`zoneinfo`](https://docs.python.org/3/library/zoneinfo.html) (stdlib since Python 3.9) for DST-correct timezone handling.
 
+---
+
 ## Getting an API key
 
 1. Register at [transparency.entsoe.eu](https://transparency.entsoe.eu)
@@ -230,7 +232,6 @@ Charging windows run at `max_charging_rate` (default 11 kW); gaps between window
 
 **OCPP 2.0.1 and 2.1** use `id` instead of `chargingProfileId`. If you are integrating directly with the script, call `build_ocpp_charging_profile(plan, ocpp_version="2.0.1")` to generate the correct structure for your CSMS.
 
----
 ### Phone notification (ntfy)
 
 All profiles are included in a single message, ordered by required hours ascending:
@@ -247,7 +248,6 @@ overnight  6h/6h
 21:00 ░████████████▒░░ 07:00
 ```
 
-
 The ruler spans the preferred charging window: `█` = scheduled, `▒` = unscheduled inside window, `░` = outside window. The ruler expands automatically if any slots fall outside the preferred window.
 
 | Indicator | Meaning |
@@ -257,11 +257,13 @@ The ruler spans the preferred charging window: `█` = scheduled, `▒` = unsche
 | `⚠️ charge plan not possible` | Required hours could not be met — typically because `max_price_cents_kwh` excludes too many slots or the window is too short |
 
 
+---
+
 ## Code quality
 
 ### Test suite
 
-104 tests in a single file (`test_charging_planner.py`), run with:
+117 tests in a single file (`test_charging_planner.py`), run with:
 
 ```bash
 python3 -m unittest discover -s test -v
@@ -293,11 +295,11 @@ The real ENTSO-E data tests use an actual API response from 2026-03-14 inlined a
 
 ### Cyclomatic complexity
 
-Measured across 61 functions:
+Measured across 76 functions:
 
 | Grade | Threshold | Count |
 |---|---|---|
-| A/B | CC ≤ 10 | 53 |
+| A/B | CC ≤ 10 | 68 |
 | C | CC 11–15 | 6 |
 | D | CC 16–20 | 2 |
 | F | CC > 20 | 0 |
