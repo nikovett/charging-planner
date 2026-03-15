@@ -133,6 +133,14 @@ def load_config(path: str) -> dict:
         # No config file — ensure list form
         if isinstance(config["charging"], dict):
             config["charging"] = [config["charging"]]
+
+    # Environment variable overrides — allow secrets to be injected at runtime
+    # without modifying config.yaml (safe for public repos)
+    if api_key := os.environ.get("ENTSOE_API_KEY"):
+        config["entsoe"]["api_key"] = api_key
+    if ntfy_topic := os.environ.get("NTFY_TOPIC"):
+        config.setdefault("ntfy", {})["topic"] = ntfy_topic
+
     return config
 
 
@@ -1370,6 +1378,13 @@ def save_plan(plan: dict, path: str) -> None:
     log.info("Plan saved to %s", path)
 
 
+
+def save_plan(plan: dict, path: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(plan, f, indent=2)
+    log.info("Plan saved to %s", path)
+
+
 def load_plan(path: str) -> dict:
     with open(path, encoding="utf-8") as f:
         plan = json.load(f)
@@ -1394,7 +1409,6 @@ def _yellow(t): return _c("33", t)
 def _red(t):    return _c("31", t)
 def _bold(t):   return _c("1",  t)
 def _dim(t):    return _c("2",  t)
-def _cyan(t):   return _c("36", t)
 
 
 
