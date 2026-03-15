@@ -26,14 +26,7 @@ jobs:
         env:
           ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: |
-          python charging_planner.py --output-dir . && {
-            echo "prices_available=true" >> $GITHUB_OUTPUT
-            echo "plan_date=$(python -c "import glob,json; f=sorted(glob.glob('plan-*.json'))[0]; print(json.load(open(f))['date'])")" >> $GITHUB_OUTPUT
-            for f in plan-*.json; do echo "=== $f ===" && cat "$f"; done
-          } || {
-            echo "Prices not yet available or script error — skipping remaining steps."
-          }
+        run: python charging_planner.py --output-dir .
 
       - name: Upload plan artifact
         if: steps.plan.outputs.prices_available == 'true'
