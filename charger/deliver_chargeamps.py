@@ -8,16 +8,16 @@ the charging schedule to Charge Amps via the my.charge.space internal API.
 Usage:
     python deliver_chargeamps.py plan-topup.json plan-overnight.json
     python deliver_chargeamps.py plan-*.json
-    python deliver_chargeamps.py --config chargeamps.yaml plan-*.json
+    python deliver_chargeamps.py --config charger.yaml plan-*.json
 
-Each delivery entry in chargeamps.yaml maps a profile name to a charger.
+Each delivery entry in charger.yaml maps a profile name to a charger.
 Credentials and charger IDs are injected via environment variables so no
 secrets are ever committed to the repository.
 
 Environment variables:
     CHARGEAMPS_EMAIL       my.charge.space login email
     CHARGEAMPS_PASSWORD    my.charge.space login password
-    <charge_point_id_env>  per-delivery env var named in chargeamps.yaml
+    <charge_point_id_env>  per-delivery env var named in charger.yaml
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ DEFAULT_CONFIG = {
 # ===========================================================================
 
 def load_config(path: str) -> dict:
-    """Load chargeamps.yaml."""
+    """Load charger.yaml."""
     if yaml is None:
         log.error("PyYAML is not installed. Run: pip install pyyaml")
         sys.exit(1)
@@ -75,7 +75,7 @@ def load_config(path: str) -> dict:
     with open(path) as f:
         cfg = yaml.safe_load(f) or {}
     if "deliveries" not in cfg:
-        log.error("chargeamps.yaml must contain a 'deliveries' list.")
+        log.error("charger.yaml must contain a 'deliveries' list.")
         sys.exit(1)
     return cfg
 
@@ -405,8 +405,8 @@ def main():
     )
     parser.add_argument(
         "--config", "-c",
-        default="chargeamps/chargeamps.yaml",
-        help="Path to chargeamps.yaml (default: chargeamps.yaml)",
+        default="charger/charger.yaml",
+        help="Path to charger.yaml (default: charger.yaml)",
     )
     parser.add_argument(
         "--debug",
