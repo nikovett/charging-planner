@@ -15,8 +15,8 @@ Credentials and charger IDs are injected via environment variables so no
 secrets are ever committed to the repository.
 
 Environment variables:
-    CHARGEAMPS_EMAIL       my.charge.space login email
-    CHARGEAMPS_PASSWORD    my.charge.space login password
+    CHARGER_EMAIL       my.charge.space login email
+    CHARGER_PASSWORD    my.charge.space login password
     <charge_point_id_env>  per-delivery env var named in charger.yaml
 """
 
@@ -308,11 +308,11 @@ def deliver(plans_by_profile: dict[str, dict], deliveries: list[dict]) -> bool:
 
     Logs in once and reuses the token for all deliveries.
     """
-    email    = os.environ.get("CHARGEAMPS_EMAIL", "")
-    password = os.environ.get("CHARGEAMPS_PASSWORD", "")
+    email    = os.environ.get("CHARGER_EMAIL", "")
+    password = os.environ.get("CHARGER_PASSWORD", "")
     if not email or not password:
         log.error(
-            "CHARGEAMPS_EMAIL and CHARGEAMPS_PASSWORD environment variables must be set."
+            "CHARGER_EMAIL and CHARGER_PASSWORD environment variables must be set."
         )
         return False
 

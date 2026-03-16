@@ -1,11 +1,11 @@
-# Charge Amps schedule delivery configuration
+# Charger schedule delivery configuration
 #
 # Each entry under 'deliveries' maps a charging profile (from config.yaml)
-# to a specific Charge Amps charger.
+# to a specific charger.
 #
 # Credentials are injected via environment variables — never commit real values:
-#   CHARGEAMPS_EMAIL       my.charge.space login email
-#   CHARGEAMPS_PASSWORD    my.charge.space login password
+#   CHARGER_EMAIL       my.charge.space login email
+#   CHARGER_PASSWORD    my.charge.space login password
 #
 # Charger IDs are also injected via env vars (charge_point_id_env below).
 # Add each as a GitHub Actions secret, e.g. CHARGEAMPS_CP_TOPUP.
