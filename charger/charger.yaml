@@ -8,7 +8,7 @@
 #   CHARGER_PASSWORD    my.charge.space login password
 #
 # Charger IDs are also injected via env vars (charge_point_id_env below).
-# Add each as a GitHub Actions secret, e.g. CHARGEAMPS_CP_TOPUP.
+# Add each as a GitHub Actions secret, e.g. CHARGER_ID_1.
 #
 # Usage:
 #   python deliver_chargeamps.py plan-topup.json plan-overnight.json
@@ -16,13 +16,13 @@
 
 deliveries:
   - profile: "topup"
-    charge_point_id_env: "CHARGEAMPS_CP_TOPUP"   # env var holding the charger ID
-    connector_id: 1
-    max_current: 16.0
+    charge_point_id_env: "CHARGER_ID_1"   # env var holding the charger ID
+    connector_id: 1			  # might be Charge Amps specific 1=type2, 2=schuko
+    max_current: 16.0			  # in A
     timezone: "Europe/Helsinki"
 
 #  - profile: "overnight"
-#    charge_point_id_env: "CHARGEAMPS_CP_OVERNIGHT"
+#    charge_point_id_env: "CHARGER_ID_2"
 #    connector_id: 1
 #    max_current: 16.0
 #    timezone: "Europe/Helsinki"
