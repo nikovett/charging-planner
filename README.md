@@ -87,16 +87,16 @@ Each profile produces its own `plan-{name}.json` output file.
 | Key | Default | Description |
 |---|---|---|
 | `entsoe.api_key` | — | **Required.** ENTSO-E security token |
-| `entsoe.area` | — | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
+| `entsoe.area` | FI | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
 | `charging.name` | `"default"` | Profile name — used in the output filename (`plan-{name}.json`) and phone notification |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
 | `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
 | `charging.min_slot_minutes` | `30` | Minimum continuous block length. Must be a multiple of 15 |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
-| `charging.preferred_window_start` | — | **Required.** Start of preferred charging window (`HH:MM`) |
-| `charging.preferred_window_end` | — | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight (overnight). Equal start and end is an error |
+| `charging.preferred_window_start` | 00:00 | **Required.** Start of preferred charging window (`HH:MM`) |
+| `charging.preferred_window_end` | 06:30 | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight (overnight). Equal start and end is an error |
 | `charging.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from system. DST transitions are handled correctly via `zoneinfo` |
-| `ntfy.enabled` | `false` | Set to `true` to enable push notifications |
+| `ntfy.enabled` | `true` | Set to `true` to enable push notifications |
 | `ntfy.topic` | `""` | ntfy topic name — set via `NTFY_TOPIC` environment variable, never commit |
 
 ### Preferred window behaviour
@@ -114,15 +114,16 @@ The scheduled cron at 12:30 UTC lands after price publication and before any rea
 
 **Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`. To impose no restriction on timing, set `preferred_window_start: "00:00"` and `preferred_window_end: "23:59"`.
 
+## Gap merging
+
+When two selected blocks are separated by a gap shorter than `min_slot_minutes`, they are bridged into one continuous window automatically. Slots are then trimmed from the merged block to bring the total back to `required_hours` — most expensive slots are removed first, with earliest slots trimmed as a tiebreaker. Merged windows are flagged with ⚡ in all outputs. Gap merging is skipped when `continuous_only: true` since the result is already one unbroken block.
+
 **Continuous block and spill** — when `continuous_only: true` and `required_hours` exceeds the window length, the single block extends leftward past the window start. `preferred_window_end` is always the hard ceiling — no slot is ever scheduled after it.
 
 **Guaranteed charge until departure time** — setting `required_hours` longer than the window with `continuous_only: true` ensures the block always ends exactly at `preferred_window_end`. For example, `preferred_window_start: "01:00"`, `preferred_window_end: "06:30"`, `required_hours: 8` always produces a block ending at 06:30 and starting as early as 22:30 the previous evening. The planner finds the cheapest available 8h slot that fits before the deadline. A practical benefit for EVs in cold climates is that charging ends close to departure, leaving the battery warm and improving range.
 
-### Gap merging
-
-When two selected blocks are separated by a gap shorter than `min_slot_minutes`, they are bridged into one continuous window automatically. Slots are then trimmed from the merged block to bring the total back to `required_hours` — most expensive slots are removed first, with earliest slots trimmed as a tiebreaker. Merged windows are flagged with ⚡ in all outputs. Gap merging is skipped when `continuous_only: true` since the result is already one unbroken block.
-
 ---
+
 
 ## Running
 
