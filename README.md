@@ -87,14 +87,14 @@ Each profile produces its own `plan-{name}.json` output file.
 | Key | Default | Description |
 |---|---|---|
 | `entsoe.api_key` | — | **Required.** ENTSO-E security token |
-| `entsoe.area` | FI | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
+| `entsoe.area` | `FI` | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
 | `charging.name` | `"default"` | Profile name — used in the output filename (`plan-{name}.json`) and phone notification |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
 | `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
 | `charging.min_slot_minutes` | `30` | Minimum continuous block length. Must be a multiple of 15 |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
-| `charging.preferred_window_start` | 00:00 | **Required.** Start of preferred charging window (`HH:MM`) |
-| `charging.preferred_window_end` | 06:30 | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight (overnight). Equal start and end is an error |
+| `charging.preferred_window_start` | `00:00` | **Required.** Start of preferred charging window (`HH:MM`) |
+| `charging.preferred_window_end` | `06:30` | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight (overnight). Equal start and end is an error |
 | `charging.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from system. DST transitions are handled correctly via `zoneinfo` |
 | `ntfy.enabled` | `true` | Set to `true` to enable push notifications |
 | `ntfy.topic` | `""` | ntfy topic name — set via `NTFY_TOPIC` environment variable, never commit |
