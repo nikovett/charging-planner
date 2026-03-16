@@ -28,13 +28,13 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: python charging_planner.py --output-dir .
 
-      - name: Deliver to Charge Amps
+      - name: Deliver to charger(s)
         if: steps.plan.outputs.prices_available == 'true'
         env:
-          CHARGER_EMAIL:        ${{ secrets.CHARGER_EMAIL }}
-          CHARGER_PASSWORD:     ${{ secrets.CHARGER_PASSWORD }}
-          CHARGEAMPS_CP_TOPUP:     ${{ secrets.CHARGEAMPS_CP_TOPUP }}
-          CHARGEAMPS_CP_OVERNIGHT: ${{ secrets.CHARGEAMPS_CP_OVERNIGHT }}
+          CHARGER_EMAIL:     ${{ secrets.CHARGER_EMAIL }}
+          CHARGER_PASSWORD:  ${{ secrets.CHARGER_PASSWORD }}
+          CHARGER_ID_1:      ${{ secrets.CHARGER_ID_1 }}
+          CHARGER_ID_2:      ${{ secrets.CHARGER_ID_2 }}
         run: python charger/deliver_chargeamps.py plan-*.json --config charger/charger.yaml
 
       - name: Upload plan artifact
