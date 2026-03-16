@@ -31,8 +31,8 @@ jobs:
       - name: Deliver to Charge Amps
         if: steps.plan.outputs.prices_available == 'true'
         env:
-          CHARGEAMPS_EMAIL:        ${{ secrets.CHARGEAMPS_EMAIL }}
-          CHARGEAMPS_PASSWORD:     ${{ secrets.CHARGEAMPS_PASSWORD }}
+          CHARGER_EMAIL:        ${{ secrets.CHARGER_EMAIL }}
+          CHARGER_PASSWORD:     ${{ secrets.CHARGER_PASSWORD }}
           CHARGEAMPS_CP_TOPUP:     ${{ secrets.CHARGEAMPS_CP_TOPUP }}
           CHARGEAMPS_CP_OVERNIGHT: ${{ secrets.CHARGEAMPS_CP_OVERNIGHT }}
         run: python charger/deliver_chargeamps.py plan-*.json --config charger/charger.yaml
