@@ -35,7 +35,7 @@ jobs:
           CHARGEAMPS_PASSWORD:     ${{ secrets.CHARGEAMPS_PASSWORD }}
           CHARGEAMPS_CP_TOPUP:     ${{ secrets.CHARGEAMPS_CP_TOPUP }}
           CHARGEAMPS_CP_OVERNIGHT: ${{ secrets.CHARGEAMPS_CP_OVERNIGHT }}
-        run: python chargeamps/deliver_chargeamps.py plan-*.json --config chargeamps/chargeamps.yaml
+        run: python charger/deliver_chargeamps.py plan-*.json --config charger/charger.yaml
 
       - name: Upload plan artifact
         if: steps.plan.outputs.prices_available == 'true'
