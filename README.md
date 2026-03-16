@@ -114,9 +114,7 @@ The scheduled cron at 12:30 UTC lands after price publication and before any rea
 
 **Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`. To impose no restriction on timing, set `preferred_window_start: "00:00"` and `preferred_window_end: "23:59"`.
 
-## Gap merging
-
-When two selected blocks are separated by a gap shorter than `min_slot_minutes`, they are bridged into one continuous window automatically. Slots are then trimmed from the merged block to bring the total back to `required_hours` — most expensive slots are removed first, with earliest slots trimmed as a tiebreaker. Merged windows are flagged with ⚡ in all outputs. Gap merging is skipped when `continuous_only: true` since the result is already one unbroken block.
+**Gap merging** - When two selected blocks are separated by a gap shorter than `min_slot_minutes`, they are bridged into one continuous window automatically. Slots are then trimmed from the merged block to bring the total back to `required_hours` — most expensive slots are removed first, with earliest slots trimmed as a tiebreaker. Merged windows are flagged with ⚡ in all outputs. Gap merging is skipped when `continuous_only: true` since the result is already one unbroken block.
 
 **Continuous block and spill** — when `continuous_only: true` and `required_hours` exceeds the window length, the single block extends leftward past the window start. `preferred_window_end` is always the hard ceiling — no slot is ever scheduled after it.
 
