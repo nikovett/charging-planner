@@ -1,3 +1,6 @@
+# Charging Planner configuration
+#
+
 entsoe:
   api_key: ""        # ENTSO-E security token — never commit a real key here; injected at runtime by GitHub Actions
   area: "FI"         # Bidding zone — short code (FI, SE1–SE4, NO1–NO5, DK1/2, EE, LV, LT, DE, FR, NL, BE, AT, PL)
@@ -25,3 +28,19 @@ charging:
 ntfy:
   enabled: true
   topic: ""    # never commit — injected at runtime via NTFY_TOPIC environment variable
+
+# Charger delivery configuration
+#
+
+deliveries:
+  - profile: "topup"
+    charge_point_id_env: "CHARGER_ID_1"   # env var holding the charger ID
+    connector_id: 1
+    max_current: 16.0
+    timezone: "Europe/Helsinki"
+
+#  - profile: "overnight"
+#    charge_point_id_env: "CHARGER_ID_2"
+#    connector_id: 1
+#    max_current: 16.0
+#    timezone: "Europe/Helsinki"
