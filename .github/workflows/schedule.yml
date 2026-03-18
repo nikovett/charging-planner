@@ -35,7 +35,7 @@ jobs:
           CHARGER_PASSWORD:  ${{ secrets.CHARGER_PASSWORD }}
           CHARGER_ID_1:      ${{ secrets.CHARGER_ID_1 }}
           CHARGER_ID_2:      ${{ secrets.CHARGER_ID_2 }}
-        run: python charger/deliver_chargeamps.py plan-*.json --config ../config.yaml # use your chargers delivery method
+        run: python charger/deliver_chargeamps.py plan-*.json --config config.yaml # use your chargers delivery method
 
       - name: Upload plan artifact
         if: steps.plan.outputs.prices_available == 'true'
