@@ -55,6 +55,16 @@ except ImportError:
     yaml = None
 
 # ---------------------------------------------------------------------------
+# ntfy — imported from charging_planner so topic/enabled config is shared
+# ---------------------------------------------------------------------------
+sys.path.insert(0, str(Path(__file__).parent.parent))
+try:
+    from charging_planner import send_ntfy, _ntfy_message
+    _NTFY_AVAILABLE = True
+except ImportError:
+    _NTFY_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
@@ -202,13 +212,79 @@ def _load_handler(handler_name: str):
 # Dispatch
 # ===========================================================================
 
+def _send_delivery_ntfy(
+    plans_by_profile: dict[str, dict],
+    skipped_profiles: list[str],
+    delivery_results: list[tuple[str, str, str, bool]],
+    config: dict,
+) -> None:
+    """Send a combined ntfy notification with plan summary and delivery status.
+
+    delivery_results is a list of (profile_name, handler_name, charge_point_id, ok)
+    tuples — one entry per charger ID attempted.
+    """
+    if not _NTFY_AVAILABLE:
+        log.warning("charging_planner not importable — ntfy notification skipped.")
+        return
+
+    ntfy_cfg = config.get("ntfy", {})
+    if not ntfy_cfg.get("enabled", False):
+        return
+
+    topic = os.environ.get("NTFY_TOPIC") or ntfy_cfg.get("topic", "")
+    if not topic:
+        log.warning("ntfy.enabled is true but no topic configured — skipping.")
+        return
+
+    plans = [p for p in plans_by_profile.values() if p.get("window_starts_utc")]
+
+    # Plan summary section (reuse existing message builder)
+    plan_section = _ntfy_message(plans, skipped_profiles) if plans else ""
+
+    # Delivery status section
+    if delivery_results:
+        lines = []
+        for profile, handler, cp_id, ok in delivery_results:
+            status = "✅" if ok else "❌"
+            lines.append(f"{status} {profile} → {cp_id}  ({handler})")
+        delivery_section = "Delivered to charger(s):\n" + "\n".join(lines)
+    else:
+        delivery_section = "No chargers configured."
+
+    message = "\n\n".join(filter(None, [plan_section, delivery_section]))
+
+    if not plans:
+        return
+
+    date  = plans[0].get("date", "")
+    url   = f"https://ntfy.sh/{topic}"
+
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(
+            url,
+            data=message.encode(),
+            method="POST",
+            headers={
+                "Title":    f"Charging plan for {date}",
+                "Priority": "default",
+                "Tags":     "electric_plug",
+            },
+        )
+        _ur.urlopen(req, timeout=10)
+        log.info("ntfy notification sent to %s", url)
+    except Exception as exc:
+        log.warning("ntfy notification failed: %s", exc)
+
+
 def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
     """Resolve deliveries from charging profiles and call each handler.
 
     For each delivery entry, calls:
         handler.deliver(plan, charge_point_id, entry, timezone)
     once per resolved charger ID. All chargers are attempted; failures are
-    accumulated and reported at the end.
+    accumulated and reported at the end. Sends a combined ntfy notification
+    with plan summary and delivery status after all deliveries complete.
 
     Returns True only if every delivery succeeded.
     """
@@ -220,6 +296,7 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
 
     handler_cache: dict[str, object] = {}
     all_ok = True
+    delivery_results: list[tuple[str, str, str, bool]] = []  # (profile, handler, cp_id, ok)
 
     for profile_name, timezone, entry, charge_point_ids in deliveries:
         handler_name = entry["handler"]
@@ -260,6 +337,8 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
                 )
                 ok = False
 
+            delivery_results.append((profile_name, handler_name, charge_point_id, ok))
+
             if not ok:
                 log.error(
                     "Delivery failed: profile='%s'  handler='%s'  charger='%s'",
@@ -271,6 +350,17 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
                     "Delivery succeeded: profile='%s'  handler='%s'  charger='%s'",
                     profile_name, handler_name, charge_point_id,
                 )
+
+    # Profiles in config that had no plan (prices skipped) — infer from missing plans
+    skipped_profiles = [
+        p.get("name", "default")
+        for p in config.get("charging", [])
+        if isinstance(p, dict)
+        and p.get("deliveries")
+        and p.get("name") not in plans_by_profile
+    ]
+
+    _send_delivery_ntfy(plans_by_profile, skipped_profiles, delivery_results, config)
 
     return all_ok
 

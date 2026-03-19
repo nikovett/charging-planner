@@ -1888,7 +1888,6 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
         log.warning("Skipped profiles (prices not yet available): %s", ", ".join(skipped))
 
     write_gha_summary(plans, display_for_summary or [], skipped=skipped)
-    send_ntfy(plans, skipped, raw_config.get("ntfy", {}))
     _write_run_outputs(plans)
     return plans
 
