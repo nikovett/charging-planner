@@ -113,7 +113,7 @@ def _ca_request(
 
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     raw = _http_request_with_retry(req, label=f"CA {method} {path}")
-    return json.loads(raw)
+    return json.loads(raw) if raw.strip() else {}
 
 
 def _ca_login() -> tuple[str, str]:
