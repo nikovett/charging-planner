@@ -229,6 +229,12 @@ def _ca_put_schedule(
     if not periods:
         raise ValueError("No valid periods generated from plan windows.")
 
+    # A blind PUT replaces the entire weekly schedule with only the new windows —
+    # any periods added manually via the web interface will be cleared.
+    # The web app avoids this by GET-ing the existing schedule first and merging.
+    # For automated daily delivery this is intentional: we own the full schedule
+    # state and avoid conflicts with stale or overlapping manual entries.
+
     payload = {
         "scheduleId":      0,
         "chargePointId":   charge_point_id,
