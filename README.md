@@ -203,7 +203,7 @@ Never commit secrets to the repository. All sensitive values are injected at run
 
 The workflow runs daily at 12:30 UTC — 14:30 Helsinki time in winter (EET, UTC+2) and 15:30 in summer (EEST, UTC+3). A single cron covers both DST states because 12:30 UTC always lands after ENTSO-E's ~12:00 UTC publication time.
 
-Day-ahead prices are published at approximately 12:00 UTC each day. If the script runs before publication, or ENTSO-E is delayed, the script detects this and exits cleanly with a warning. Once prices are available the next scheduled run will succeed.
+Day-ahead prices are published at approximately 12:00 UTC each day. If the script runs before publication, or ENTSO-E is delayed, the script detects this and exits cleanly — a push notification is sent to the configured ntfy topic so you know no plan was scheduled. Once prices are available the next scheduled run will succeed.
 
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 
