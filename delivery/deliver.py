@@ -6,8 +6,8 @@ Reads plan JSON files produced by charging_planner.py and dispatches each
 delivery entry to the correct handler script based on the 'handler' field.
 
 Usage:
-    python charger/deliver.py plan-*.json
-    python charger/deliver.py plan-*.json --config config.yaml
+    python delivery/deliver.py plan-*.json
+    python delivery/deliver.py plan-*.json --config config.yaml
 
 Deliveries are configured inside each charging profile in config.yaml:
 
@@ -15,12 +15,12 @@ Deliveries are configured inside each charging profile in config.yaml:
       - name: "topup"
         ...
         deliveries:
-          - handler: "chargeamps"       # → charger/deliver_chargeamps.py
+          - handler: "chargeamps"       # → delivery/deliver_chargeamps.py
             charge_point_id_env: "CHARGER_ID_1"
             connector_id: 1
             max_charging_rate: 16.0
 
-          - handler: "ocpp"             # → charger/deliver_ocpp.py
+          - handler: "ocpp"             # → delivery/deliver_ocpp.py
             charge_point_id_env:        # list — same plan sent to both chargers
               - "CHARGER_ID_2"
               - "CHARGER_ID_3"

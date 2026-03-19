@@ -93,4 +93,4 @@ python3 -m unittest discover -s test -v
 | Sending behaviour | 6 |
 | **Total** | **17** |
 
-These tests cover the ntfy notification logic in `charger/deliver.py` — message content (profile summary, window times, delivery status per charger, skipped profiles), and sending behaviour (disabled, missing topic, topic from env vs config, empty plans, send failure handling). All HTTP calls are mocked.
+These tests cover the ntfy notification logic in `delivery/deliver.py` — message content (profile summary, window times, delivery status per charger, skipped profiles), and sending behaviour (disabled, missing topic, topic from env vs config, empty plans, send failure handling). All HTTP calls are mocked.

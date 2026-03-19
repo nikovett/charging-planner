@@ -1,5 +1,5 @@
 """
-Tests for charger/deliver.py
+Tests for delivery/deliver.py
 ==============================
 Covers the ntfy notification logic in _send_delivery_ntfy — message content,
 delivery status formatting, disabled/missing topic handling, and HTTP sending.

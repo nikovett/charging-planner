@@ -6,7 +6,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 ## Overview
 
-The script makes a single API call to fetch all available day-ahead prices, then runs each configured charging profile against the price data independently. Each profile picks its own cheapest windows within its preferred time range and writes a plan to JSON. Once plans are built, `charger/deliver.py` dispatches each plan to the configured chargers and sends a push notification with the plan summary and delivery status.
+The script makes a single API call to fetch all available day-ahead prices, then runs each configured charging profile against the price data independently. Each profile picks its own cheapest windows within its preferred time range and writes a plan to JSON. Once plans are built, `delivery/deliver.py` dispatches each plan to the configured chargers and sends a push notification with the plan summary and delivery status.
 
 ```
   ══════════════════════════════════════════════════════════════════
@@ -129,20 +129,20 @@ ntfy:
 
 ## Charger delivery
 
-Delivery is handled by `charger/deliver.py`, which reads the `deliveries:` block inside each charging profile and dispatches each plan to the correct handler. Two handlers are included:
+Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` block inside each charging profile and dispatches each plan to the correct handler. Two handlers are included:
 
 | Handler | Script | Description |
 |---|---|---|
-| `chargeamps` | `charger/deliver_chargeamps.py` | Delivers via the `my.charge.space` API |
-| `ocpp` | `charger/deliver_ocpp.py` | Delivers via OCPP WebSocket (`SetChargingProfile.req`), supports 1.6 / 2.0.1 / 2.1 |
+| `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API |
+| `ocpp` | `delivery/deliver_ocpp.py` | Delivers via OCPP WebSocket (`SetChargingProfile.req`), supports 1.6 / 2.0.1 / 2.1 |
 
-See [`charger/README.md`](charger/README.md) for full handler configuration reference and instructions for adding a new handler.
+See [`delivery/README.md`](delivery/README.md) for full handler configuration reference and instructions for adding a new handler.
 
 ---
 
 ## Push notifications (ntfy)
 
-After delivery completes, `charger/deliver.py` sends a single push notification containing the plan summary and delivery status for each charger. The notification is sent to the configured ntfy topic.
+After delivery completes, `delivery/deliver.py` sends a single push notification containing the plan summary and delivery status for each charger. The notification is sent to the configured ntfy topic.
 
 Example notification:
 
@@ -176,8 +176,8 @@ python charging_planner.py --config my-config.yaml --output-dir /tmp/plans
 python charging_planner.py --debug
 
 # Deliver plans and send notification
-python charger/deliver.py plan-*.json --config config.yaml
-python charger/deliver.py plan-*.json --debug
+python delivery/deliver.py plan-*.json --config config.yaml
+python delivery/deliver.py plan-*.json --debug
 ```
 
 ### GitHub Actions

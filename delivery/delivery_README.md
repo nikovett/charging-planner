@@ -1,4 +1,4 @@
-# charger/
+# delivery/
 
 Delivery handlers for pushing charging plans to EV chargers.
 
@@ -9,7 +9,7 @@ Each handler is a self-contained Python script that receives a plan produced by 
 ## How it works
 
 ```
-charging_planner.py  →  plan-{name}.json  →  charger/deliver.py  →  deliver_chargeamps.py
+charging_planner.py  →  plan-{name}.json  →  delivery/deliver.py  →  deliver_chargeamps.py
                                                                   →  deliver_ocpp.py
                                                                   →  deliver_<your_handler>.py
 ```
@@ -130,7 +130,7 @@ pip install websockets
 
 ## Adding a new handler
 
-1. Create `charger/deliver_<name>.py`
+1. Create `delivery/deliver_<name>.py`
 2. Implement the public interface:
 
 ```python
@@ -156,8 +156,8 @@ The dispatcher (`deliver.py`) will find and load the script automatically — no
 
 ```bash
 # Dispatch all plans using config.yaml
-python charger/deliver.py plan-*.json --config config.yaml
+python delivery/deliver.py plan-*.json --config config.yaml
 
 # Debug logging (shows full API payloads)
-python charger/deliver.py plan-*.json --debug
+python delivery/deliver.py plan-*.json --debug
 ```

@@ -5,7 +5,7 @@ OCPP WebSocket Schedule Delivery
 Delivers a charging plan to a single OCPP charge point via WebSocket
 (SetChargingProfile.req).
 
-Invoked by charger/deliver.py once per charger ID when handler: ocpp is set
+Invoked by delivery/deliver.py once per charger ID when handler: ocpp is set
 inside a charging profile's deliveries in config.yaml.
 
 Dependencies:
@@ -291,7 +291,7 @@ async def _send_set_charging_profile(
 
 
 # ===========================================================================
-# Public interface — called by charger/deliver.py
+# Public interface — called by delivery/deliver.py
 # ===========================================================================
 
 def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> bool:

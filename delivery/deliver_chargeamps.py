@@ -5,7 +5,7 @@ Charge Amps Schedule Delivery
 Delivers a charging plan to a single Charge Amps charger via the
 my.charge.space internal API.
 
-Invoked by charger/deliver.py once per charger ID when handler: chargeamps
+Invoked by delivery/deliver.py once per charger ID when handler: chargeamps
 is set inside a charging profile's deliveries in config.yaml.
 
 Environment variables:
@@ -329,7 +329,7 @@ def _ca_put_schedule(
 
 
 # ===========================================================================
-# Public interface — called by charger/deliver.py
+# Public interface — called by delivery/deliver.py
 # ===========================================================================
 
 def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> bool:

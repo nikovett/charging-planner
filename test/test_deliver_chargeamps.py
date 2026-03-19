@@ -1,5 +1,5 @@
 """
-Tests for charger/deliver_chargeamps.py
+Tests for delivery/deliver_chargeamps.py
 ========================================
 Focuses on the scheduling logic that converts plan windows to Charge Amps
 schedulePeriods — specifically that slots land at the correct times relative
@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, ".")
 sys.path.insert(0, "..")
 
-# deliver_chargeamps.py lives in charger/
+# deliver_chargeamps.py lives in delivery/
 sys.path.insert(0, "charger")
 
 from deliver_chargeamps import (
