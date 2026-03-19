@@ -1567,12 +1567,6 @@ class TestNtfyMessage(unittest.TestCase):
         self.assertIn("overnight", msg)
         self.assertIn("Skipped", msg)
 
-    def test_ruler_present(self):
-        from charging_planner import _ntfy_message
-        msg = _ntfy_message([self.PLAN], [])
-        # Ruler contains block characters
-        self.assertTrue(any(c in msg for c in "█▒░"))
-
     def test_send_ntfy_disabled_does_nothing(self):
         from charging_planner import send_ntfy
         # Should not raise even with no topic

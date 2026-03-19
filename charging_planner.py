@@ -1491,89 +1491,8 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
 # ntfy push notifications
 # ===========================================================================
 
-def _ntfy_ruler(plan: dict, chars: int = 20) -> str:
-    """Return a text ruler showing the preferred window and scheduled slots."""
-    wins     = plan["windows"]
-    pw_start = plan["preferred_window_start"]
-    pw_end   = plan["preferred_window_end"]
-    DAY      = 24 * 60
-
-    def hm(s: str) -> int:
-        h, m = map(int, s.split(":"))
-        return h * 60 + m
-
-    pw_s     = hm(pw_start)
-    pw_e_raw = hm(pw_end) if pw_end != "24:00" else DAY
-    overnight = pw_s > pw_e_raw
-    pw_e      = pw_e_raw + DAY if overnight else pw_e_raw
-
-    def win_end_min(w: dict) -> int:
-        e = hm(w["end"]) if w["end"] != "00:00" else DAY
-        s = hm(w["start"])
-        return e + DAY if overnight and e <= s else e
-
-    r_start = pw_s
-    r_end   = pw_e
-    for w in wins:
-        r_start = min(r_start, hm(w["start"]))
-        r_end   = max(r_end,   win_end_min(w))
-    r_start = (r_start // 60) * 60
-    r_end   = ((r_end + 59) // 60) * 60
-
-    span   = r_end - r_start
-    bucket = max(15, (span + chars - 1) // chars)
-    bucket = ((bucket + 14) // 15) * 15
-    if overnight:
-        r_start = max(0,            r_start - bucket)
-        r_end   = min(pw_s + DAY,   r_end   + bucket)
-    else:
-        r_start = max(0,   r_start - bucket)
-        r_end   = min(DAY, r_end   + bucket)
-    r_start = (r_start // 60) * 60
-    r_end   = ((r_end + 59) // 60) * 60
-    n_chars = (r_end - r_start) // bucket
-
-    def in_window(slot_min: int) -> bool:
-        if overnight:
-            return slot_min >= pw_s or slot_min < pw_e_raw
-        return pw_s <= slot_min < pw_e
-
-    ruler = ["▒" if in_window((r_start + i * bucket) % DAY) else "░"
-             for i in range(n_chars)]
-    for w in wins:
-        s_idx = (hm(w["start"]) - r_start) // bucket
-        e_idx = (win_end_min(w) - r_start) // bucket
-        for i in range(max(0, s_idx), min(e_idx, n_chars)):
-            ruler[i] = "█"
-
-    def fmt_min(m: int) -> str:
-        m = m % DAY
-        return f"{m // 60:02d}:00"
-
-    return f"{fmt_min(r_start)} {''.join(ruler)} {fmt_min(r_end)}"
-
-
-def _ntfy_outside_window(w: dict, pw_s: int, pw_e_raw: int,
-                          overnight: bool) -> bool:
-    """Return True if the window slot falls outside the preferred window."""
-    DAY = 24 * 60
-    def hm(s: str) -> int:
-        h, m = map(int, s.split(":"))
-        return h * 60 + m
-    ws = hm(w["start"])
-    we = hm(w["end"]) if w["end"] != "00:00" else DAY
-    if overnight:
-        return not (ws >= pw_s or we <= pw_e_raw)
-    return ws >= pw_e_raw or we <= pw_s
-
-
 def _ntfy_message(plans: "list[dict]", skipped: "list[str]") -> str:
     """Build the ntfy notification message body."""
-    DAY = 24 * 60
-
-    def hm(s: str) -> int:
-        h, m = map(int, s.split(":"))
-        return h * 60 + m
 
     def fmt_h(minutes: int) -> str:
         h, m = divmod(minutes, 60)
@@ -1581,19 +1500,15 @@ def _ntfy_message(plans: "list[dict]", skipped: "list[str]") -> str:
 
     sections = []
     for plan in sorted(plans, key=lambda p: p["required_minutes"]):
-        profile   = plan.get("profile", "default")
-        wins      = plan["windows"]
-        pw_s      = hm(plan["preferred_window_start"])
-        pw_e_raw  = hm(plan["preferred_window_end"]) if plan["preferred_window_end"] != "24:00" else DAY
-        overnight = pw_s > pw_e_raw
-        req       = plan["required_minutes"]
-        tot       = plan["total_minutes"]
+        profile = plan.get("profile", "default")
+        wins    = plan["windows"]
+        req     = plan["required_minutes"]
+        tot     = plan["total_minutes"]
 
         if wins:
             win_lines = "\n".join(
                 f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
-                + (" ⚡ merged"         if w.get("gap_merged")                                        else "")
-                + (" ↖ outside window" if _ntfy_outside_window(w, pw_s, pw_e_raw, overnight) else "")
+                + (" ⚡ merged" if w.get("gap_merged") else "")
                 for w in wins
             )
         else:
@@ -1601,7 +1516,7 @@ def _ntfy_message(plans: "list[dict]", skipped: "list[str]") -> str:
 
         summary = (f"{fmt_h(tot)}/{fmt_h(req)}"
                    + (" ⚠️ charge plan not possible" if tot < req else ""))
-        sections.append(f"{profile}  {summary}\n{win_lines}\n{_ntfy_ruler(plan)}")
+        sections.append(f"{profile}  {summary}\n{win_lines}")
 
     if skipped:
         skipped_lines = "\n".join(f"- {n}: prices not yet published"
