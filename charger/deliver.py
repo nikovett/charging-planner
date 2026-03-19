@@ -109,6 +109,12 @@ def _extract_deliveries(config: dict) -> list[tuple[str, str, dict, list[str]]]:
 
         for entry in deliveries:
             handler = entry.get("handler", "").strip()
+            if not entry.get("enabled", True):
+                log.info(
+                    "Delivery entry (handler: %s) in profile '%s' is disabled — skipping.",
+                    handler or "?", profile_name,
+                )
+                continue
             if not handler:
                 log.error(
                     "Delivery entry in profile '%s' is missing a 'handler' field — skipping.\n"

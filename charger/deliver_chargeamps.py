@@ -43,7 +43,9 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _CA_BASE = "https://my.charge.space/api"
 
-# Module-level token cache — login once per process, reuse across deliver() calls
+# Module-level token cache — login once per process, reuse across deliver() calls.
+# This is intentional for a single daily GitHub Actions run. It would serve stale
+# tokens in a long-running process; do not reuse this module in a persistent service.
 _token_cache: dict[str, str] = {}
 
 

@@ -346,6 +346,8 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
 
     log.debug("SetChargingProfile payload: %s", json.dumps(payload, indent=2))
 
+    # asyncio.run() creates a new event loop per call — fine for one or two chargers
+    # in a daily run. If delivering to many chargers, batch the coroutines instead.
     ok = asyncio.run(
         _send_set_charging_profile(
             endpoint_url, charge_point_id, payload, ocpp_version, timeout,
