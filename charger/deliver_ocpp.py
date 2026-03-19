@@ -116,6 +116,9 @@ def _build_profile(
         periods.append({
             "startPeriod": int((win_start - schedule_start).total_seconds()),
             "limit": float(max_charging_rate),
+            # numberPhases is intentionally omitted — phase configuration is an
+            # electrical property of the installation, not something a scheduling
+            # script should override. The charger uses its own configured value.
         })
         cursor = win_end
 
