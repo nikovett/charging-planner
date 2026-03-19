@@ -30,7 +30,12 @@ charging:
     preferred_window_start: "21:00"     # Overnight window — wraps midnight
     preferred_window_end: "06:30"
     timezone: "Europe/Helsinki"
-    deliveries: []                      # No delivery configured for this profile yet
+    deliveries:                     
+      - handler: "chargeamps"           # → charger/deliver_chargeamps.py
+        charge_point_id_env: "CHARGER_ID_2"   # single ID, or a list: ["CHARGER_ID_1", "CHARGER_ID_2"]
+        connector_id: 1
+        max_charging_rate: 16.0        # amps — Charge Amps API uses current (A)
+        enabled: false                 # configured but set to false to temporarily disable this delivery
 
     # Example: deliver overnight profile to two chargers via different handlers
     #
