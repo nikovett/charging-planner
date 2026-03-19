@@ -26,7 +26,9 @@ sys.path.insert(0, "charger")
 
 from deliver_chargeamps import (
     _ca_build_periods,
+    _ca_get_connector_mode,
     _ca_login,
+    _ca_set_connector_mode,
     deliver,
 )
 
@@ -272,30 +274,47 @@ class TestBuildPeriodsEdgeCases(unittest.TestCase):
 # deliver() — public interface
 # ===========================================================================
 
+def _make_chargepoint(mode: str = "On", connector_id: int = 1) -> dict:
+    """Minimal chargepoint dict matching the API response shape."""
+    return {
+        "id": "CHARGER-001",
+        "connectors": [
+            {"connectorId": connector_id, "mode": mode},
+        ],
+    }
+
+
 class TestDeliver(unittest.TestCase):
     """Tests for the deliver() public interface — mocks all network calls."""
 
-    PLAN = make_plan(
+    PLAN  = make_plan(
         ["2026-03-15T20:00:00+00:00"],
         ["2026-03-16T04:30:00+00:00"],
     )
-    ENTRY   = make_entry(connector_id=1, max_charging_rate=16.0)
-    TZ      = "Europe/Helsinki"
-    CP_ID   = "CHARGER-001"
+    ENTRY = make_entry(connector_id=1, max_charging_rate=16.0)
+    TZ    = "Europe/Helsinki"
+    CP_ID = "CHARGER-001"
 
     def _mock_login(self):
-        """Patch _ca_login to return fake tokens without network."""
         import deliver_chargeamps as mod
         mod._token_cache.clear()
         return mock.patch("deliver_chargeamps._ca_login",
                           return_value=("tok", "ent_tok"))
 
+    def _mock_get(self, mode: str = "On"):
+        return mock.patch("deliver_chargeamps._ca_get_chargepoint",
+                          return_value=_make_chargepoint(mode))
+
     def _mock_put(self):
-        """Patch _ca_put_schedule to succeed without network."""
         return mock.patch("deliver_chargeamps._ca_put_schedule")
 
+    def _mock_set_mode(self):
+        return mock.patch("deliver_chargeamps._ca_set_connector_mode")
+
+    # ── Basic success / failure ──────────────────────────────────────────────
+
     def test_deliver_returns_true_on_success(self):
-        with self._mock_login(), self._mock_put():
+        with self._mock_login(), self._mock_get(), self._mock_put(), self._mock_set_mode():
             result = deliver(self.PLAN, self.CP_ID, self.ENTRY, self.TZ)
         self.assertTrue(result)
 
@@ -307,47 +326,113 @@ class TestDeliver(unittest.TestCase):
             result = deliver(self.PLAN, self.CP_ID, self.ENTRY, self.TZ)
         self.assertFalse(result)
 
-    def test_deliver_returns_false_on_put_failure(self):
+    def test_deliver_returns_false_on_get_chargepoint_failure(self):
         with self._mock_login():
+            with mock.patch("deliver_chargeamps._ca_get_chargepoint",
+                            side_effect=Exception("network error")):
+                result = deliver(self.PLAN, self.CP_ID, self.ENTRY, self.TZ)
+        self.assertFalse(result)
+
+    def test_deliver_returns_false_on_put_failure(self):
+        with self._mock_login(), self._mock_get():
             with mock.patch("deliver_chargeamps._ca_put_schedule",
                             side_effect=Exception("network error")):
                 result = deliver(self.PLAN, self.CP_ID, self.ENTRY, self.TZ)
         self.assertFalse(result)
 
+    # ── Argument passthrough ─────────────────────────────────────────────────
+
     def test_deliver_passes_connector_id_from_entry(self):
         entry = make_entry(connector_id=2, max_charging_rate=16.0)
-        with self._mock_login():
+        with self._mock_login(), self._mock_get(), self._mock_set_mode():
             with mock.patch("deliver_chargeamps._ca_put_schedule") as mock_put:
                 deliver(self.PLAN, self.CP_ID, entry, self.TZ)
-                _, kwargs = mock_put.call_args[0], mock_put.call_args
-                self.assertEqual(mock_put.call_args[0][2], 2)  # connector_id positional arg
+                self.assertEqual(mock_put.call_args[0][2], 2)
 
     def test_deliver_passes_max_charging_rate_from_entry(self):
         entry = make_entry(connector_id=1, max_charging_rate=10.0)
-        with self._mock_login():
+        with self._mock_login(), self._mock_get(), self._mock_set_mode():
             with mock.patch("deliver_chargeamps._ca_put_schedule") as mock_put:
                 deliver(self.PLAN, self.CP_ID, entry, self.TZ)
-                self.assertEqual(mock_put.call_args[0][4], 10.0)  # max_charging_rate
+                self.assertEqual(mock_put.call_args[0][4], 10.0)
 
     def test_deliver_passes_timezone_to_put(self):
-        with self._mock_login():
+        with self._mock_login(), self._mock_get(), self._mock_set_mode():
             with mock.patch("deliver_chargeamps._ca_put_schedule") as mock_put:
                 deliver(self.PLAN, self.CP_ID, self.ENTRY, "UTC")
-                self.assertEqual(mock_put.call_args[0][3], "UTC")  # tz_name
+                self.assertEqual(mock_put.call_args[0][3], "UTC")
 
     def test_deliver_uses_default_connector_id_1(self):
-        entry = {}  # no connector_id
-        with self._mock_login():
+        with self._mock_login(), self._mock_get(), self._mock_set_mode():
             with mock.patch("deliver_chargeamps._ca_put_schedule") as mock_put:
-                deliver(self.PLAN, self.CP_ID, entry, self.TZ)
+                deliver(self.PLAN, self.CP_ID, {}, self.TZ)
                 self.assertEqual(mock_put.call_args[0][2], 1)
 
     def test_deliver_uses_default_max_charging_rate_16(self):
-        entry = {}  # no max_charging_rate
-        with self._mock_login():
+        with self._mock_login(), self._mock_get(), self._mock_set_mode():
             with mock.patch("deliver_chargeamps._ca_put_schedule") as mock_put:
-                deliver(self.PLAN, self.CP_ID, entry, self.TZ)
+                deliver(self.PLAN, self.CP_ID, {}, self.TZ)
                 self.assertEqual(mock_put.call_args[0][4], 16.0)
+
+    # ── Mode restore ─────────────────────────────────────────────────────────
+
+    def test_mode_restored_when_was_on(self):
+        """If mode was 'On' before delivery, it must be restored afterwards."""
+        with self._mock_login(), self._mock_get("On"), self._mock_put():
+            with mock.patch("deliver_chargeamps._ca_set_connector_mode") as mock_set:
+                deliver(self.PLAN, self.CP_ID, self.ENTRY, self.TZ)
+                mock_set.assert_called_once()
+                self.assertEqual(mock_set.call_args[0][2], "On")
+
+    def test_mode_restored_when_was_off(self):
+        """If mode was 'Off' before delivery, it must be restored afterwards."""
+        with self._mock_login(), self._mock_get("Off"), self._mock_put():
+            with mock.patch("deliver_chargeamps._ca_set_connector_mode") as mock_set:
+                deliver(self.PLAN, self.CP_ID, self.ENTRY, self.TZ)
+                mock_set.assert_called_once()
+                self.assertEqual(mock_set.call_args[0][2], "Off")
+
+    def test_mode_not_restored_when_already_schedule(self):
+        """If mode was already 'Schedule', no mode restore call should be made."""
+        with self._mock_login(), self._mock_get("Schedule"), self._mock_put():
+            with mock.patch("deliver_chargeamps._ca_set_connector_mode") as mock_set:
+                deliver(self.PLAN, self.CP_ID, self.ENTRY, self.TZ)
+                mock_set.assert_not_called()
+
+    def test_returns_true_even_if_mode_restore_fails(self):
+        """Schedule was delivered — mode restore failure is a warning, not an error."""
+        with self._mock_login(), self._mock_get("On"), self._mock_put():
+            with mock.patch("deliver_chargeamps._ca_set_connector_mode",
+                            side_effect=Exception("restore failed")):
+                result = deliver(self.PLAN, self.CP_ID, self.ENTRY, self.TZ)
+        self.assertTrue(result)
+
+
+# ===========================================================================
+# _ca_get_connector_mode — mode extraction
+# ===========================================================================
+
+class TestGetConnectorMode(unittest.TestCase):
+
+    def test_returns_mode_for_matching_connector(self):
+        cp = _make_chargepoint(mode="On", connector_id=1)
+        self.assertEqual(_ca_get_connector_mode(cp, 1), "On")
+
+    def test_returns_schedule_mode(self):
+        cp = _make_chargepoint(mode="Schedule", connector_id=1)
+        self.assertEqual(_ca_get_connector_mode(cp, 1), "Schedule")
+
+    def test_returns_off_mode(self):
+        cp = _make_chargepoint(mode="Off", connector_id=1)
+        self.assertEqual(_ca_get_connector_mode(cp, 1), "Off")
+
+    def test_returns_none_for_missing_connector(self):
+        cp = _make_chargepoint(mode="On", connector_id=1)
+        self.assertIsNone(_ca_get_connector_mode(cp, 2))
+
+    def test_returns_none_for_empty_connectors(self):
+        cp = {"id": "X", "connectors": []}
+        self.assertIsNone(_ca_get_connector_mode(cp, 1))
 
 
 # ===========================================================================

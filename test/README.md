@@ -8,7 +8,7 @@ Collection of test reports for the implementation
 
 ### Test suite
 
-116 tests in `test_charging_planner.py`, run with:
+115 tests in `test_charging_planner.py`, run with:
 
 ```bash
 python3 -m unittest discover -s test -v
@@ -26,13 +26,13 @@ python3 -m unittest discover -s test -v
 | Best continuous window | 3 |
 | Spillover | 4 |
 | Gap merging | 6 |
-| Plan building | 5 |
+| Plan building | 4 |
 | Window filtering | 5 |
 | Time utilities | 10 |
 | End-to-end pipeline | 6 |
 | Window coverage check | 5 |
 | ntfy notification | 7 |
-| **Total** | **116** |
+| **Total** | **115** |
 
 The 3 OCPP schema validation tests require the spec zip files placed in `test/ocpp16/`, `test/ocpp201/`, `test/ocpp21/` — they skip cleanly without them. All other tests run with no dependencies beyond `pyyaml`.
 
@@ -57,7 +57,7 @@ The two D-grade functions (`_select_with_min_block` CC=19, `close_gap_merge` CC=
 
 ### Test suite
 
-30 tests in `test_deliver_chargeamps.py`, run with:
+40 tests in `test_deliver_chargeamps.py`, run with:
 
 ```bash
 python3 -m unittest discover -s test -v
@@ -69,8 +69,9 @@ python3 -m unittest discover -s test -v
 | Period timing (from/to offsets) | 6 |
 | Period fields | 6 |
 | Edge cases | 3 |
-| deliver() interface | 8 |
+| deliver() interface | 13 |
+| Connector mode extraction | 5 |
 | Login cache | 3 |
-| **Total** | **30** |
+| **Total** | **40** |
 
-These tests focus on the scheduling logic that converts plan windows to Charge Amps `schedulePeriods` — specifically that slots land at the correct times relative to the Monday anchor, across timezones and DST transitions. All network calls are mocked; no credentials or live API access required.
+These tests focus on the scheduling logic that converts plan windows to Charge Amps `schedulePeriods` — specifically that slots land at the correct times relative to the Monday anchor, across timezones and DST transitions. The deliver() tests also cover mode read/restore behaviour: the charger's original mode (`On`, `Off`, or `Schedule`) is read before delivery and restored afterwards if it was not already `Schedule`. All network calls are mocked; no credentials or live API access required.

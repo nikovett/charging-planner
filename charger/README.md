@@ -72,6 +72,8 @@ charging:
 
 Delivers via the `my.charge.space` internal API. Converts plan windows to weekly `schedulePeriods` anchored to Monday 00:00 local time, which is how the Charge Amps web app represents its schedule. Logs in once per process and caches the token for reuse across multiple charger IDs.
 
+**Mode restore** — before delivering the schedule, the connector's current mode (`On`, `Off`, or `Schedule`) is read from the API. After delivery, if the mode was not already `Schedule`, it is restored to its original value. This prevents the schedule delivery from silently switching the charger into schedule mode when the user had it set to `Always on` or `Off`. If mode restore fails the schedule was still delivered successfully — a warning is logged but the delivery is reported as succeeded.
+
 **Config keys:**
 
 | Key | Default | Description |
