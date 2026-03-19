@@ -1734,6 +1734,30 @@ def _write_run_outputs(plans: "list[dict]") -> None:
 
 
 
+def _notify_prices_unavailable(ntfy_cfg: dict) -> None:
+    """Send an ntfy notification when ENTSO-E prices are not yet available."""
+    if not ntfy_cfg.get("enabled", False):
+        return
+    topic = os.environ.get("NTFY_TOPIC") or ntfy_cfg.get("topic", "")
+    if not topic:
+        return
+    try:
+        import urllib.request as _ur
+        req = _ur.Request(
+            f"https://ntfy.sh/{topic}",
+            data="Prices not yet published — no charging plan scheduled today.".encode(),
+            method="POST",
+            headers={
+                "Title":    "Charging plan unavailable",
+                "Priority": "default",
+            },
+        )
+        _ur.urlopen(req, timeout=10)
+        log.info("ntfy: prices unavailable notification sent.")
+    except Exception as exc:
+        log.warning("ntfy prices unavailable notification failed: %s", exc)
+
+
 def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     """Fetch all available prices once, run selection for each profile."""
     try:
@@ -1766,6 +1790,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
             "No profiles could be planned — prices not yet available for any window. "
             "ENTSO-E publishes next-day prices at ~12:00 UTC."
         )
+        _notify_prices_unavailable(raw_config.get("ntfy", {}))
         sys.exit(0)
 
     if skipped:

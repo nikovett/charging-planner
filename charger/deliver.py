@@ -289,7 +289,6 @@ def _send_delivery_ntfy(
             headers={
                 "Title":    f"Charging plan for {date}",
                 "Priority": "default",
-                "Tags":     "electric_plug",
             },
         )
         _ur.urlopen(req, timeout=10)
