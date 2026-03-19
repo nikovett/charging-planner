@@ -190,13 +190,12 @@ class TestConfigValidation(unittest.TestCase):
 class TestParseConfigs(unittest.TestCase):
 
     BASE_RAW = {
-        "entsoe": {"api_key": "abc", "area": "FI"},
+        "entsoe": {"api_key": "abc", "area": "FI", "timezone": "Europe/Helsinki"},
         "charging": [{
             "name": "test",
             "required_hours": 2,
             "preferred_window_start": "00:00",
             "preferred_window_end": "06:00",
-            "timezone": "Europe/Helsinki",
         }],
     }
 
@@ -222,12 +221,12 @@ class TestParseConfigs(unittest.TestCase):
 
     def test_multiple_profiles(self):
         raw = {
-            "entsoe": {"api_key": "abc", "area": "FI"},
+            "entsoe": {"api_key": "abc", "area": "FI", "timezone": "Europe/Helsinki"},
             "charging": [
                 {"name": "a", "required_hours": 1, "preferred_window_start": "00:00",
-                 "preferred_window_end": "03:00", "timezone": "Europe/Helsinki"},
+                 "preferred_window_end": "03:00"},
                 {"name": "b", "required_hours": 3, "preferred_window_start": "00:00",
-                 "preferred_window_end": "07:00", "timezone": "Europe/Helsinki"},
+                 "preferred_window_end": "07:00"},
             ],
         }
         configs = parse_configs(raw)
@@ -238,7 +237,7 @@ class TestParseConfigs(unittest.TestCase):
     def test_bad_timezone_raises_config_error(self):
         import copy
         raw = copy.deepcopy(self.BASE_RAW)
-        raw["charging"][0]["timezone"] = "Not/ATimezone"
+        raw["entsoe"]["timezone"] = "Not/ATimezone"
         with self.assertRaises(ConfigError):
             parse_configs(raw)
 
@@ -1029,13 +1028,12 @@ class TestWindowCoverageCheck(unittest.TestCase):
                         return_value=one_hour):
             with self.assertRaises(SystemExit) as ctx:
                 cmd_plan({
-                    "entsoe": {"api_key": "x", "area": "FI"},
+                    "entsoe": {"api_key": "x", "area": "FI", "timezone": "Europe/Helsinki"},
                     "charging": [{
                         "name": "topup",
                         "required_hours": 2,
                         "preferred_window_start": "00:00",
                         "preferred_window_end": "06:30",
-                        "timezone": "Europe/Helsinki",
                     }],
                 }, output_dir="/tmp")
         self.assertEqual(ctx.exception.code, 0)
@@ -1071,7 +1069,7 @@ class TestEndToEnd(unittest.TestCase):
             return cp.cmd_plan(self.RAW_CONFIG, output_dir="/tmp")
 
     RAW_CONFIG = {
-        "entsoe": {"api_key": "test", "area": "FI"},
+        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
         "charging": [
             {
                 "name": "topup",
@@ -1080,7 +1078,6 @@ class TestEndToEnd(unittest.TestCase):
                 "min_slot_minutes": 30,
                 "preferred_window_start": "00:00",
                 "preferred_window_end": "06:30",
-                "timezone": "Europe/Helsinki",
             },
             {
                 "name": "overnight",
@@ -1089,7 +1086,6 @@ class TestEndToEnd(unittest.TestCase):
                 "min_slot_minutes": 30,
                 "preferred_window_start": "22:00",
                 "preferred_window_end": "06:30",
-                "timezone": "Europe/Helsinki",
             },
         ],
     }

@@ -5,6 +5,7 @@ entsoe:
   api_key: ""        # ENTSO-E security token — never commit a real key here; injected at runtime by GitHub Actions
   area: "FI"         # Bidding zone — short code (FI, SE1–SE4, NO1–NO5, DK1/2, EE, LV, LT, DE, FR, NL, BE, AT, PL)
                      # or full EIC code, e.g. "10YFI-1--------U"
+  timezone: "Europe/Helsinki"  # IANA timezone — applies to all charging profiles
 
 charging:
   - name: "topup"
@@ -14,7 +15,6 @@ charging:
     max_price_cents_kwh: null           # Price ceiling in c€/kWh — skip slots above this (null = no limit)
     preferred_window_start: "22:00"
     preferred_window_end: "06:30"
-    timezone: "Europe/Helsinki"
     deliveries:
       - handler: "chargeamps"           # → charger/deliver_chargeamps.py
         charge_point_id_env: "CHARGER_ID_1"   # single ID, or a list: ["CHARGER_ID_1", "CHARGER_ID_2"]
@@ -29,7 +29,6 @@ charging:
     max_price_cents_kwh: null
     preferred_window_start: "21:00"     # Overnight window — wraps midnight
     preferred_window_end: "06:30"
-    timezone: "Europe/Helsinki"
     deliveries:                     
       - handler: "chargeamps"           # → charger/deliver_chargeamps.py
         charge_point_id_env: "CHARGER_ID_2"   # single ID, or a list: ["CHARGER_ID_1", "CHARGER_ID_2"]

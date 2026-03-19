@@ -80,7 +80,6 @@ CHARGING_DEFAULTS = {
     "min_slot_minutes":       30,
     "preferred_window_start": "00:00",
     "preferred_window_end":   "23:59",
-    "timezone":               None,
 }
 
 DEFAULT_CONFIG = {
@@ -318,6 +317,7 @@ class Config:
     # ENTSO-E
     api_key:                str
     area:                   str
+    timezone_str:           Optional[str]     # raw IANA name from entsoe: block, or None (auto-detect)
 
     # Profile
     name:                   str               # profile name for filenames and display
@@ -329,18 +329,17 @@ class Config:
     max_price_eur:          Optional[float]   # None = no ceiling
     preferred_window_start: str               # validated HH:MM
     preferred_window_end:   str               # validated HH:MM
-    timezone_str:           Optional[str]     # raw IANA name or None (auto-detect)
 
 
 def _parse_one_profile(et: dict, ch: dict) -> "Config":
     """Build a Config from a single validated charging profile dict."""
-    tz_str = ch.get("timezone") or None
+    tz_str = et.get("timezone") or None
     if tz_str:
         try:
             ZoneInfo(tz_str)   # validate only; result discarded
         except (ZoneInfoNotFoundError, KeyError):
             raise ConfigError(
-                f"charging.timezone={tz_str!r} is not a recognised IANA timezone name "
+                f"entsoe.timezone={tz_str!r} is not a recognised IANA timezone name "
                 f"(e.g. 'Europe/Helsinki', 'UTC'). "
                 f"Check https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
             )
@@ -348,6 +347,7 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
     return Config(
         api_key=et["api_key"],
         area=et["area"],
+        timezone_str=tz_str,
         name=str(ch.get("name", "default")),
         required_minutes=int(ch["required_hours"] * 60),
         continuous_only=bool(ch.get("continuous_only", False)),
@@ -355,7 +355,6 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         max_price_eur=ceil_cents / 100.0 if ceil_cents is not None else None,
         preferred_window_start=ch["preferred_window_start"],
         preferred_window_end=ch["preferred_window_end"],
-        timezone_str=tz_str,
     )
 
 

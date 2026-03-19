@@ -13,7 +13,6 @@ Deliveries are configured inside each charging profile in config.yaml:
 
     charging:
       - name: "topup"
-        timezone: "Europe/Helsinki"
         ...
         deliveries:
           - handler: "chargeamps"       # → charger/deliver_chargeamps.py
@@ -87,7 +86,7 @@ def load_config(path: str) -> dict:
 def _extract_deliveries(config: dict) -> list[tuple[str, str, dict, list[str]]]:
     """Walk charging profiles and extract (profile_name, timezone, entry, charge_point_ids).
 
-    timezone is taken from the charging profile, not the delivery entry.
+    timezone is taken from the entsoe: block — a single value shared across all profiles.
     charge_point_id_env may be a string or a list — both are normalised to a
     list of resolved environment variable values here so handlers never need
     to deal with the distinction.
@@ -99,10 +98,11 @@ def _extract_deliveries(config: dict) -> list[tuple[str, str, dict, list[str]]]:
     if isinstance(profiles, dict):
         profiles = [profiles]
 
+    timezone = config.get("entsoe", {}).get("timezone", "UTC")
+
     results = []
     for profile in profiles:
         profile_name = profile.get("name", "default")
-        timezone     = profile.get("timezone", "UTC")
         deliveries   = profile.get("deliveries", [])
         if not deliveries:
             continue
