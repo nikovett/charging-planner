@@ -12,9 +12,14 @@ charging:
     continuous_only: false              # Cheapest individual slots (may be split across the window)
     min_slot_minutes: 30                # Minimum continuous block length (must be divisible by 15)
     max_price_cents_kwh: null           # Price ceiling in c€/kWh — skip slots above this (null = no limit)
-    preferred_window_start: "00:00"
+    preferred_window_start: "22:00"
     preferred_window_end: "06:30"
     timezone: "Europe/Helsinki"
+    deliveries:
+      - handler: "chargeamps"           # → charger/deliver_chargeamps.py
+        charge_point_id_env: "CHARGER_ID_1"   # single ID, or a list: ["CHARGER_ID_1", "CHARGER_ID_2"]
+        connector_id: 1
+        max_current: 16.0
 
   - name: "overnight"
     required_hours: 6                   # Total hours of charging to schedule
@@ -24,23 +29,25 @@ charging:
     preferred_window_start: "22:00"     # Overnight window — wraps midnight
     preferred_window_end: "06:30"
     timezone: "Europe/Helsinki"
+    deliveries: []                      # No delivery configured for this profile yet
+
+    # Example: deliver overnight profile to two chargers via different handlers
+    #
+    # deliveries:
+    #   - handler: "chargeamps"
+    #     charge_point_id_env:          # list — same plan delivered to both chargers
+    #       - "CHARGER_ID_1"
+    #       - "CHARGER_ID_2"
+    #     connector_id: 1
+    #     max_current: 16.0
+    #
+    #   - handler: "ocpp"              # → charger/deliver_ocpp.py
+    #     charge_point_id_env: "CHARGER_ID_2"   # reuse same CHARGER_ID_# scheme
+    #     endpoint_url_env: "OCPP_ENDPOINT_URL"  # e.g. ws://192.168.1.10:9000/ocpp
+    #     ocpp_version: "1.6"          # "1.6", "2.0.1", or "2.1"
+    #     connector_id: 1
+    #     timeout: 30
 
 ntfy:
   enabled: true
   topic: ""    # never commit — injected at runtime via NTFY_TOPIC environment variable
-
-# Charger delivery configuration
-#
-
-deliveries:
-  - profile: "topup"
-    charge_point_id_env: "CHARGER_ID_1"   # env var holding the charger ID
-    connector_id: 1
-    max_current: 16.0
-    timezone: "Europe/Helsinki"
-
-#  - profile: "overnight"
-#    charge_point_id_env: "CHARGER_ID_2"
-#    connector_id: 1
-#    max_current: 16.0
-#    timezone: "Europe/Helsinki"
