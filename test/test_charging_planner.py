@@ -18,6 +18,7 @@ Organised by feature area:
 import json
 import sys
 import unittest
+import unittest.mock as mock
 import zipfile
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
@@ -644,19 +645,6 @@ class TestBuildPlan(unittest.TestCase):
         self.assertIn("avg_cents_kwh", ps)
         self.assertIn("max_cents_kwh", ps)
 
-    def test_gap_merged_flag_in_window(self):
-        base     = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        slots    = slots_from(base, 8)
-        selected = slots[:4]
-        windows  = merge_continuous_slots(selected)
-        merged_starts = {slots[2].start}
-        p = make_plan_params(slots, selected, windows,
-                             merged_starts=merged_starts)
-        plan = build_plan(p)
-        # window containing merged_start should have gap_merged=True
-        merged_found = any(w["gap_merged"] for w in plan["windows"])
-        self.assertTrue(merged_found)
-
 
 # ===========================================================================
 # 8. OCPP profile
@@ -1057,7 +1045,30 @@ class TestWindowCoverageCheck(unittest.TestCase):
 # ===========================================================================
 
 class TestEndToEnd(unittest.TestCase):
-    """Smoke tests for cmd_plan with a mocked ENTSO-E fetch."""
+    """Smoke tests for cmd_plan with a mocked ENTSO-E fetch.
+
+    The synthetic prices are anchored to 2026-03-14. datetime.now is pinned to
+    2026-03-14 14:30 UTC so window resolution always targets that same night,
+    regardless of when the tests are run.
+    """
+
+    # Pin the clock to 14:30 UTC on the day the synthetic prices are built around.
+    # This is before any overnight window starts (22:00 Helsinki = 20:00 UTC).
+    _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
+
+    def _run_cmd_plan(self, prices):
+        """Run cmd_plan with frozen clock and mocked price fetch."""
+        import charging_planner as cp
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return TestEndToEnd._FROZEN_NOW if tz is None \
+                    else TestEndToEnd._FROZEN_NOW.astimezone(tz)
+
+        with mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            return cp.cmd_plan(self.RAW_CONFIG, output_dir="/tmp")
 
     RAW_CONFIG = {
         "entsoe": {"api_key": "test", "area": "FI"},
@@ -1102,79 +1113,46 @@ class TestEndToEnd(unittest.TestCase):
         return slots
 
     def test_produces_one_plan_per_profile(self):
-        from charging_planner import cmd_plan
-        import unittest.mock as mock
-
-        prices = self._make_prices()
-        with mock.patch("charging_planner.fetch_entsoe_prices",
-                        return_value=prices):
-            plans = cmd_plan(self.RAW_CONFIG, output_dir="/tmp")
-
+        plans = self._run_cmd_plan(self._make_prices())
         self.assertEqual(len(plans), 2)
         self.assertEqual(plans[0]["profile"], "topup")
         self.assertEqual(plans[1]["profile"], "overnight")
 
     def test_topup_schedules_required_minutes(self):
-        from charging_planner import cmd_plan
-        import unittest.mock as mock
-
-        prices = self._make_prices()
-        with mock.patch("charging_planner.fetch_entsoe_prices",
-                        return_value=prices):
-            plans = cmd_plan(self.RAW_CONFIG, output_dir="/tmp")
-
-        topup = plans[0]
-        self.assertEqual(topup["total_minutes"], 120)
+        plans = self._run_cmd_plan(self._make_prices())
+        self.assertEqual(plans[0]["total_minutes"], 120)
 
     def test_overnight_schedules_required_minutes(self):
-        from charging_planner import cmd_plan
-        import unittest.mock as mock
-
-        prices = self._make_prices()
-        with mock.patch("charging_planner.fetch_entsoe_prices",
-                        return_value=prices):
-            plans = cmd_plan(self.RAW_CONFIG, output_dir="/tmp")
-
-        overnight = plans[1]
-        self.assertEqual(overnight["total_minutes"], 360)
+        plans = self._run_cmd_plan(self._make_prices())
+        self.assertEqual(plans[1]["total_minutes"], 360)
 
     def test_overnight_windows_within_preferred_window(self):
-        from charging_planner import cmd_plan
-        import unittest.mock as mock
-
-        prices = self._make_prices()
-        with mock.patch("charging_planner.fetch_entsoe_prices",
-                        return_value=prices):
-            plans = cmd_plan(self.RAW_CONFIG, output_dir="/tmp")
-
-        overnight = plans[1]
-        win_end_utc = datetime.fromisoformat(overnight["window_ends_utc"][-1])
+        plans = self._run_cmd_plan(self._make_prices())
+        win_end_utc = datetime.fromisoformat(plans[1]["window_ends_utc"][-1])
         # 06:30 Helsinki EET = 04:30 UTC
         self.assertLessEqual(win_end_utc, datetime(2026, 3, 16, 4, 30, tzinfo=UTC))
 
     def test_plans_contain_ocpp_profile(self):
-        from charging_planner import cmd_plan
-        import unittest.mock as mock
-
-        prices = self._make_prices()
-        with mock.patch("charging_planner.fetch_entsoe_prices",
-                        return_value=prices):
-            plans = cmd_plan(self.RAW_CONFIG, output_dir="/tmp")
-
+        plans = self._run_cmd_plan(self._make_prices())
         for plan in plans:
             self.assertIn("ocpp_charging_profile", plan)
             self.assertIn("chargingSchedule", plan["ocpp_charging_profile"])
 
     def test_plan_json_written_to_output_dir(self):
-        from charging_planner import cmd_plan
-        import unittest.mock as mock
         import tempfile, os
-
         prices = self._make_prices()
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch("charging_planner.fetch_entsoe_prices",
-                            return_value=prices):
-                cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+            import charging_planner as cp
+
+            class _FrozenDatetime(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return TestEndToEnd._FROZEN_NOW if tz is None \
+                        else TestEndToEnd._FROZEN_NOW.astimezone(tz)
+
+            with mock.patch("charging_planner.datetime", _FrozenDatetime), \
+                 mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+                cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
             files = os.listdir(tmpdir)
         self.assertIn("plan-topup.json", files)
         self.assertIn("plan-overnight.json", files)
@@ -1539,7 +1517,7 @@ class TestNtfyMessage(unittest.TestCase):
         "preferred_window_end": "06:30",
         "windows": [
             {"start": "01:00", "end": "03:00", "duration_minutes": 120,
-             "avg_price_cents_kwh": 2.36, "gap_merged": False},
+             "avg_price_cents_kwh": 2.36},
         ],
     }
 

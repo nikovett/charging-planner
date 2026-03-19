@@ -265,10 +265,10 @@ def _send_delivery_ntfy(
         profile_results = results_by_profile.get(profile, [])
         if profile_results:
             delivery_lines = "\n".join(
-                f"{'✓' if ok else '✗'} {cp_id}"
-                for _, cp_id, ok in profile_results
+                f"{'✓' if ok else '✗'} {cp_id} ({handler})"
+                for handler, cp_id, ok in profile_results
             )
-            block += f"\nDelivered to charger(s):\n{delivery_lines}"
+            block += f"\n\nDeliveries:\n{delivery_lines}"
 
         sections.append(block)
 

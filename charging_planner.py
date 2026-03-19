@@ -1191,7 +1191,6 @@ class PlanParams:
     timezone_name:          str
     preferred_window_start: str
     preferred_window_end:   str
-    merged_starts:          set           = field(default_factory=set)
 
 
 def build_plan(p: PlanParams) -> dict:
@@ -1237,16 +1236,11 @@ def build_plan(p: PlanParams) -> dict:
         block_slots = [s for s in p.selected if start_utc <= s.start < end_utc]
         avg_p = (sum(s.price_eur_kwh for s in block_slots) / len(block_slots) * 100
                  if block_slots else 0.0)
-        # A window is gap_merged if any of its constituent slots was the start
-        # of a gap-merged block. Checking only start_utc is fragile when
-        # close_gap_merge produces blocks that get further merged.
-        is_gap_merged = any(s.start in p.merged_starts for s in block_slots)
         win_list.append({
             "start": start_local.strftime("%H:%M"),
             "end":   end_local.strftime("%H:%M"),
             "duration_minutes": dur,
             "avg_price_cents_kwh": round(avg_p, 4),
-            "gap_merged": is_gap_merged,
         })
 
     total_min = sum(s.duration_minutes for s in p.selected)
@@ -1474,10 +1468,9 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     if wins:
         print(f"  {_bold(f'Charging windows ({len(wins)}):')} ")
         for w in wins:
-            merged_tag = f"  {_yellow('⚡ gap merged')}" if w.get("gap_merged") else ""
             print(_window_bar(w["start"], w["end"],
                               w["duration_minutes"], w["avg_price_cents_kwh"],
-                              min_c, max_c) + merged_tag)
+                              min_c, max_c))
         print()
     else:
         print(f"  {_red('✗ No windows selected')}")
@@ -1508,7 +1501,6 @@ def _ntfy_message(plans: "list[dict]", skipped: "list[str]") -> str:
         if wins:
             win_lines = "\n".join(
                 f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
-                + (" ⚡ merged" if w.get("gap_merged") else "")
                 for w in wins
             )
         else:
@@ -1711,7 +1703,7 @@ def _select_slots(
     win_start_utc:    datetime,
     win_end_utc:      datetime,
 ) -> tuple[list[Slot], set]:
-    """Run the full slot-selection pipeline and return (selected, merged_starts).
+    """Run the full slot-selection pipeline and return selected slots.
 
     Pipeline:
       filter preferred window → greedy cheapest select → spillover fill
@@ -1752,9 +1744,8 @@ def _select_slots(
         )
         selected = sorted(selected + spillover, key=lambda x: x.start)
 
-    merged_starts: set = set()
     if not cfg.continuous_only:
-        selected, merged_starts = close_gap_merge(
+        selected, _ = close_gap_merge(
             selected, candidate_prices, cfg.min_slot_minutes, cfg.required_minutes
         )
 
@@ -1771,7 +1762,7 @@ def _select_slots(
                 cfg.name, scheduled_min, cfg.required_minutes,
             )
 
-    return selected, merged_starts
+    return selected
 
 
 # ---------------------------------------------------------------------------
@@ -1806,7 +1797,7 @@ def _plan_one_profile(
         log.info("Trimmed %d unreachable slots (earliest useful: %s UTC)",
                  trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"))
 
-    selected, merged_starts = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc)
+    selected = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc)
     windows = merge_continuous_slots(selected)
 
     plan = build_plan(PlanParams(
@@ -1819,7 +1810,6 @@ def _plan_one_profile(
         required_minutes=cfg.required_minutes,
         tz=tz.zone,
         timezone_name=tz.name,
-        merged_starts=merged_starts,
         preferred_window_start=cfg.preferred_window_start,
         preferred_window_end=cfg.preferred_window_end,
     ))
