@@ -11,6 +11,13 @@ is set inside a charging profile's deliveries in config.yaml.
 Environment variables:
     CHARGER_EMAIL       my.charge.space login email
     CHARGER_PASSWORD    my.charge.space login password
+
+config.yaml delivery entry:
+    deliveries:
+      - handler: "chargeamps"
+        charge_point_id_env: "CHARGER_ID_1"   # single ID or a list
+        connector_id: 1                        # default 1
+        max_charging_rate: 16.0               # amps — default 16.0 A
 """
 
 from __future__ import annotations
@@ -170,9 +177,13 @@ def _nanoid(size: int = 21) -> str:
 def _ca_build_periods(
     plan: dict,
     tz_name: str,
-    max_current: float,
+    max_charging_rate: float,
 ) -> tuple[list[dict], str]:
-    """Convert plan windows → Charge Amps schedulePeriods."""
+    """Convert plan windows → Charge Amps schedulePeriods.
+
+    max_charging_rate is in amps — the Charge Amps API uses current (A),
+    not power (W).
+    """
     window_starts = plan.get("window_starts_utc", [])
     window_ends   = plan.get("window_ends_utc", [])
 
@@ -198,7 +209,7 @@ def _ca_build_periods(
             "id":         _nanoid(),
             "from":       int((start_utc - anchor_utc).total_seconds()),
             "to":         int((end_utc   - anchor_utc).total_seconds()),
-            "maxCurrent": max_current,
+            "maxCurrent": max_charging_rate,
         })
 
     log.debug("Anchor: %s  periods: %s", anchor_iso, periods)
@@ -210,11 +221,11 @@ def _ca_put_schedule(
     charge_point_id: str,
     connector_id: int,
     tz_name: str,
-    max_current: float,
+    max_charging_rate: float,
     token: str,
     entitlements_token: str,
 ) -> None:
-    periods, anchor_iso = _ca_build_periods(plan, tz_name, max_current)
+    periods, anchor_iso = _ca_build_periods(plan, tz_name, max_charging_rate)
     if not periods:
         raise ValueError("No valid periods generated from plan windows.")
 
@@ -245,8 +256,8 @@ def _ca_put_schedule(
         for s, e in zip(plan["window_starts_utc"], plan["window_ends_utc"])
     )
     log.info(
-        "Delivered: charger=%s connector=%s  windows=%s",
-        charge_point_id, connector_id, windows_str,
+        "Delivered: charger=%s connector=%s  rate=%gA  windows=%s",
+        charge_point_id, connector_id, max_charging_rate, windows_str,
     )
 
 
@@ -261,14 +272,13 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
         plan:             Plan dict as produced by charging_planner.py.
         charge_point_id:  Resolved charger ID (already read from env by dispatcher).
         entry:            The delivery config entry from config.yaml, containing
-                          connector_id, max_current, etc.
-        timezone:         IANA timezone name inherited from the charging profile
-                          (e.g. 'Europe/Helsinki').
+                          connector_id, max_charging_rate, etc.
+        timezone:         IANA timezone name inherited from the charging profile.
 
     Returns True on success, False on failure.
     """
-    connector_id = int(entry.get("connector_id", 1))
-    max_current  = float(entry.get("max_current", 16.0))
+    connector_id       = int(entry.get("connector_id", 1))
+    max_charging_rate  = float(entry.get("max_charging_rate", 16.0))
 
     try:
         token, ent_token = _ca_login()
@@ -279,7 +289,7 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
     try:
         _ca_put_schedule(
             plan, charge_point_id, connector_id,
-            timezone, max_current, token, ent_token,
+            timezone, max_charging_rate, token, ent_token,
         )
         return True
     except Exception as exc:

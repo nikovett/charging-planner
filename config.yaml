@@ -19,7 +19,7 @@ charging:
       - handler: "chargeamps"           # → charger/deliver_chargeamps.py
         charge_point_id_env: "CHARGER_ID_1"   # single ID, or a list: ["CHARGER_ID_1", "CHARGER_ID_2"]
         connector_id: 1
-        max_current: 16.0
+        max_charging_rate: 16.0        # amps — Charge Amps API uses current (A)
 
   - name: "overnight"
     required_hours: 6                   # Total hours of charging to schedule
@@ -39,14 +39,19 @@ charging:
     #       - "CHARGER_ID_1"
     #       - "CHARGER_ID_2"
     #     connector_id: 1
-    #     max_current: 16.0
+    #     max_charging_rate: 16.0      # amps — Charge Amps API uses current (A)
     #
     #   - handler: "ocpp"              # → charger/deliver_ocpp.py
     #     charge_point_id_env: "CHARGER_ID_2"   # reuse same CHARGER_ID_# scheme
     #     endpoint_url_env: "OCPP_ENDPOINT_URL"  # e.g. ws://192.168.1.10:9000/ocpp
-    #     ocpp_version: "1.6"          # "1.6", "2.0.1", or "2.1"
-    #     connector_id: 1
-    #     timeout: 30
+    #     ocpp_version: "1.6"          # "1.6", "2.0.1", or "2.1" — default 1.6
+    #     connector_id: 1              # OCPP 1.6 connectorId / 2.x evseId — default 1
+    #     transaction_id: null         # omit or null for TxDefaultProfile
+    #     timeout: 30                  # seconds to wait for response — default 30
+    #     charging_rate_unit: "W"      # unit for max_charging_rate: "W" (power in watts) or "A" (current in amps per phase) — check your charger's OCPP documentation
+    #     max_charging_rate: 11000.0   # limit in W or A during charging windows — default 11000.0
+    #     profile_id: 1                # ChargingProfile identifier, must be unique on the charger — default 1
+    #     stack_level: 0               # higher values take precedence; 0 = lowest priority — default 0
 
 ntfy:
   enabled: true

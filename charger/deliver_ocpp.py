@@ -20,12 +20,16 @@ Environment variables:
 config.yaml delivery entry:
     deliveries:
       - handler: "ocpp"
-        charge_point_id_env: "OCPP_CHARGE_POINT_ID"   # or a list
+        charge_point_id_env: "CHARGER_ID_1"    # or a list
         endpoint_url_env: "OCPP_ENDPOINT_URL"
-        ocpp_version: "1.6"      # "1.6", "2.0.1", or "2.1" — default 1.6
-        connector_id: 1          # OCPP 1.6 connectorId / 2.x evseId
-        transaction_id: null     # optional; null = TxDefaultProfile
-        timeout: 30              # seconds to wait for response
+        ocpp_version: "1.6"          # "1.6", "2.0.1", or "2.1" — default 1.6
+        connector_id: 1              # OCPP 1.6 connectorId / 2.x evseId — default 1
+        transaction_id: null         # optional; null = TxDefaultProfile
+        timeout: 30                  # seconds to wait for response — default 30
+        charging_rate_unit: "W"      # unit for max_charging_rate: "W" (power in watts) or "A" (current in amps per phase) — check your charger's OCPP documentation
+        max_charging_rate: 11000.0   # limit in W or A — default 11000.0 W
+        profile_id: 1                # ChargingProfile id — default 1
+        stack_level: 0               # higher values take precedence — default 0
 """
 
 from __future__ import annotations
@@ -78,11 +82,16 @@ def _build_profile(
     plan: dict,
     ocpp_version: str,
     transaction_id: int | None,
+    charging_rate_unit: str,
+    max_charging_rate: float,
+    profile_id: int,
+    stack_level: int,
 ) -> dict:
     """Build an OCPP ChargingProfile from plan window timestamps.
 
-    Charging windows run at 11 kW; gaps between windows are set to 0 so the
-    vehicle does not charge outside the planned slots.
+    Charging windows run at max_charging_rate (in charging_rate_unit);
+    gaps between windows are set to 0 so the vehicle does not charge outside
+    the planned slots.
     """
     from datetime import datetime
 
@@ -95,7 +104,6 @@ def _build_profile(
     schedule_start = starts[0]
     schedule_end   = ends[-1]
     duration_sec   = int((schedule_end - schedule_start).total_seconds())
-    max_rate       = 11000.0  # W
 
     periods = []
     cursor  = schedule_start
@@ -107,7 +115,7 @@ def _build_profile(
             })
         periods.append({
             "startPeriod": int((win_start - schedule_start).total_seconds()),
-            "limit": max_rate,
+            "limit": float(max_charging_rate),
         })
         cursor = win_end
 
@@ -123,15 +131,15 @@ def _build_profile(
     schedule: dict = {
         "startSchedule":          schedule_start.isoformat(),
         "duration":               duration_sec,
-        "chargingRateUnit":       "W",
+        "chargingRateUnit":       charging_rate_unit,
         "chargingSchedulePeriod": periods,
     }
     if is_v2:
-        schedule["id"] = 1
+        schedule["id"] = profile_id
 
     return {
-        profile_id_key:           1,
-        "stackLevel":             0,
+        profile_id_key:           profile_id,
+        "stackLevel":             stack_level,
         "chargingProfilePurpose": "TxDefaultProfile",
         "chargingProfileKind":    "Absolute",
         "validFrom":              schedule_start.isoformat(),
@@ -145,14 +153,21 @@ def _set_charging_profile_payload(
     ocpp_version: str,
     connector_id: int,
     transaction_id: int | None,
+    charging_rate_unit: str,
+    max_charging_rate: float,
+    profile_id: int,
+    stack_level: int,
 ) -> dict:
     """Wrap the ChargingProfile in the correct SetChargingProfile.req envelope.
 
     OCPP 1.6  →  { connectorId, csChargingProfiles }
     OCPP 2.x  →  { evseId, chargingProfile }
     """
-    profile = _build_profile(plan, ocpp_version, transaction_id)
-    is_v2   = not ocpp_version.startswith("1.6")
+    profile = _build_profile(
+        plan, ocpp_version, transaction_id,
+        charging_rate_unit, max_charging_rate, profile_id, stack_level,
+    )
+    is_v2 = not ocpp_version.startswith("1.6")
 
     if is_v2:
         return {
@@ -282,19 +297,29 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
     Args:
         plan:             Plan dict as produced by charging_planner.py.
         charge_point_id:  Resolved charger ID (already read from env by dispatcher).
-        entry:            The delivery config entry from config.yaml, containing
-                          endpoint_url_env, ocpp_version, connector_id, etc.
+        entry:            The delivery config entry from config.yaml.
         timezone:         IANA timezone name inherited from the charging profile.
                           Not used by the OCPP handler but accepted for a
                           consistent interface across all handlers.
 
     Returns True on success, False on failure.
     """
-    endpoint_env   = entry.get("endpoint_url_env", "OCPP_ENDPOINT_URL")
-    ocpp_version   = str(entry.get("ocpp_version", "1.6"))
-    connector_id   = int(entry.get("connector_id", 1))
-    transaction_id = entry.get("transaction_id")
-    timeout        = int(entry.get("timeout", 30))
+    endpoint_env        = entry.get("endpoint_url_env", "OCPP_ENDPOINT_URL")
+    ocpp_version        = str(entry.get("ocpp_version", "1.6"))
+    connector_id        = int(entry.get("connector_id", 1))
+    transaction_id      = entry.get("transaction_id")
+    timeout             = int(entry.get("timeout", 30))
+    charging_rate_unit  = str(entry.get("charging_rate_unit", "W"))
+    max_charging_rate   = float(entry.get("max_charging_rate", 11000.0))
+    profile_id          = int(entry.get("profile_id", 1))
+    stack_level         = int(entry.get("stack_level", 0))
+
+    if charging_rate_unit not in ("W", "A"):
+        log.error(
+            "Invalid charging_rate_unit=%r for charger '%s' — must be 'W' or 'A'.",
+            charging_rate_unit, charge_point_id,
+        )
+        return False
 
     endpoint_url = os.environ.get(endpoint_env, "")
     if not endpoint_url:
@@ -307,6 +332,7 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
     try:
         payload = _set_charging_profile_payload(
             plan, ocpp_version, connector_id, transaction_id,
+            charging_rate_unit, max_charging_rate, profile_id, stack_level,
         )
     except Exception as exc:
         log.error(
@@ -328,6 +354,9 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
             f"{s}–{e}"
             for s, e in zip(plan["window_starts_utc"], plan["window_ends_utc"])
         )
-        log.info("Delivered: charger=%s  windows=%s", charge_point_id, windows_str)
+        log.info(
+            "Delivered: charger=%s  unit=%s  rate=%g  windows=%s",
+            charge_point_id, charging_rate_unit, max_charging_rate, windows_str,
+        )
 
     return ok
