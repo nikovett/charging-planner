@@ -58,6 +58,7 @@ All configuration lives in a single `config.yaml` file. Deliveries are configure
 entsoe:
   api_key: ""      # injected at runtime via ENTSOE_API_KEY
   area: "FI"
+  timezone: "Europe/Helsinki"
 
 charging:
   - name: "topup"
@@ -65,7 +66,6 @@ charging:
     continuous_only: false
     preferred_window_start: "22:00"
     preferred_window_end: "06:30"
-    timezone: "Europe/Helsinki"
     deliveries:
       - handler: "chargeamps"
         charge_point_id_env: "CHARGER_ID_1"
@@ -77,7 +77,6 @@ charging:
     continuous_only: true
     preferred_window_start: "22:00"
     preferred_window_end: "06:30"
-    timezone: "Europe/Helsinki"
     deliveries:
       - handler: "ocpp"
         charge_point_id_env:
@@ -92,7 +91,7 @@ ntfy:
   topic: ""        # injected at runtime via NTFY_TOPIC
 ```
 
-`charge_point_id_env` accepts either a single env var name or a list — when a list is given, the same plan is delivered to every charger independently. Timezone is set once per charging profile and inherited by all its delivery entries.
+`charge_point_id_env` accepts either a single env var name or a list — when a list is given, the same plan is delivered to every charger independently. Timezone is set once in the `entsoe:` block and applies to all profiles and delivery handlers.
 
 ### Charging profile reference
 
@@ -100,6 +99,7 @@ ntfy:
 |---|---|---|
 | `entsoe.api_key` | — | **Required.** ENTSO-E security token |
 | `entsoe.area` | `FI` | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
+| `entsoe.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from system. Applies to all profiles |
 | `charging.name` | `"default"` | Profile name — used in the output filename (`plan-{name}.json`) |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
 | `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
@@ -107,7 +107,6 @@ ntfy:
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `00:00` | **Required.** Start of preferred charging window (`HH:MM`) |
 | `charging.preferred_window_end` | `06:30` | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight. Equal start and end is an error |
-| `charging.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from system |
 
 ### Preferred window behaviour
 

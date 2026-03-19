@@ -33,9 +33,11 @@ charging_planner.py  →  plan-{name}.json  →  charger/deliver.py  →  delive
 Deliveries are configured inside each charging profile in `config.yaml`. The `handler` field determines which script is used. `charge_point_id_env` accepts a single env var name or a list — when a list is given, the same plan is delivered to every charger ID independently.
 
 ```yaml
+entsoe:
+  timezone: "Europe/Helsinki"
+
 charging:
   - name: "topup"
-    timezone: "Europe/Helsinki"
     ...
     deliveries:
       - handler: "chargeamps"
@@ -62,7 +64,7 @@ charging:
         timeout: 30
 ```
 
-`timezone` is inherited from the charging profile — it does not need to be repeated inside delivery entries.
+`timezone` is set once in the `entsoe:` block and passed to all handlers automatically — it does not appear in charging profiles or delivery entries.
 
 ---
 
@@ -137,7 +139,7 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
     plan:             Plan dict from charging_planner.py
     charge_point_id:  Resolved charger ID (env var already read by dispatcher)
     entry:            Delivery config entry from config.yaml
-    timezone:         IANA timezone name from the charging profile
+    timezone:         IANA timezone name from the entsoe: block
 
     Returns True on success, False on failure.
     """
