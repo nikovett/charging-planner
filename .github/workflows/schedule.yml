@@ -31,11 +31,15 @@ jobs:
       - name: Deliver to charger(s)
         if: steps.plan.outputs.prices_available == 'true'
         env:
+          # Charge Amps credentials
           CHARGER_EMAIL:     ${{ secrets.CHARGER_EMAIL }}
           CHARGER_PASSWORD:  ${{ secrets.CHARGER_PASSWORD }}
           CHARGER_ID_1:      ${{ secrets.CHARGER_ID_1 }}
           CHARGER_ID_2:      ${{ secrets.CHARGER_ID_2 }}
-        run: python charger/deliver_chargeamps.py plan-*.json --config config.yaml # use your chargers delivery method
+          # OCPP credentials (used when handler: ocpp is set in config.yaml)
+          OCPP_ENDPOINT_URL:      ${{ secrets.OCPP_ENDPOINT_URL }}
+          OCPP_CHARGE_POINT_ID:   ${{ secrets.OCPP_CHARGE_POINT_ID }}
+        run: python charger/deliver.py plan-*.json --config config.yaml
 
       - name: Upload plan artifact
         if: steps.plan.outputs.prices_available == 'true'
