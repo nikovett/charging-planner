@@ -378,13 +378,6 @@ def parse_configs(raw: dict) -> "list[Config]":
     return configs
 
 
-def parse_config(raw: dict) -> "Config":
-    """Single-profile convenience wrapper around parse_configs.
-
-    Returns the first (and typically only) Config. Kept for backwards
-    compatibility with tests and external callers.
-    """
-    return parse_configs(raw)[0]
 
 
 # ===========================================================================
@@ -1211,8 +1204,7 @@ def build_plan(p: PlanParams) -> dict:
       "avg_price_cents_kwh": 1.84,
       "windows": [
         { "start": "01:00", "end": "04:00",
-          "duration_minutes": 180, "avg_price_cents_kwh": 1.84,
-          "gap_merged": false }
+          "duration_minutes": 180, "avg_price_cents_kwh": 1.84 }
       ]
     }
     """
@@ -1373,22 +1365,6 @@ def save_plan(plan: dict, path: str) -> None:
     log.info("Plan saved to %s", path)
 
 
-
-def save_plan(plan: dict, path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(plan, f, indent=2)
-    log.info("Plan saved to %s", path)
-
-
-def load_plan(path: str) -> dict:
-    with open(path, encoding="utf-8") as f:
-        plan = json.load(f)
-    v = plan.get("version")
-    if v != PLAN_VERSION:
-        log.warning("Plan file version %s (expected %d) — proceeding anyway.", v, PLAN_VERSION)
-    return plan
-
-
 # ===========================================================================
 # Visualisation
 # ===========================================================================
@@ -1480,85 +1456,6 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     print()
 
 
-# ===========================================================================
-# ntfy push notifications
-# ===========================================================================
-
-def _ntfy_message(plans: "list[dict]", skipped: "list[str]") -> str:
-    """Build the ntfy notification message body."""
-
-    def fmt_h(minutes: int) -> str:
-        h, m = divmod(minutes, 60)
-        return f"{h}h" if m == 0 else f"{h}h{m:02d}m"
-
-    sections = []
-    for plan in sorted(plans, key=lambda p: p["required_minutes"]):
-        profile = plan.get("profile", "default")
-        wins    = plan["windows"]
-        req     = plan["required_minutes"]
-        tot     = plan["total_minutes"]
-
-        if wins:
-            win_lines = "\n".join(
-                f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
-                for w in wins
-            )
-        else:
-            win_lines = "No windows selected"
-
-        summary = (f"{fmt_h(tot)}/{fmt_h(req)}"
-                   + (" ⚠️ charge plan not possible" if tot < req else ""))
-        sections.append(f"{profile}  {summary}\n{win_lines}")
-
-    if skipped:
-        skipped_lines = "\n".join(f"- {n}: prices not yet published"
-                                   for n in skipped)
-        sections.append(f"⏳ Skipped\n{skipped_lines}")
-
-    return "\n\n".join(sections)
-
-
-def send_ntfy(plans: "list[dict]", skipped: "list[str]",
-              ntfy_cfg: dict) -> None:
-    """Send ntfy push notification if configured and enabled.
-
-    ntfy_cfg is the 'ntfy' block from config.yaml.  The topic may also be
-    supplied via the NTFY_TOPIC environment variable, which takes precedence
-    so the actual value is never committed to the repository.
-    """
-    if not ntfy_cfg.get("enabled", False):
-        return
-
-    topic = os.environ.get("NTFY_TOPIC") or ntfy_cfg.get("topic", "")
-    if not topic:
-        log.warning("ntfy.enabled is true but no topic configured "
-                    "(set ntfy.topic in config.yaml or NTFY_TOPIC env var).")
-        return
-
-    if not plans:
-        log.info("No plans to notify about.")
-        return
-
-    message = _ntfy_message(plans, skipped)
-    date    = plans[0]["date"]
-    url     = f"https://ntfy.sh/{topic}"
-
-    try:
-        import urllib.request as _ur
-        req = _ur.Request(
-            url,
-            data=message.encode(),
-            method="POST",
-            headers={
-                "Title":    f"Charging plan for {date}",
-                "Priority": "default",
-                "Tags":     "electric_plug",
-            },
-        )
-        _ur.urlopen(req, timeout=10)
-        log.info("ntfy notification sent to %s", url)
-    except Exception as exc:
-        log.warning("ntfy notification failed: %s", exc)
 
 
 
@@ -1618,7 +1515,7 @@ def _gha_summary_profile(plan: dict, market_avg: float) -> list[str]:
     return md
 
 
-def write_gha_summary(plans: "list[dict]", all_prices: list[Slot],
+def write_gha_summary(plans: "list[dict]",
                       skipped: "list[str] | None" = None) -> None:
     """Write a combined GitHub Actions job summary for all profiles."""
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -1819,7 +1716,7 @@ def _plan_one_profile(
     output_path = os.path.join(output_dir, f"plan-{cfg.name}.json")
     save_plan(plan, output_path)
     print(f"  Plan saved to: {output_path}\n")
-    return plan, display_prices
+    return plan
 
 
 def _write_run_outputs(plans: "list[dict]") -> None:
@@ -1853,16 +1750,13 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     all_prices, price_source = _fetch_prices(cfg0)
 
     plans = []
-    display_for_summary = None
     skipped = []
     for cfg in configs:
         try:
-            plan, display_prices = _plan_one_profile(
+            plan = _plan_one_profile(
                 cfg, tz, all_prices, price_source, output_dir,
             )
             plans.append(plan)
-            if display_for_summary is None:
-                display_for_summary = display_prices
         except PricesNotYetAvailable as exc:
             log.warning("%s — skipping profile.", exc)
             skipped.append(cfg.name)
@@ -1877,7 +1771,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     if skipped:
         log.warning("Skipped profiles (prices not yet available): %s", ", ".join(skipped))
 
-    write_gha_summary(plans, display_for_summary or [], skipped=skipped)
+    write_gha_summary(plans, skipped=skipped)
     _write_run_outputs(plans)
     return plans
 

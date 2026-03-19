@@ -250,7 +250,6 @@ def _send_delivery_ntfy(
         if wins:
             win_lines = "\n".join(
                 f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
-                + (" ⚡ merged" if w.get("gap_merged") else "")
                 for w in wins
             )
         else:

@@ -4,11 +4,11 @@ Collection of test reports for the implementation
 
 ---
 
-## Charging Planner Code quality
+## Charging Planner
 
 ### Test suite
 
-115 tests in `test_charging_planner.py`, run with:
+108 tests in `test_charging_planner.py`, run with:
 
 ```bash
 python3 -m unittest discover -s test -v
@@ -17,7 +17,7 @@ python3 -m unittest discover -s test -v
 | Area | Tests |
 |---|---|
 | Configuration validation | 11 |
-| Config parsing | 6 |
+| Config parsing | 5 |
 | OCPP charging profile | 13 |
 | XML parsing | 10 |
 | Real ENTSO-E data | 9 |
@@ -31,8 +31,7 @@ python3 -m unittest discover -s test -v
 | Time utilities | 10 |
 | End-to-end pipeline | 6 |
 | Window coverage check | 5 |
-| ntfy notification | 7 |
-| **Total** | **115** |
+| **Total** | **108** |
 
 The 3 OCPP schema validation tests require the spec zip files placed in `test/ocpp16/`, `test/ocpp201/`, `test/ocpp21/` — they skip cleanly without them. All other tests run with no dependencies beyond `pyyaml`.
 
@@ -75,3 +74,23 @@ python3 -m unittest discover -s test -v
 | **Total** | **40** |
 
 These tests focus on the scheduling logic that converts plan windows to Charge Amps `schedulePeriods` — specifically that slots land at the correct times relative to the Monday anchor, across timezones and DST transitions. The deliver() tests also cover mode read/restore behaviour: the charger's original mode (`On`, `Off`, or `Schedule`) is read before delivery and restored afterwards if it was not already `Schedule`. All network calls are mocked; no credentials or live API access required.
+
+---
+
+## Delivery Dispatcher (ntfy)
+
+### Test suite
+
+17 tests in `test_deliver.py`, run with:
+
+```bash
+python3 -m unittest discover -s test -v
+```
+
+| Area | Tests |
+|---|---|
+| Message content | 11 |
+| Sending behaviour | 6 |
+| **Total** | **17** |
+
+These tests cover the ntfy notification logic in `charger/deliver.py` — message content (profile summary, window times, delivery status per charger, skipped profiles), and sending behaviour (disabled, missing topic, topic from env vs config, empty plans, send failure handling). All HTTP calls are mocked.
