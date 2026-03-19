@@ -221,10 +221,9 @@ def _ca_get_chargepoint(
     token: str,
     entitlements_token: str,
 ) -> dict:
-    """Fetch the full chargepoint object including connector state."""
+    """Fetch the chargepoint object including connector state."""
     return _ca_request(
-        f"/chargepoints/{charge_point_id}"
-        "?expand=additionalInfo,scheduleInfo,wifisignal,topChargingLimitation",
+        f"/chargepoints/{charge_point_id}",
         method="GET",
         token=token,
         entitlements_token=entitlements_token,
