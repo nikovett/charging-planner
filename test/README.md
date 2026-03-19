@@ -4,11 +4,11 @@ Collection of test reports for the implementation
 
 ---
 
-## Chargin Planner Code quality
+## Charging Planner Code quality
 
 ### Test suite
 
-117 tests in a single file (`test_charging_planner.py`), run with:
+116 tests in `test_charging_planner.py`, run with:
 
 ```bash
 python3 -m unittest discover -s test -v
@@ -31,8 +31,8 @@ python3 -m unittest discover -s test -v
 | Time utilities | 10 |
 | End-to-end pipeline | 6 |
 | Window coverage check | 5 |
-| ntfy notification | 8 |
-| **Total** | **117** |
+| ntfy notification | 7 |
+| **Total** | **116** |
 
 The 3 OCPP schema validation tests require the spec zip files placed in `test/ocpp16/`, `test/ocpp201/`, `test/ocpp21/` — they skip cleanly without them. All other tests run with no dependencies beyond `pyyaml`.
 
@@ -50,3 +50,27 @@ Measured across 76 functions:
 | F | CC > 20 | 0 |
 
 The two D-grade functions (`_select_with_min_block` CC=19, `close_gap_merge` CC=17) are selection algorithms whose complexity is inherent to their logic. All other functions are C or better.
+
+---
+
+## Charge Amps Delivery
+
+### Test suite
+
+30 tests in `test_deliver_chargeamps.py`, run with:
+
+```bash
+python3 -m unittest discover -s test -v
+```
+
+| Area | Tests |
+|---|---|
+| Anchor calculation | 4 |
+| Period timing (from/to offsets) | 6 |
+| Period fields | 6 |
+| Edge cases | 3 |
+| deliver() interface | 8 |
+| Login cache | 3 |
+| **Total** | **30** |
+
+These tests focus on the scheduling logic that converts plan windows to Charge Amps `schedulePeriods` — specifically that slots land at the correct times relative to the Monday anchor, across timezones and DST transitions. All network calls are mocked; no credentials or live API access required.
