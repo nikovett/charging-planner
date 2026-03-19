@@ -55,16 +55,6 @@ except ImportError:
     yaml = None
 
 # ---------------------------------------------------------------------------
-# ntfy — imported from charging_planner so topic/enabled config is shared
-# ---------------------------------------------------------------------------
-sys.path.insert(0, str(Path(__file__).parent.parent))
-try:
-    from charging_planner import send_ntfy, _ntfy_message
-    _NTFY_AVAILABLE = True
-except ImportError:
-    _NTFY_AVAILABLE = False
-
-# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
@@ -220,13 +210,10 @@ def _send_delivery_ntfy(
 ) -> None:
     """Send a combined ntfy notification with plan summary and delivery status.
 
-    delivery_results is a list of (profile_name, handler_name, charge_point_id, ok)
-    tuples — one entry per charger ID attempted.
+    Each profile section shows its charging windows followed immediately by the
+    delivery status for that profile. delivery_results is a list of
+    (profile_name, handler_name, charge_point_id, ok) tuples.
     """
-    if not _NTFY_AVAILABLE:
-        log.warning("charging_planner not importable — ntfy notification skipped.")
-        return
-
     ntfy_cfg = config.get("ntfy", {})
     if not ntfy_cfg.get("enabled", False):
         return
@@ -236,28 +223,63 @@ def _send_delivery_ntfy(
         log.warning("ntfy.enabled is true but no topic configured — skipping.")
         return
 
-    plans = [p for p in plans_by_profile.values() if p.get("window_starts_utc")]
-
-    # Plan summary section (reuse existing message builder)
-    plan_section = _ntfy_message(plans, skipped_profiles) if plans else ""
-
-    # Delivery status section
-    if delivery_results:
-        lines = []
-        for profile, handler, cp_id, ok in delivery_results:
-            status = "✅" if ok else "❌"
-            lines.append(f"{status} {profile} → {cp_id}  ({handler})")
-        delivery_section = "Delivered to charger(s):\n" + "\n".join(lines)
-    else:
-        delivery_section = "No chargers configured."
-
-    message = "\n\n".join(filter(None, [plan_section, delivery_section]))
+    plans = sorted(
+        [p for p in plans_by_profile.values() if p.get("window_starts_utc")],
+        key=lambda p: p.get("required_minutes", 0),
+    )
 
     if not plans:
         return
 
-    date  = plans[0].get("date", "")
-    url   = f"https://ntfy.sh/{topic}"
+    # Index delivery results by profile for quick lookup
+    results_by_profile: dict[str, list[tuple[str, str, bool]]] = {}
+    for profile, handler, cp_id, ok in delivery_results:
+        results_by_profile.setdefault(profile, []).append((handler, cp_id, ok))
+
+    def fmt_h(minutes: int) -> str:
+        h, m = divmod(minutes, 60)
+        return f"{h}h" if m == 0 else f"{h}h{m:02d}m"
+
+    sections = []
+    for plan in plans:
+        profile = plan.get("profile", "default")
+        wins    = plan["windows"]
+        req     = plan["required_minutes"]
+        tot     = plan["total_minutes"]
+
+        if wins:
+            win_lines = "\n".join(
+                f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
+                + (" ⚡ merged" if w.get("gap_merged") else "")
+                for w in wins
+            )
+        else:
+            win_lines = "No windows selected"
+
+        summary = (f"{fmt_h(tot)}/{fmt_h(req)}"
+                   + (" ⚠️ charge plan not possible" if tot < req else ""))
+
+        block = f"{profile}  {summary}\n{win_lines}"
+
+        # Delivery status for this profile — immediately after windows
+        profile_results = results_by_profile.get(profile, [])
+        if profile_results:
+            delivery_lines = "\n".join(
+                f"{'✓' if ok else '✗'} {cp_id}"
+                for _, cp_id, ok in profile_results
+            )
+            block += f"\nDelivered to charger(s):\n{delivery_lines}"
+
+        sections.append(block)
+
+    if skipped_profiles:
+        skipped_lines = "\n".join(f"- {n}: prices not yet published"
+                                   for n in skipped_profiles)
+        sections.append(f"⏳ Skipped\n{skipped_lines}")
+
+    message = "\n\n".join(sections)
+    date    = plans[0].get("date", "")
+    url     = f"https://ntfy.sh/{topic}"
 
     try:
         import urllib.request as _ur
