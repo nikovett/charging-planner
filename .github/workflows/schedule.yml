@@ -41,7 +41,7 @@ jobs:
           CHARGER_ID_2:     ${{ secrets.CHARGER_ID_2 }}
           # OCPP endpoint URL (used by deliver_ocpp.py)
           OCPP_ENDPOINT_URL: ${{ secrets.OCPP_ENDPOINT_URL }}
-        run: python charger/deliver.py plan-*.json --config config.yaml
+        run: python delivery/deliver.py plan-*.json --config config.yaml
 
       - name: Upload plan artifact
         if: steps.plan.outputs.prices_available == 'true'
