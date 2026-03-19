@@ -19,12 +19,12 @@ Deliveries are configured inside each charging profile in config.yaml:
           - handler: "chargeamps"       # → charger/deliver_chargeamps.py
             charge_point_id_env: "CHARGER_ID_1"
             connector_id: 1
-            max_current: 16.0
+            max_charging_rate: 16.0
 
           - handler: "ocpp"             # → charger/deliver_ocpp.py
             charge_point_id_env:        # list — same plan sent to both chargers
-              - "OCPP_CP_ID_1"
-              - "OCPP_CP_ID_2"
+              - "CHARGER_ID_2"
+              - "CHARGER_ID_3"
             endpoint_url_env: "OCPP_ENDPOINT_URL"
             ocpp_version: "1.6"
 
