@@ -18,8 +18,8 @@ charging:
     deliveries:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
         charge_point_id_env: CHARGER_ID_1   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
-        connector_id: 1		       # typically 1 = type2, 2 = schuko, unless Aura
-    #   charging_rate_unit: A	       # Charge Amps API accepts only current (A) so no need to configure it here, just an example
+        connector_id: 1           # typically 1 = type2, 2 = schuko, unless Aura
+    #   charging_rate_unit: A         # Charge Amps API accepts only current (A) so no need to configure it here, just an example
         max_charging_rate: 16.0        # amps
 
   - name: overnight
@@ -33,7 +33,7 @@ charging:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
         charge_point_id_env: CHARGER_ID_2   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
         connector_id: 1
-    #   charging_rate_unit: A	       # Charge Amps API accepts only current (A) so no need to configure it here, just an example
+    #   charging_rate_unit: A         # Charge Amps API accepts only current (A) so no need to configure it here, just an example
         max_charging_rate: 16.0        # amps
         enabled: false                 # configured but set to false to temporarily disable this delivery
 
