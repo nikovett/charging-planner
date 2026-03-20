@@ -37,6 +37,7 @@ def make_plan(profile: str = "topup", total: int = 120, required: int = 120,
         "required_minutes":       required,
         "total_minutes":          total,
         "avg_price_cents_kwh":    2.36,
+        "price_stats":            {"min_cents_kwh": 0.82, "avg_cents_kwh": 6.57, "max_cents_kwh": 12.10},
         "preferred_window_start": "00:00",
         "preferred_window_end":   "06:30",
         "windows":                windows,
@@ -155,6 +156,25 @@ class TestNtfyMessageContent(unittest.TestCase):
         sent = self._send({"topup": make_plan("topup")})
         self.assertIn("topup", sent["title"])
         self.assertIn("2h",    sent["title"])
+
+    def test_title_contains_savings_percentage(self):
+        sent = self._send({"topup": make_plan("topup")})
+        self.assertIn("↓", sent["title"])
+        self.assertIn("%", sent["title"])
+
+    def test_title_no_arrow_when_above_market(self):
+        plan = make_plan("topup")
+        plan["avg_price_cents_kwh"] = 7.20
+        plan["price_stats"]["avg_cents_kwh"] = 6.57
+        sent = self._send({"topup": plan})
+        self.assertNotIn("↓", sent["title"])
+
+    def test_title_arrow_shown_for_small_savings(self):
+        plan = make_plan("topup")
+        plan["avg_price_cents_kwh"] = 6.50
+        plan["price_stats"]["avg_cents_kwh"] = 6.57
+        sent = self._send({"topup": plan})
+        self.assertIn("↓", sent["title"])
 
 
 # ===========================================================================
