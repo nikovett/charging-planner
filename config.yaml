@@ -9,7 +9,7 @@ entsoe:
 
 charging:
   - name: topup
-    required_hours: 2                   # Total hours of charging to schedule
+    required_hours: 3                   # Total hours of charging to schedule
     continuous_only: false              # Cheapest individual slots (may be split across the window)
     min_slot_minutes: 30                # Minimum continuous block length (must be divisible by 15)
     max_price_cents_kwh: null           # Price ceiling in c€/kWh — skip slots above this (null = no limit)
@@ -23,7 +23,7 @@ charging:
         max_charging_rate: 16.0        # amps
 
   - name: overnight
-    required_hours: 6                   # Total hours of charging to schedule
+    required_hours: 5                   # Total hours of charging to schedule
     continuous_only: true               # One unbroken block, extended leftward if window is too short
     min_slot_minutes: 30
     max_price_cents_kwh: null
