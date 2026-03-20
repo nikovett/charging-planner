@@ -17,7 +17,7 @@ import unittest.mock as mock
 
 sys.path.insert(0, ".")
 sys.path.insert(0, "..")
-sys.path.insert(0, "charger")
+sys.path.insert(0, "delivery")
 
 from deliver import _send_delivery_ntfy
 
@@ -36,6 +36,7 @@ def make_plan(profile: str = "topup", total: int = 120, required: int = 120,
         "date":                   "2026-03-15",
         "required_minutes":       required,
         "total_minutes":          total,
+        "avg_price_cents_kwh":    2.36,
         "preferred_window_start": "00:00",
         "preferred_window_end":   "06:30",
         "windows":                windows,
@@ -91,25 +92,33 @@ class TestNtfyMessageContent(unittest.TestCase):
         self.assertIn("01:00", sent["body"])
         self.assertIn("03:00", sent["body"])
 
-    def test_message_contains_price(self):
+    def test_price_in_title(self):
         sent = self._send({"topup": make_plan("topup")})
-        self.assertIn("2.36", sent["body"])
+        self.assertIn("2.36", sent["title"])
+
+    def test_price_not_in_body(self):
+        sent = self._send({"topup": make_plan("topup")})
+        self.assertNotIn("2.36", sent["body"])
 
     def test_incomplete_plan_flagged(self):
         sent = self._send({"topup": make_plan("topup", total=60, required=120)})
-        self.assertIn("charge plan not possible", sent["body"])
+        self.assertIn("1h", sent["body"])
+        self.assertIn("2h", sent["body"])
 
     def test_skipped_profiles_in_message(self):
         sent = self._send({"topup": make_plan("topup")}, skipped=["overnight"])
         self.assertIn("overnight", sent["body"])
-        self.assertIn("Skipped", sent["body"])
+        self.assertIn("skipped", sent["body"])
 
     def test_delivery_results_in_message(self):
         results = [("topup", "chargeamps", "CHARGER-001", True)]
         sent = self._send({"topup": make_plan("topup")}, results=results)
-        self.assertIn("Deliveries:", sent["body"])
         self.assertIn("CHARGER-001", sent["body"])
-        self.assertIn("chargeamps", sent["body"])
+
+    def test_handler_name_not_in_body(self):
+        results = [("topup", "chargeamps", "CHARGER-001", True)]
+        sent = self._send({"topup": make_plan("topup")}, results=results)
+        self.assertNotIn("chargeamps", sent["body"])
 
     def test_success_marked_with_check(self):
         results = [("topup", "chargeamps", "CHARGER-001", True)]
@@ -121,12 +130,17 @@ class TestNtfyMessageContent(unittest.TestCase):
         sent = self._send({"topup": make_plan("topup")}, results=results)
         self.assertIn("✗ CHARGER-001", sent["body"])
 
+    def test_chargers_indented(self):
+        results = [("topup", "chargeamps", "CHARGER-001", True)]
+        sent = self._send({"topup": make_plan("topup")}, results=results)
+        self.assertIn("  ✓ CHARGER-001", sent["body"])
+
     def test_delivery_section_after_windows(self):
         results = [("topup", "chargeamps", "CHARGER-001", True)]
         sent = self._send({"topup": make_plan("topup")}, results=results)
         windows_pos   = sent["body"].index("01:00")
-        deliveries_pos = sent["body"].index("Deliveries:")
-        self.assertGreater(deliveries_pos, windows_pos)
+        delivery_pos  = sent["body"].index("CHARGER-001")
+        self.assertGreater(delivery_pos, windows_pos)
 
     def test_multiple_profiles_both_present(self):
         plans = {
@@ -137,9 +151,10 @@ class TestNtfyMessageContent(unittest.TestCase):
         self.assertIn("topup",     sent["body"])
         self.assertIn("overnight", sent["body"])
 
-    def test_title_contains_date(self):
+    def test_title_contains_profile_and_hours(self):
         sent = self._send({"topup": make_plan("topup")})
-        self.assertIn("2026-03-15", sent["title"])
+        self.assertIn("topup", sent["title"])
+        self.assertIn("2h",    sent["title"])
 
 
 # ===========================================================================

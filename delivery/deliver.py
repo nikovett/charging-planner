@@ -246,6 +246,22 @@ def _send_delivery_ntfy(
         h, m = divmod(minutes, 60)
         return f"{h}h" if m == 0 else f"{h}h{m:02d}m"
 
+    # Title: "topup 2h @ 0.62 · overnight 6h @ 1.93 c€/kWh"
+    title_parts = []
+    for plan in plans:
+        profile = plan.get("profile", "default")
+        tot     = plan["total_minutes"]
+        req     = plan["required_minutes"]
+        avg     = plan.get("avg_price_cents_kwh")
+        summary = fmt_h(tot)
+        if tot < req:
+            summary += f"/{fmt_h(req)}"
+        price_str = f" @ {avg:.2f} c€/kWh" if avg is not None else ""
+        title_parts.append(f"{profile} {summary}{price_str}")
+    title = " · ".join(title_parts)
+
+    # Body: separator per profile, windows without prices, indented chargers
+    sep_len = 22
     sections = []
     for plan in plans:
         profile = plan.get("profile", "default")
@@ -253,34 +269,31 @@ def _send_delivery_ntfy(
         req     = plan["required_minutes"]
         tot     = plan["total_minutes"]
 
+        sep = f"── {profile} " + "─" * max(1, sep_len - len(profile))
+
         if wins:
-            win_lines = "\n".join(
-                f"{w['start']}–{w['end']}  {w['avg_price_cents_kwh']:.2f} c€/kWh"
-                for w in wins
-            )
+            win_lines = "\n".join(f"{w['start']}–{w['end']}" for w in wins)
         else:
-            win_lines = "No windows selected"
+            win_lines = "no windows selected"
 
-        summary = (f"{fmt_h(tot)}/{fmt_h(req)}"
-                   + (" ⚠️ charge plan not possible" if tot < req else ""))
+        if tot < req:
+            win_lines += f"\n⚠ only {fmt_h(tot)} of {fmt_h(req)} scheduled"
 
-        block = f"{profile}  {summary}\n{win_lines}"
+        block = f"{sep}\n{win_lines}"
 
-        # Delivery status for this profile — immediately after windows
         profile_results = results_by_profile.get(profile, [])
         if profile_results:
             delivery_lines = "\n".join(
-                f"{'✓' if ok else '✗'} {cp_id} ({handler})"
+                f"  {'✓' if ok else '✗'} {cp_id}"
                 for handler, cp_id, ok in profile_results
             )
-            block += f"\n\nDeliveries:\n{delivery_lines}"
+            block += f"\n{delivery_lines}"
 
         sections.append(block)
 
     if skipped_profiles:
-        skipped_lines = "\n".join(f"- {n}: prices not yet published"
-                                   for n in skipped_profiles)
-        sections.append(f"⏳ Skipped\n{skipped_lines}")
+        skipped_lines = "\n".join(f"  - {n}" for n in skipped_profiles)
+        sections.append(f"── skipped ────────────\n{skipped_lines}")
 
     message = "\n\n".join(sections)
     date    = plans[0].get("date", "")
@@ -293,7 +306,7 @@ def _send_delivery_ntfy(
             data=message.encode(),
             method="POST",
             headers={
-                "Title":    f"Charging plan for {date}",
+                "Title":    title,
                 "Priority": "default",
             },
         )
