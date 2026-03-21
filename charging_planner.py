@@ -241,6 +241,36 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
     if ceil is not None and (not isinstance(ceil, (int, float)) or ceil <= 0):
         errors.append(f"charging.max_price_cents_kwh={ceil!r} must be a positive number or null.")
 
+    schedule = ch.get("schedule") or []
+    if not isinstance(schedule, list):
+        errors.append("charging.schedule must be a list of day entries.")
+    else:
+        seen_days: set = set()
+        for i, entry in enumerate(schedule):
+            if not isinstance(entry, dict):
+                errors.append(f"charging.schedule[{i}] must be a mapping.")
+                continue
+            days = entry.get("days")
+            if not isinstance(days, list) or not days:
+                errors.append(f"charging.schedule[{i}].days must be a non-empty list of day names.")
+            else:
+                valid = {"monday","tuesday","wednesday","thursday","friday","saturday","sunday"}
+                for d in days:
+                    if d not in valid:
+                        errors.append(
+                            f"charging.schedule[{i}].days: {d!r} is not a valid day name "
+                            f"(use monday–sunday)."
+                        )
+                    elif d in seen_days:
+                        errors.append(
+                            f"charging.schedule[{i}].days: {d!r} appears in more than one entry."
+                        )
+                    else:
+                        seen_days.add(d)
+            # Validate window fields within the entry
+            _validate_hhmm(entry, "preferred_window_start", errors)
+            _validate_hhmm(entry, "preferred_window_end", errors)
+
     pw_s = _validate_hhmm(ch, "preferred_window_start", errors)
     pw_e = _validate_hhmm(ch, "preferred_window_end", errors)
     if pw_s is not None and pw_e is not None:
@@ -329,6 +359,7 @@ class Config:
     max_price_eur:          Optional[float]   # None = no ceiling
     preferred_window_start: str               # validated HH:MM
     preferred_window_end:   str               # validated HH:MM
+    schedule:               list              # day-specific window overrides (may be empty)
 
 
 def _parse_one_profile(et: dict, ch: dict) -> "Config":
@@ -355,6 +386,7 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         max_price_eur=ceil_cents / 100.0 if ceil_cents is not None else None,
         preferred_window_start=ch["preferred_window_start"],
         preferred_window_end=ch["preferred_window_end"],
+        schedule=ch.get("schedule") or [],
     )
 
 
@@ -1598,6 +1630,8 @@ def _select_slots(
     candidate_prices: list[Slot],
     win_start_utc:    datetime,
     win_end_utc:      datetime,
+    win_start_str:    str,
+    win_end_str:      str,
 ) -> tuple[list[Slot], set]:
     """Run the full slot-selection pipeline and return selected slots.
 
@@ -1609,8 +1643,8 @@ def _select_slots(
         candidate_prices,
         win_start_utc=win_start_utc,
         win_end_utc=win_end_utc,
-        window_start_local=cfg.preferred_window_start,
-        window_end_local=cfg.preferred_window_end,
+        window_start_local=win_start_str,
+        window_end_local=win_end_str,
     )
 
     _check_window_coverage(inside, win_start_utc, win_end_utc, cfg.name)
@@ -1631,7 +1665,7 @@ def _select_slots(
             selected=selected,
             continuous_only=cfg.continuous_only,
             win_end_utc=win_end_utc,
-            win_end_local=cfg.preferred_window_end,
+            win_end_local=win_end_str,
             required_minutes=cfg.required_minutes,
             remaining=remaining,
             max_price_eur=cfg.max_price_eur,
@@ -1662,6 +1696,32 @@ def _select_slots(
 
 
 # ---------------------------------------------------------------------------
+# Schedule window resolution
+# ---------------------------------------------------------------------------
+
+_DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, str]:
+    """Return (preferred_window_start, preferred_window_end) for target_date.
+
+    Checks cfg.schedule entries in order, returning the first entry whose
+    days list includes the weekday of target_date. Falls back to the
+    top-level preferred_window_start / preferred_window_end if no entry matches.
+    """
+    day_name = _DAY_NAMES[target_date.weekday()]
+    for entry in cfg.schedule:
+        if day_name in (entry.get("days") or []):
+            log.info(
+                "Profile '%s': using schedule entry for %s (%s–%s)",
+                cfg.name, day_name,
+                entry["preferred_window_start"], entry["preferred_window_end"],
+            )
+            return entry["preferred_window_start"], entry["preferred_window_end"]
+    return cfg.preferred_window_start, cfg.preferred_window_end
+
+
+# ---------------------------------------------------------------------------
 # Main planning command
 # ---------------------------------------------------------------------------
 
@@ -1675,9 +1735,23 @@ def _plan_one_profile(
     """Run selection and build a plan dict for a single profile."""
     log.info("=== Profile: %s ===", cfg.name)
 
+    # Resolve window using top-level defaults first to determine plan_date,
+    # then re-resolve with day-specific schedule entry if one matches.
     win_start_utc, win_end_utc = _resolve_window_utc(
         cfg.preferred_window_start, cfg.preferred_window_end, tz.zone
     )
+    plan_date = win_start_utc.astimezone(tz.zone).date()
+
+    if cfg.schedule:
+        win_start_str, win_end_str = _resolve_schedule_window(cfg, plan_date)
+        if (win_start_str, win_end_str) != (cfg.preferred_window_start, cfg.preferred_window_end):
+            win_start_utc, win_end_utc = _resolve_window_utc(
+                win_start_str, win_end_str, tz.zone,
+                _anchor_date=plan_date,
+            )
+    else:
+        win_start_str, win_end_str = cfg.preferred_window_start, cfg.preferred_window_end
+
     log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
 
     # plan_date: the local calendar date the window starts on
@@ -1693,7 +1767,7 @@ def _plan_one_profile(
         log.info("Trimmed %d unreachable slots (earliest useful: %s UTC)",
                  trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"))
 
-    selected = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc)
+    selected = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str)
     windows = merge_continuous_slots(selected)
 
     plan = build_plan(PlanParams(
@@ -1706,8 +1780,8 @@ def _plan_one_profile(
         required_minutes=cfg.required_minutes,
         tz=tz.zone,
         timezone_name=tz.name,
-        preferred_window_start=cfg.preferred_window_start,
-        preferred_window_end=cfg.preferred_window_end,
+        preferred_window_start=win_start_str,
+        preferred_window_end=win_end_str,
     ))
     plan["profile"] = cfg.name
 

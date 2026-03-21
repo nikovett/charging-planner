@@ -107,6 +107,7 @@ ntfy:
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `00:00` | **Required.** Start of preferred charging window (`HH:MM`) |
 | `charging.preferred_window_end` | `06:30` | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight. Equal start and end is an error |
+| `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and its own `preferred_window_start` / `preferred_window_end`. The first matching entry for the target day is used; falls back to top-level window if none match |
 
 ### Preferred window behaviour
 

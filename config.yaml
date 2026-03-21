@@ -15,6 +15,13 @@ charging:
     max_price_cents_kwh: null           # Price ceiling in c€/kWh — skip slots above this (null = no limit)
     preferred_window_start: "22:00"     # Quoted — would parse as 22 minutes without quotes
     preferred_window_end: "06:30"
+    schedule:                           # Optional: day-specific window overrides
+      - days: [monday, tuesday, wednesday, thursday, friday]
+        preferred_window_start: "22:00"
+        preferred_window_end: "06:30"
+      - days: [saturday, sunday]
+        preferred_window_start: "00:00"
+        preferred_window_end: "23:45"
     deliveries:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
         charge_point_id_env: CHARGER_ID_1   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]

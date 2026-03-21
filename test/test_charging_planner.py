@@ -36,6 +36,7 @@ from charging_planner import (
     _hhmm_to_utc,
     _is_overnight,
     _parse_entsoe_xml,
+    _resolve_schedule_window,
     _resolve_window_utc,
     _select_spillover,
     build_ocpp_charging_profile,
@@ -241,10 +242,122 @@ class TestParseConfigs(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_configs(raw)
 
+    def test_schedule_parsed_into_config(self):
+        import copy
+        raw = copy.deepcopy(self.BASE_RAW)
+        raw["charging"][0]["schedule"] = [
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "00:00",
+             "preferred_window_end": "23:45"},
+        ]
+        configs = parse_configs(raw)
+        self.assertEqual(len(configs[0].schedule), 1)
+        self.assertEqual(configs[0].schedule[0]["days"], ["saturday", "sunday"])
+
+    def test_empty_schedule_is_valid(self):
+        import copy
+        raw = copy.deepcopy(self.BASE_RAW)
+        raw["charging"][0]["schedule"] = []
+        configs = parse_configs(raw)
+        self.assertEqual(configs[0].schedule, [])
+
+    def test_schedule_invalid_day_name_raises(self):
+        with self.assertRaises(ConfigError):
+            validate_plan_config({
+                "entsoe": {"api_key": "x", "area": "FI"},
+                "charging": {
+                    "required_hours": 2,
+                    "preferred_window_start": "22:00",
+                    "preferred_window_end": "06:00",
+                    "schedule": [
+                        {"days": ["funday"],
+                         "preferred_window_start": "00:00",
+                         "preferred_window_end": "23:45"},
+                    ],
+                },
+            })
+
+    def test_schedule_duplicate_day_raises(self):
+        with self.assertRaises(ConfigError):
+            validate_plan_config({
+                "entsoe": {"api_key": "x", "area": "FI"},
+                "charging": {
+                    "required_hours": 2,
+                    "preferred_window_start": "22:00",
+                    "preferred_window_end": "06:00",
+                    "schedule": [
+                        {"days": ["monday"],
+                         "preferred_window_start": "00:00",
+                         "preferred_window_end": "06:00"},
+                        {"days": ["monday"],
+                         "preferred_window_start": "22:00",
+                         "preferred_window_end": "06:00"},
+                    ],
+                },
+            })
+
 
 # ===========================================================================
-# 2. Time utilities
+# Schedule window resolution
 # ===========================================================================
+
+class TestResolveScheduleWindow(unittest.TestCase):
+
+    def _make_cfg(self, schedule):
+        from dataclasses import replace
+        import copy
+        raw = {
+            "entsoe": {"api_key": "abc", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "test",
+                "required_hours": 2,
+                "preferred_window_start": "22:00",
+                "preferred_window_end": "06:30",
+                "schedule": schedule,
+            }],
+        }
+        return parse_configs(raw)[0]
+
+    def test_weekday_matches_schedule_entry(self):
+        cfg = self._make_cfg([
+            {"days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+             "preferred_window_start": "22:00", "preferred_window_end": "06:30"},
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
+        ])
+        # 2026-03-21 is a Saturday
+        start, end = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        self.assertEqual(start, "00:00")
+        self.assertEqual(end, "23:45")
+
+    def test_weekday_falls_back_to_default(self):
+        cfg = self._make_cfg([
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
+        ])
+        # 2026-03-16 is a Monday — no matching entry
+        start, end = _resolve_schedule_window(cfg, date(2026, 3, 16))
+        self.assertEqual(start, "22:00")
+        self.assertEqual(end, "06:30")
+
+    def test_empty_schedule_returns_defaults(self):
+        cfg = self._make_cfg([])
+        start, end = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        self.assertEqual(start, "22:00")
+        self.assertEqual(end, "06:30")
+
+    def test_first_matching_entry_wins(self):
+        cfg = self._make_cfg([
+            {"days": ["saturday"],
+             "preferred_window_start": "08:00", "preferred_window_end": "20:00"},
+            {"days": ["saturday"],   # duplicate — second entry never reached
+             "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
+        ])
+        start, end = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        self.assertEqual(start, "08:00")
+
+
+
 
 class TestHhmmToUtc(unittest.TestCase):
 
