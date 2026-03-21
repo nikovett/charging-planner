@@ -24,7 +24,7 @@ charging:
         preferred_window_end: "23:45"
     deliveries:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
-        enabled: false
+        enabled: true
         charge_point_id_env: CHARGER_ID_1   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
         connector_id: 1                 # typically 1 = type2, 2 = schuko, unless Aura
     #   charging_rate_unit: A           # Charge Amps API accepts only current (A) so no need to configure it here, just an example
