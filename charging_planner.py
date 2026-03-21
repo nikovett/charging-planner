@@ -1743,14 +1743,24 @@ def _plan_one_profile(
     plan_date = win_start_utc.astimezone(tz.zone).date()
 
     if cfg.schedule:
+        # First pass: resolve using today's plan_date to get a candidate window.
+        # For same-day windows that have already passed, _resolve_window_utc will
+        # land on tomorrow — re-check the schedule for that target day since it
+        # may have a different entry (e.g. sunday entry resolves to monday which
+        # has a different weekday window).
         win_start_str, win_end_str = _resolve_schedule_window(cfg, plan_date)
-        if (win_start_str, win_end_str) != (cfg.preferred_window_start, cfg.preferred_window_end):
-            # Re-resolve without anchor — let _resolve_window_utc determine the
-            # correct anchor for the schedule entry's window independently.
+        win_start_utc, win_end_utc = _resolve_window_utc(win_start_str, win_end_str, tz.zone)
+        target_date = win_start_utc.astimezone(tz.zone).date()
+
+        if target_date != plan_date:
+            # The window resolved to a different day — re-check schedule for that day
+            # and anchor to that day explicitly so same-day windows don't jump again.
+            win_start_str, win_end_str = _resolve_schedule_window(cfg, target_date)
             win_start_utc, win_end_utc = _resolve_window_utc(
-                win_start_str, win_end_str, tz.zone,
+                win_start_str, win_end_str, tz.zone, _anchor_date=target_date,
             )
-            plan_date = win_start_utc.astimezone(tz.zone).date()
+
+        plan_date = win_start_utc.astimezone(tz.zone).date()
     else:
         win_start_str, win_end_str = cfg.preferred_window_start, cfg.preferred_window_end
 
