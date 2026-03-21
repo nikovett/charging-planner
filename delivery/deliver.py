@@ -256,7 +256,12 @@ def _send_delivery_ntfy(
             summary += f"/{fmt_h(req)}"
         if avg is not None:
             savings = ((1 - avg / market_avg) * 100) if market_avg else 0
-            savings_str = f" ↓{savings:.0f}%" if savings > 0 else ""
+            if savings > 0:
+                savings_str = f" ↓{savings:.0f}%"
+            elif savings < 0:
+                savings_str = f" ↑{-savings:.0f}%"
+            else:
+                savings_str = ""
             price_str = f" @ {avg:.2f} c€/kWh{savings_str}"
         else:
             price_str = ""

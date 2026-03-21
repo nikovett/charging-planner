@@ -173,6 +173,7 @@ class TestNtfyMessageContent(unittest.TestCase):
         plan["avg_price_cents_kwh"] = 7.20
         plan["price_stats"]["avg_cents_kwh"] = 6.57
         sent = self._send({"topup": plan})
+        self.assertIn("↑", sent["body"])
         self.assertNotIn("↓", sent["body"])
 
     def test_body_arrow_shown_for_small_savings(self):
