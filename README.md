@@ -56,39 +56,45 @@ All configuration lives in a single `config.yaml` file. Deliveries are configure
 
 ```yaml
 entsoe:
-  api_key: ""      # injected at runtime via ENTSOE_API_KEY
-  area: "FI"
-  timezone: "Europe/Helsinki"
+  api_key: ""
+  area: FI
+  timezone: Europe/Helsinki
 
 charging:
-  - name: "topup"
+  - name: topup
     required_hours: 2
     continuous_only: false
     preferred_window_start: "22:00"
     preferred_window_end: "06:30"
+    schedule:
+      - days: [monday, tuesday, wednesday, thursday, friday]
+        preferred_window_start: "22:00"
+        preferred_window_end: "06:30"
+      - days: [saturday, sunday]
+        preferred_window_start: "00:00"
+        preferred_window_end: "23:45"
     deliveries:
-      - handler: "chargeamps"
-        charge_point_id_env: "CHARGER_ID_1"
+      - handler: chargeamps
+        charge_point_id_env: CHARGER_ID_1
         connector_id: 1
         max_charging_rate: 16.0
+        restore_mode: false
 
-  - name: "overnight"
+  - name: overnight
     required_hours: 6
     continuous_only: true
-    preferred_window_start: "22:00"
+    preferred_window_start: "21:00"
     preferred_window_end: "06:30"
     deliveries:
-      - handler: "ocpp"
-        charge_point_id_env:
-          - "CHARGER_ID_1"
-          - "CHARGER_ID_2"
-        endpoint_url_env: "OCPP_ENDPOINT_URL"
-        ocpp_version: "1.6"
-        max_charging_rate: 11000.0
+      - handler: chargeamps
+        charge_point_id_env: CHARGER_ID_2
+        connector_id: 1
+        max_charging_rate: 16.0
+        restore_mode: true
 
 ntfy:
   enabled: true
-  topic: ""        # injected at runtime via NTFY_TOPIC
+  topic: ""
 ```
 
 `charge_point_id_env` accepts either a single env var name or a list — when a list is given, the same plan is delivered to every charger independently. Timezone is set once in the `entsoe:` block and applies to all profiles and delivery handlers.
@@ -106,19 +112,23 @@ ntfy:
 | `charging.min_slot_minutes` | `30` | Minimum continuous block length. Must be a multiple of 15 |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `00:00` | **Required.** Start of preferred charging window (`HH:MM`) |
-| `charging.preferred_window_end` | `06:30` | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight. Equal start and end is an error |
-| `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and its own `preferred_window_start` / `preferred_window_end`. The first matching entry for the target day is used; falls back to top-level window if none match |
+| `charging.preferred_window_end` | `06:30` | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight. Equal start and end is an error. Use `23:45` for end of day — `23:59` excludes the last 15-minute slot |
+| `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and its own `preferred_window_start` / `preferred_window_end`. The first matching entry for the target day is used; falls back to top-level window if none match. Days not listed use the top-level window |
 
 ### Preferred window behaviour
 
-**Which night is planned** — the planner always targets the next possible upcoming occurrence of the window:
+**Which period is planned** — the planner always targets the next upcoming occurrence of the window:
 
 | Time | Window | Plans |
 |---|---|---|
-| 14:30 | `20:30–23:45` | tonight (window not yet started) |
+| 14:30 | `20:30–23:45` | today (window not yet started) |
 | 22:00 | `20:30–23:45` | tomorrow (window already started) |
-| 14:30 | `00:00–06:30` | tomorrow (window passed earlier today) |
+| 14:30 | `00:00–23:45` | tomorrow (same-day window already passed) |
 | 14:30 | `22:00–06:30` | tonight (overnight, window not yet started) |
+
+For same-day windows (start before end, e.g. `00:00–23:45`) the planner targets tomorrow once today's window start has passed. This is the recommended pattern for weekend wide-open windows — run the script after ENTSO-E publishes prices (~12:00 UTC) and the cheapest slots from anywhere in tomorrow's day will be selected.
+
+For overnight windows (start after end, e.g. `22:00–06:30`) the target day is the day the window *starts* on. A schedule entry for `saturday` with `22:00–06:30` covers Saturday night into Sunday morning.
 
 **Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`.
 
@@ -137,6 +147,8 @@ Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` bloc
 | `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API |
 | `ocpp` | `delivery/deliver_ocpp.py` | Delivers via OCPP WebSocket (`SetChargingProfile.req`), supports 1.6 / 2.0.1 / 2.1 |
 
+The `chargeamps` handler supports one additional option: `restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
+
 See [`delivery/README.md`](delivery/README.md) for full handler configuration reference and instructions for adding a new handler.
 
 ---
@@ -148,19 +160,19 @@ After delivery completes, `delivery/deliver.py` sends a single push notification
 Example notification:
 
 ```
-topup  2h/2h
-03:30–04:30  0.62 c€/kWh
+Title: Charging plan 2026-03-21
 
-Deliveries:
-✓ CHARGER-001 (chargeamps)
+topup 2h @ 0.62 c€/kWh ↓64%
+03:30–05:30
+  ✓ CHARGER-001
 
-overnight  6h/6h
-22:00–06:00  1.93 c€/kWh
-
-Deliveries:
-✓ CHARGER-001 (chargeamps)
-✗ CHARGER-002 (ocpp)
+overnight 6h @ 1.93 c€/kWh ↑9%
+22:00–06:00
+  ✓ CHARGER-001
+  ✗ CHARGER-002
 ```
+
+The title contains the date. Each profile section shows the scheduled hours, average price, and how it compares to the market average (`↓` below, `↑` above). Chargers are listed indented under their profile. A delivery failure does not prevent the notification from being sent.
 
 ntfy is configured in `config.yaml` under the `ntfy:` key. The topic is injected at runtime via the `NTFY_TOPIC` environment variable — never commit it to the repository.
 
