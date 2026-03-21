@@ -306,13 +306,14 @@ def _send_delivery_ntfy(
     url     = f"https://ntfy.sh/{topic}"
 
     try:
+        import urllib.parse
         import urllib.request as _ur
         req = _ur.Request(
             url,
             data=message.encode(),
             method="POST",
             headers={
-                "Title":    title,
+                "Title":    urllib.parse.quote(title),
                 "Priority": "default",
             },
         )
