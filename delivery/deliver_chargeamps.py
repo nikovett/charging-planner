@@ -351,6 +351,7 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
     """
     connector_id      = int(entry.get("connector_id", 1))
     max_charging_rate = float(entry.get("max_charging_rate", 16.0))
+    restore_mode      = bool(entry.get("restore_mode", False))
 
     try:
         token, ent_token = _ca_login()
@@ -358,17 +359,20 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
         log.error("Charge Amps login failed: %s", exc)
         return False
 
-    # Read current connector mode before touching the schedule
-    try:
-        chargepoint   = _ca_get_chargepoint(charge_point_id, token, ent_token)
-        original_mode = _ca_get_connector_mode(chargepoint, connector_id)
-        log.info(
-            "Connector mode before delivery: charger=%s connector=%s  mode=%s",
-            charge_point_id, connector_id, original_mode,
-        )
-    except Exception as exc:
-        log.error("Failed to read charger state for '%s': %s", charge_point_id, exc)
-        return False
+    # Read current connector mode before touching the schedule (if restore enabled)
+    original_mode = None
+    chargepoint   = None
+    if restore_mode:
+        try:
+            chargepoint   = _ca_get_chargepoint(charge_point_id, token, ent_token)
+            original_mode = _ca_get_connector_mode(chargepoint, connector_id)
+            log.info(
+                "Connector mode before delivery: charger=%s connector=%s  mode=%s",
+                charge_point_id, connector_id, original_mode,
+            )
+        except Exception as exc:
+            log.error("Failed to read charger state for '%s': %s", charge_point_id, exc)
+            return False
 
     # Deliver the schedule
     try:
@@ -381,21 +385,22 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
         return False
 
     # Restore original mode if it was not already "Schedule"
-    if original_mode and original_mode != "Schedule":
-        try:
-            _ca_set_connector_mode(
-                chargepoint, connector_id, original_mode, token, ent_token,
+    if restore_mode:
+        if original_mode and original_mode != "Schedule":
+            try:
+                _ca_set_connector_mode(
+                    chargepoint, connector_id, original_mode, token, ent_token,
+                )
+            except Exception as exc:
+                log.warning(
+                    "Schedule delivered but mode restore failed for charger '%s': %s",
+                    charge_point_id, exc,
+                )
+                # Schedule was delivered successfully — still return True
+        else:
+            log.info(
+                "Mode already 'Schedule' for charger=%s connector=%s — no restore needed.",
+                charge_point_id, connector_id,
             )
-        except Exception as exc:
-            log.warning(
-                "Schedule delivered but mode restore failed for charger '%s': %s",
-                charge_point_id, exc,
-            )
-            # Schedule was delivered successfully — still return True
-    else:
-        log.info(
-            "Mode already 'Schedule' for charger=%s connector=%s — no restore needed.",
-            charge_point_id, connector_id,
-        )
 
     return True
