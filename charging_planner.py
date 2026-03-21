@@ -1745,10 +1745,12 @@ def _plan_one_profile(
     if cfg.schedule:
         win_start_str, win_end_str = _resolve_schedule_window(cfg, plan_date)
         if (win_start_str, win_end_str) != (cfg.preferred_window_start, cfg.preferred_window_end):
+            # Re-resolve without anchor — let _resolve_window_utc determine the
+            # correct anchor for the schedule entry's window independently.
             win_start_utc, win_end_utc = _resolve_window_utc(
                 win_start_str, win_end_str, tz.zone,
-                _anchor_date=plan_date,
             )
+            plan_date = win_start_utc.astimezone(tz.zone).date()
     else:
         win_start_str, win_end_str = cfg.preferred_window_start, cfg.preferred_window_end
 
