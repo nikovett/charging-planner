@@ -16,12 +16,12 @@ Deliveries are configured inside each charging profile in config.yaml:
         ...
         deliveries:
           - handler: "chargeamps"       # → delivery/deliver_chargeamps.py
-            charge_point_id_env: "CHARGER_ID_1"
+            charge_point_id: "CHARGER_ID_1"
             connector_id: 1
             max_charging_rate: 16.0
 
           - handler: "ocpp"             # → delivery/deliver_ocpp.py
-            charge_point_id_env:        # list — same plan sent to both chargers
+            charge_point_id:        # list — same plan sent to both chargers
               - "CHARGER_ID_2"
               - "CHARGER_ID_3"
             endpoint_url_env: "OCPP_ENDPOINT_URL"
@@ -30,7 +30,7 @@ Deliveries are configured inside each charging profile in config.yaml:
 Timezone is taken from the charging profile and passed to handlers directly —
 it does not need to be repeated inside delivery entries.
 
-'charge_point_id_env' accepts either a single string or a list of strings.
+'charge_point_id' accepts either a single string or a list of strings.
 Each resolved ID is delivered independently; all are attempted even if one
 fails — the exit code reflects whether all succeeded.
 
@@ -87,7 +87,7 @@ def _extract_deliveries(config: dict) -> list[tuple[str, str, dict, list[str]]]:
     """Walk charging profiles and extract (profile_name, timezone, entry, charge_point_ids).
 
     timezone is taken from the entsoe: block — a single value shared across all profiles.
-    charge_point_id_env may be a string or a list — both are normalised to a
+    charge_point_id may be a string or a list — both are normalised to a
     list of resolved environment variable values here so handlers never need
     to deal with the distinction.
 
@@ -123,12 +123,12 @@ def _extract_deliveries(config: dict) -> list[tuple[str, str, dict, list[str]]]:
                 )
                 continue
 
-            # Normalise charge_point_id_env to a list
-            cp_id_env_raw = entry.get("charge_point_id_env")
+            # Normalise charge_point_id to a list
+            cp_id_env_raw = entry.get("charge_point_id")
             if cp_id_env_raw is None:
                 log.error(
                     "Delivery entry (handler: %s) in profile '%s' has no "
-                    "charge_point_id_env — skipping.",
+                    "charge_point_id — skipping.",
                     handler, profile_name,
                 )
                 continue

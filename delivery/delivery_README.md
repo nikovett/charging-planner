@@ -30,7 +30,7 @@ charging_planner.py  →  plan-{name}.json  →  delivery/deliver.py  →  deliv
 
 ## Configuration
 
-Deliveries are configured inside each charging profile in `config.yaml`. The `handler` field determines which script is used. `charge_point_id_env` accepts a single env var name or a list — when a list is given, the same plan is delivered to every charger ID independently.
+Deliveries are configured inside each charging profile in `config.yaml`. The `handler` field determines which script is used. `charge_point_id` accepts a single env var name or a list — when a list is given, the same plan is delivered to every charger ID independently.
 
 ```yaml
 entsoe:
@@ -41,19 +41,19 @@ charging:
     ...
     deliveries:
       - handler: "chargeamps"
-        charge_point_id_env: "CHARGER_ID_1"
+        charge_point_id: "CHARGER_ID_1"
         connector_id: 1
         max_charging_rate: 16.0
 
       - handler: "chargeamps"
-        charge_point_id_env:          # deliver to two chargers
+        charge_point_id:          # deliver to two chargers
           - "CHARGER_ID_1"
           - "CHARGER_ID_2"
         connector_id: 1
         max_charging_rate: 16.0
 
       - handler: "ocpp"
-        charge_point_id_env: "CHARGER_ID_2"
+        charge_point_id: "CHARGER_ID_2"
         endpoint_url_env: "OCPP_ENDPOINT_URL"
         ocpp_version: "1.6"
         connector_id: 1
@@ -80,7 +80,7 @@ Delivers via the `my.charge.space` internal API. Converts plan windows to weekly
 
 | Key | Default | Description |
 |---|---|---|
-| `charge_point_id_env` | — | **Required.** Env var name holding the Charge Amps charger ID. Accepts a string or list. |
+| `charge_point_id` | — | **Required.** The env var whose value is the Charge Amps charger ID. Accepts a string or list. |
 | `connector_id` | `1` | Connector index on the charger |
 | `max_charging_rate` | `16.0` | Maximum current in amps (A) |
 
@@ -90,7 +90,7 @@ Delivers via the `my.charge.space` internal API. Converts plan windows to weekly
 |---|---|
 | `CHARGER_EMAIL` | `my.charge.space` login email |
 | `CHARGER_PASSWORD` | `my.charge.space` login password |
-| `CHARGER_ID_<N>` | Charger ID — referenced by `charge_point_id_env` |
+| `CHARGER_ID_<N>` | Charger ID — referenced by `charge_point_id` |
 
 ---
 
@@ -108,7 +108,7 @@ pip install websockets
 
 | Key | Default | Description |
 |---|---|---|
-| `charge_point_id_env` | — | **Required.** Env var name holding the OCPP charge point ID. Accepts a string or list. |
+| `charge_point_id` | — | **Required.** The env var whose value is the OCPP charge point ID. Accepts a string or list. |
 | `endpoint_url_env` | `OCPP_ENDPOINT_URL` | Env var name holding the WebSocket base URL |
 | `ocpp_version` | `"1.6"` | `"1.6"`, `"2.0.1"`, or `"2.1"` |
 | `connector_id` | `1` | OCPP 1.6 `connectorId` / 2.x `evseId` |
@@ -123,7 +123,7 @@ pip install websockets
 
 | Variable | Description |
 |---|---|
-| `CHARGER_ID_<N>` | Charge point ID — referenced by `charge_point_id_env` |
+| `CHARGER_ID_<N>` | Charge point ID — referenced by `charge_point_id` |
 | `OCPP_ENDPOINT_URL` | WebSocket base URL, e.g. `ws://192.168.1.10:9000/ocpp` |
 
 ---

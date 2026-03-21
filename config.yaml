@@ -24,8 +24,7 @@ charging:
         preferred_window_end: "23:45"
     deliveries:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
-        enabled: true
-        charge_point_id_env: CHARGER_ID_1   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
+        charge_point_id: CHARGER_ID_1   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
         connector_id: 1                 # typically 1 = type2, 2 = schuko, unless Aura
     #   charging_rate_unit: A           # Charge Amps API accepts only current (A) so no need to configure it here, just an example
         max_charging_rate: 16.0         # amps
@@ -41,7 +40,7 @@ charging:
     deliveries:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
         enabled: false                  # configured but set to false to temporarily disable this delivery
-        charge_point_id_env: CHARGER_ID_2   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
+        charge_point_id: CHARGER_ID_2   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
         connector_id: 1
     #   charging_rate_unit: A           # Charge Amps API accepts only current (A) so no need to configure it here, just an example
         max_charging_rate: 16.0         # amps
@@ -51,14 +50,14 @@ charging:
     #
     # deliveries:
     #   - handler: chargeamps
-    #     charge_point_id_env:          # list — same plan delivered to both chargers
+    #     charge_point_id:          # list — same plan delivered to both chargers
     #       - CHARGER_ID_1
     #       - CHARGER_ID_2
     #     connector_id: 1
     #     max_charging_rate: 16.0      # amps — Charge Amps API uses current (A)
     #
     #   - handler: ocpp                # → delivery/deliver_ocpp.py
-    #     charge_point_id_env: CHARGER_ID_2   # reuse same CHARGER_ID_# scheme
+    #     charge_point_id: CHARGER_ID_2   # reuse same CHARGER_ID_# scheme
     #     endpoint_url_env: OCPP_ENDPOINT_URL  # e.g. ws://192.168.1.10:9000/ocpp
     #     ocpp_version: "1.6"          # Quoted — would parse as float without quotes
     #     connector_id: 1              # OCPP 1.6 connectorId / 2.x evseId — default 1

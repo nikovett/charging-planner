@@ -75,7 +75,7 @@ charging:
         preferred_window_end: "23:45"
     deliveries:
       - handler: chargeamps
-        charge_point_id_env: CHARGER_ID_1
+        charge_point_id: CHARGER_ID_1
         connector_id: 1
         max_charging_rate: 16.0
         restore_mode: false
@@ -87,7 +87,7 @@ charging:
     preferred_window_end: "06:30"
     deliveries:
       - handler: chargeamps
-        charge_point_id_env: CHARGER_ID_2
+        charge_point_id: CHARGER_ID_2
         connector_id: 1
         max_charging_rate: 16.0
         restore_mode: true
@@ -97,7 +97,7 @@ ntfy:
   topic: ""
 ```
 
-`charge_point_id_env` accepts either a single env var name or a list — when a list is given, the same plan is delivered to every charger independently. Timezone is set once in the `entsoe:` block and applies to all profiles and delivery handlers.
+`charge_point_id` accepts either a single env var name or a list — when a list is given, the same plan is delivered to every charger independently. Timezone is set once in the `entsoe:` block and applies to all profiles and delivery handlers.
 
 ### Charging profile reference
 
