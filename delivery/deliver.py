@@ -306,16 +306,19 @@ def _send_delivery_ntfy(
     url     = f"https://ntfy.sh/{topic}"
 
     try:
-        import urllib.parse
+        import json as _json
         import urllib.request as _ur
+        payload = _json.dumps({
+            "topic":    topic,
+            "title":    title,
+            "message":  message,
+            "priority": 3,
+        }).encode("utf-8")
         req = _ur.Request(
-            url,
-            data=message.encode(),
+            "https://ntfy.sh/",
+            data=payload,
             method="POST",
-            headers={
-                "Title":    urllib.parse.quote(title),
-                "Priority": "default",
-            },
+            headers={"Content-Type": "application/json"},
         )
         _ur.urlopen(req, timeout=10)
         log.info("ntfy notification sent to %s", url)

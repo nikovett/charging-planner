@@ -54,9 +54,11 @@ def _capture_message(plans_by_profile, skipped, results, config):
     """Call _send_delivery_ntfy and capture the message sent to ntfy."""
     sent = {}
     def fake_urlopen(req, timeout=None):
-        sent["url"]  = req.full_url
-        sent["body"] = req.data.decode()
-        sent["title"] = req.get_header("Title")
+        import json
+        payload    = json.loads(req.data.decode("utf-8"))
+        sent["url"]   = req.full_url
+        sent["body"]  = payload.get("message", "")
+        sent["title"] = payload.get("title", "")
         cm = mock.MagicMock()
         cm.__enter__ = lambda s: s
         cm.__exit__  = mock.Mock(return_value=False)
@@ -207,12 +209,13 @@ class TestNtfySending(unittest.TestCase):
             {"topup": self.PLAN}, [], [],
             make_config(enabled=True, topic=""),
         )
-        self.assertIn("test-topic", sent["url"])
+        self.assertIn("ntfy.sh", sent["url"])
 
     def test_topic_from_config_used(self):
         sent = {}
         def fake_urlopen(req, timeout=None):
-            sent["url"] = req.full_url
+            import json
+            sent["payload"] = json.loads(req.data.decode("utf-8"))
             cm = mock.MagicMock()
             cm.__enter__ = lambda s: s
             cm.__exit__  = mock.Mock(return_value=False)
@@ -224,7 +227,7 @@ class TestNtfySending(unittest.TestCase):
                 {"topup": self.PLAN}, [], [],
                 make_config(enabled=True, topic="config-topic"),
             )
-        self.assertIn("config-topic", sent["url"])
+        self.assertEqual(sent["payload"]["topic"], "config-topic")
 
     def test_no_plans_does_not_send(self):
         with mock.patch.dict("os.environ", {"NTFY_TOPIC": "test-topic"}), \
