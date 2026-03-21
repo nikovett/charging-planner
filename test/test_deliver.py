@@ -95,13 +95,13 @@ class TestNtfyMessageContent(unittest.TestCase):
         self.assertIn("01:00", sent["body"])
         self.assertIn("03:00", sent["body"])
 
-    def test_price_in_title(self):
+    def test_price_in_body(self):
         sent = self._send({"topup": make_plan("topup")})
-        self.assertIn("2.36", sent["title"])
+        self.assertIn("2.36", sent["body"])
 
-    def test_price_not_in_body(self):
+    def test_price_not_in_title(self):
         sent = self._send({"topup": make_plan("topup")})
-        self.assertNotIn("2.36", sent["body"])
+        self.assertNotIn("2.36", sent["title"])
 
     def test_incomplete_plan_flagged(self):
         sent = self._send({"topup": make_plan("topup", total=60, required=120)})
@@ -154,29 +154,33 @@ class TestNtfyMessageContent(unittest.TestCase):
         self.assertIn("topup",     sent["body"])
         self.assertIn("overnight", sent["body"])
 
-    def test_title_contains_profile_and_hours(self):
+    def test_title_contains_date(self):
         sent = self._send({"topup": make_plan("topup")})
-        self.assertIn("topup", sent["title"])
-        self.assertIn("2h",    sent["title"])
+        self.assertIn("2026-03-15", sent["title"])
 
-    def test_title_contains_savings_percentage(self):
+    def test_body_contains_profile_and_hours(self):
         sent = self._send({"topup": make_plan("topup")})
-        self.assertIn("↓", sent["title"])
-        self.assertIn("%", sent["title"])
+        self.assertIn("topup", sent["body"])
+        self.assertIn("2h",    sent["body"])
 
-    def test_title_no_arrow_when_above_market(self):
+    def test_body_contains_savings_percentage(self):
+        sent = self._send({"topup": make_plan("topup")})
+        self.assertIn("↓", sent["body"])
+        self.assertIn("%", sent["body"])
+
+    def test_body_no_arrow_when_above_market(self):
         plan = make_plan("topup")
         plan["avg_price_cents_kwh"] = 7.20
         plan["price_stats"]["avg_cents_kwh"] = 6.57
         sent = self._send({"topup": plan})
-        self.assertNotIn("↓", sent["title"])
+        self.assertNotIn("↓", sent["body"])
 
-    def test_title_arrow_shown_for_small_savings(self):
+    def test_body_arrow_shown_for_small_savings(self):
         plan = make_plan("topup")
         plan["avg_price_cents_kwh"] = 6.50
         plan["price_stats"]["avg_cents_kwh"] = 6.57
         sent = self._send({"topup": plan})
-        self.assertIn("↓", sent["title"])
+        self.assertIn("↓", sent["body"])
 
 
 # ===========================================================================

@@ -246,36 +246,33 @@ def _send_delivery_ntfy(
         h, m = divmod(minutes, 60)
         return f"{h}h" if m == 0 else f"{h}h{m:02d}m"
 
-    # Title: "topup 2h @ 0.62 ↓62% · overnight 6h @ 1.93 ↓18% c€/kWh"
-    title_parts = []
-    for plan in plans:
-        profile    = plan.get("profile", "default")
-        tot        = plan["total_minutes"]
-        req        = plan["required_minutes"]
-        avg        = plan.get("avg_price_cents_kwh")
-        market_avg = plan.get("price_stats", {}).get("avg_cents_kwh")
+    # Title: "Charging plan 2026-03-21"
+    date  = plans[0].get("date", "")
+    title = f"Charging plan {date}"
+
+    def _sep(profile, tot, req, avg, market_avg):
         summary = fmt_h(tot)
         if tot < req:
             summary += f"/{fmt_h(req)}"
         if avg is not None:
             savings = ((1 - avg / market_avg) * 100) if market_avg else 0
             savings_str = f" ↓{savings:.0f}%" if savings > 0 else ""
-            price_str = f" @ {avg:.2f}{savings_str} c€/kWh"
+            price_str = f" @ {avg:.2f} c€/kWh{savings_str}"
         else:
             price_str = ""
-        title_parts.append(f"{profile} {summary}{price_str}")
-    title = " · ".join(title_parts)
+        return f"{profile} {summary}{price_str}"
 
-    # Body: separator per profile, windows without prices, indented chargers
-    sep_len = 22
+    # Body: profile header line, windows, indented chargers
     sections = []
     for plan in plans:
-        profile = plan.get("profile", "default")
-        wins    = plan["windows"]
-        req     = plan["required_minutes"]
-        tot     = plan["total_minutes"]
+        profile    = plan.get("profile", "default")
+        wins       = plan["windows"]
+        req        = plan["required_minutes"]
+        tot        = plan["total_minutes"]
+        avg        = plan.get("avg_price_cents_kwh")
+        market_avg = plan.get("price_stats", {}).get("avg_cents_kwh")
 
-        sep = f"── {profile} " + "─" * max(1, sep_len - len(profile))
+        sep = _sep(profile, tot, req, avg, market_avg)
 
         if wins:
             win_lines = "\n".join(f"{w['start']}–{w['end']}" for w in wins)
@@ -299,10 +296,9 @@ def _send_delivery_ntfy(
 
     if skipped_profiles:
         skipped_lines = "\n".join(f"  - {n}" for n in skipped_profiles)
-        sections.append(f"── skipped ────────────\n{skipped_lines}")
+        sections.append(f"skipped\n{skipped_lines}")
 
     message = "\n\n".join(sections)
-    date    = plans[0].get("date", "")
     url     = f"https://ntfy.sh/{topic}"
 
     try:
