@@ -1762,9 +1762,10 @@ def _plan_one_profile(
                     win_start_str, win_end_str, tz.zone, _anchor_date=plan_date,
                 )
             else:
-                # Window start already passed — target tomorrow, re-check schedule
+                # Window start already passed — target tomorrow using the same
+                # window anchored to next_date. Do not re-look up the schedule
+                # for next_date — the same-day window applies to tomorrow.
                 next_date = plan_date + timedelta(days=1)
-                win_start_str, win_end_str = _resolve_schedule_window(cfg, next_date)
                 win_start_utc, win_end_utc = _resolve_window_utc(
                     win_start_str, win_end_str, tz.zone, _anchor_date=next_date,
                 )

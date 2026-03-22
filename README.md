@@ -67,10 +67,10 @@ charging:
     preferred_window_start: "22:00"
     preferred_window_end: "06:30"
     schedule:
-      - days: [monday, tuesday, wednesday, thursday, friday]
+      - days: [sunday, monday, tuesday, wednesday, thursday]
         preferred_window_start: "22:00"
         preferred_window_end: "06:30"
-      - days: [saturday, sunday]
+      - days: [friday, saturday]
         preferred_window_start: "00:00"
         preferred_window_end: "23:45"
     deliveries:
@@ -128,7 +128,9 @@ ntfy:
 
 For same-day windows (start before end, e.g. `00:00–23:45`) the planner targets tomorrow once today's window start has passed. This is the recommended pattern for weekend wide-open windows — run the script after ENTSO-E publishes prices (~12:00 UTC) and the cheapest slots from anywhere in tomorrow's day will be selected.
 
-For overnight windows (start after end, e.g. `22:00–06:30`) the target day is the day the window *starts* on. A schedule entry for `saturday` with `22:00–06:30` covers Saturday night into Sunday morning.
+**Important — schedule entries shift by one day for same-day windows.** Because a same-day window that has already started targets tomorrow, the schedule entry must be assigned to the *previous* day. For example, to get a full-day window on Saturday and Sunday, assign `00:00–23:45` to `friday` and `saturday` — the Friday run plans Saturday, and the Saturday run plans Sunday. Overnight windows (`22:00–06:30`) do not shift — the entry day matches the night it starts on, so `sunday` covers Sunday evening into Monday morning.
+
+For overnight windows (start after end, e.g. `22:00–06:30`) the target day is the day the window *starts* on. A schedule entry for `sunday` with `22:00–06:30` covers Sunday night into Monday morning.
 
 **Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`.
 
