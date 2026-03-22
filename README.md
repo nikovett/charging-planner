@@ -6,7 +6,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 ## Overview
 
-The script makes a single API call to fetch all available day-ahead prices, then runs each configured charging profile against the price data independently. Each profile picks its own cheapest windows within its preferred time range and writes a plan to JSON. Once plans are built, `delivery/deliver.py` dispatches each plan to the configured chargers and sends a push notification with the plan summary and delivery status.
+The script makes a single API call to fetch all available day-ahead prices, then runs each configured charging profile against the price data independently. Each profile picks its own cheapest windows within its configured preferred window (or from all available prices if no window is set) and writes a plan to JSON. Once plans are built, `delivery/deliver.py` dispatches each plan to the configured chargers and sends a push notification with the plan summary and delivery status.
 
 ```
   ══════════════════════════════════════════════════════════════════
@@ -71,8 +71,8 @@ charging:
         preferred_window_start: "22:00"
         preferred_window_end: "06:30"
       - days: [saturday, sunday]
-        preferred_window_start: "00:00"
-        preferred_window_end: "23:45"
+        preferred_window_start: any     # no window constraint — pick cheapest slots from all available prices
+        preferred_window_end: any
     deliveries:
       - handler: chargeamps
         charge_point_id: CHARGER_ID_1
@@ -119,22 +119,22 @@ ntfy:
 
 **The planner always plans for tomorrow.** The preferred window for tomorrow is taken from the matching `schedule` entry if one exists, otherwise from the top-level `preferred_window_start` / `preferred_window_end`.
 
-A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00–23:45`) stays within the target day. Use `preferred_window_start: any` / `preferred_window_end: any` for a true 24-hour window covering the full target day with no excluded slots.
+A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00–23:45`) stays within the target day. When both fields are set to `any` (or omitted), there is no window constraint — the planner picks the cheapest slots from all available prices from the script run onwards.
 
 | Schedule entry | Used by | Plans |
 |---|---|---|
-| `saturday: any/any` | Friday's run | Saturday (full 24h) |
-| `sunday: any/any` | Saturday's run | Sunday (full 24h) |
+| `saturday: any` | Friday's run | cheapest slots from all available prices |
+| `sunday: any` | Saturday's run | cheapest slots from all available prices |
 | `monday: 22:00–06:30` | Sunday's run | Monday (Sunday evening–Monday morning) |
 | `friday: 22:00–06:30` | Thursday's run | Friday (Thursday evening–Friday morning) |
 
 Days not listed in `schedule` use the top-level preferred window.
 
-**Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`.
+**Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`. When no window is configured (`any`), all available prices are eligible and no spillover logic is needed.
 
 **Gap merging** — when two selected blocks are separated by a gap shorter than `min_slot_minutes`, they are bridged into one continuous window automatically. Slots are then trimmed from the merged block to bring the total back to `required_hours`.
 
-**Guaranteed charge until departure time** — setting `required_hours` longer than the window with `continuous_only: true` ensures the block always ends exactly at `preferred_window_end`.
+**Guaranteed charge until departure time** — setting `required_hours` longer than the window with `continuous_only: true` ensures the block always ends exactly at `preferred_window_end`. Not applicable when using `any`.
 
 ---
 

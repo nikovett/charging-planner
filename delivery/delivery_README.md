@@ -40,25 +40,26 @@ charging:
   - name: "topup"
     ...
     deliveries:
-      - handler: "chargeamps"
-        charge_point_id: "CHARGER_ID_1"
+      - handler: chargeamps
+        charge_point_id: CHARGER_ID_1
         connector_id: 1
         max_charging_rate: 16.0
+        restore_mode: false
 
-      - handler: "chargeamps"
+      - handler: chargeamps
         charge_point_id:          # deliver to two chargers
-          - "CHARGER_ID_1"
-          - "CHARGER_ID_2"
+          - CHARGER_ID_1
+          - CHARGER_ID_2
         connector_id: 1
         max_charging_rate: 16.0
 
-      - handler: "ocpp"
-        charge_point_id: "CHARGER_ID_2"
-        endpoint_url_env: "OCPP_ENDPOINT_URL"
-        ocpp_version: "1.6"
+      - handler: ocpp
+        charge_point_id: CHARGER_ID_2
+        endpoint_url_env: OCPP_ENDPOINT_URL
+        ocpp_version: "1.6"          # Quoted — would parse as float without quotes
         connector_id: 1
         max_charging_rate: 11000.0
-        charging_rate_unit: "W"
+        charging_rate_unit: W
         profile_id: 1
         stack_level: 0
         timeout: 30
@@ -74,7 +75,7 @@ charging:
 
 Delivers via the `my.charge.space` internal API. Converts plan windows to weekly `schedulePeriods` anchored to Monday 00:00 local time, which is how the Charge Amps web app represents its schedule. Logs in once per process and caches the token for reuse across multiple charger IDs.
 
-**Mode restore** — before delivering the schedule, the connector's current mode (`On`, `Off`, or `Schedule`) is read from the API. After delivery, if the mode was not already `Schedule`, it is restored to its original value. This prevents the schedule delivery from silently switching the charger into schedule mode when the user had it set to `Always on` or `Off`. If mode restore fails the schedule was still delivered successfully — a warning is logged but the delivery is reported as succeeded.
+**Mode restore** — controlled by the `restore_mode` config key (default `false`). When enabled, reads the connector's current mode (`On`, `Off`, or `Schedule`) before delivery and restores it afterwards if it was not already `Schedule`. This prevents the schedule delivery from silently switching the charger into schedule mode when the user had it set to `Always on` or `Off`. If mode restore fails the schedule was still delivered successfully — a warning is logged but the delivery is reported as succeeded.
 
 **Config keys:**
 
@@ -83,6 +84,7 @@ Delivers via the `my.charge.space` internal API. Converts plan windows to weekly
 | `charge_point_id` | — | **Required.** The env var whose value is the Charge Amps charger ID. Accepts a string or list. |
 | `connector_id` | `1` | Connector index on the charger |
 | `max_charging_rate` | `16.0` | Maximum current in amps (A) |
+| `restore_mode` | `false` | Restore connector mode after delivery if it was not already `Schedule` |
 
 **Environment variables:**
 

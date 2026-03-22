@@ -8,7 +8,7 @@ Collection of test reports for the implementation
 
 ### Test suite
 
-108 tests in `test_charging_planner.py`, run with:
+119 tests in `test_charging_planner.py`, run with:
 
 ```bash
 python3 -m unittest discover -s test -v
@@ -16,8 +16,9 @@ python3 -m unittest discover -s test -v
 
 | Area | Tests |
 |---|---|
-| Configuration validation | 11 |
-| Config parsing | 5 |
+| Configuration validation | 16 |
+| Config parsing | 10 |
+| Schedule window resolution | 6 |
 | OCPP charging profile | 13 |
 | XML parsing | 10 |
 | Real ENTSO-E data | 9 |
@@ -31,7 +32,7 @@ python3 -m unittest discover -s test -v
 | Time utilities | 10 |
 | End-to-end pipeline | 6 |
 | Window coverage check | 5 |
-| **Total** | **108** |
+| **Total** | **119** |
 
 The 3 OCPP schema validation tests require the spec zip files placed in `test/ocpp16/`, `test/ocpp201/`, `test/ocpp21/` — they skip cleanly without them. All other tests run with no dependencies beyond `pyyaml`.
 
@@ -56,7 +57,7 @@ The two D-grade functions (`_select_with_min_block` CC=19, `close_gap_merge` CC=
 
 ### Test suite
 
-40 tests in `test_deliver_chargeamps.py`, run with:
+41 tests in `test_deliver_chargeamps.py`, run with:
 
 ```bash
 python3 -m unittest discover -s test -v
@@ -68,10 +69,10 @@ python3 -m unittest discover -s test -v
 | Period timing (from/to offsets) | 6 |
 | Period fields | 6 |
 | Edge cases | 3 |
-| deliver() interface | 13 |
+| deliver() interface | 14 |
 | Connector mode extraction | 5 |
 | Login cache | 3 |
-| **Total** | **40** |
+| **Total** | **41** |
 
 These tests focus on the scheduling logic that converts plan windows to Charge Amps `schedulePeriods` — specifically that slots land at the correct times relative to the Monday anchor, across timezones and DST transitions. The deliver() tests also cover mode read/restore behaviour: the charger's original mode (`On`, `Off`, or `Schedule`) is read before delivery and restored afterwards if it was not already `Schedule`. All network calls are mocked; no credentials or live API access required.
 
@@ -81,7 +82,7 @@ These tests focus on the scheduling logic that converts plan windows to Charge A
 
 ### Test suite
 
-17 tests in `test_deliver.py`, run with:
+24 tests in `test_deliver.py`, run with:
 
 ```bash
 python3 -m unittest discover -s test -v
@@ -89,8 +90,8 @@ python3 -m unittest discover -s test -v
 
 | Area | Tests |
 |---|---|
-| Message content | 11 |
-| Sending behaviour | 6 |
-| **Total** | **17** |
+| Message content | 17 |
+| Sending behaviour | 7 |
+| **Total** | **24** |
 
 These tests cover the ntfy notification logic in `delivery/deliver.py` — message content (profile summary, window times, delivery status per charger, skipped profiles), and sending behaviour (disabled, missing topic, topic from env vs config, empty plans, send failure handling). All HTTP calls are mocked.
