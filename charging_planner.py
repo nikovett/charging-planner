@@ -1743,21 +1743,34 @@ def _plan_one_profile(
     plan_date = win_start_utc.astimezone(tz.zone).date()
 
     if cfg.schedule:
-        # First pass: resolve using today's plan_date to get a candidate window.
-        # For same-day windows that have already passed, _resolve_window_utc will
-        # land on tomorrow — re-check the schedule for that target day since it
-        # may have a different entry (e.g. sunday entry resolves to monday which
-        # has a different weekday window).
+        # Resolve the schedule entry for plan_date.
+        # For same-day windows (start < end, e.g. 00:00–23:45):
+        #   - If the window end is still in the future today → stay on plan_date
+        #   - If the window end has already passed → target tomorrow, re-check
+        #     schedule for that day (it may have a different entry)
+        # For overnight windows (start > end, e.g. 22:00–06:30):
+        #   - Always anchor to plan_date (start of the overnight window)
         win_start_str, win_end_str = _resolve_schedule_window(cfg, plan_date)
-        win_start_utc, win_end_utc = _resolve_window_utc(win_start_str, win_end_str, tz.zone)
-        target_date = win_start_utc.astimezone(tz.zone).date()
 
-        if target_date != plan_date:
-            # The window resolved to a different day — re-check schedule for that day
-            # and anchor to that day explicitly so same-day windows don't jump again.
-            win_start_str, win_end_str = _resolve_schedule_window(cfg, target_date)
+        if not _is_overnight(win_start_str, win_end_str):
+            now_local = datetime.now(tz=timezone.utc).astimezone(tz.zone)
+            sh, sm = map(int, win_start_str.split(":"))
+            win_start_today = now_local.replace(hour=sh, minute=sm, second=0, microsecond=0)
+            if now_local < win_start_today:
+                # Window start still in the future — use today's window
+                win_start_utc, win_end_utc = _resolve_window_utc(
+                    win_start_str, win_end_str, tz.zone, _anchor_date=plan_date,
+                )
+            else:
+                # Window start already passed — target tomorrow, re-check schedule
+                next_date = plan_date + timedelta(days=1)
+                win_start_str, win_end_str = _resolve_schedule_window(cfg, next_date)
+                win_start_utc, win_end_utc = _resolve_window_utc(
+                    win_start_str, win_end_str, tz.zone, _anchor_date=next_date,
+                )
+        else:
             win_start_utc, win_end_utc = _resolve_window_utc(
-                win_start_str, win_end_str, tz.zone, _anchor_date=target_date,
+                win_start_str, win_end_str, tz.zone, _anchor_date=plan_date,
             )
 
         plan_date = win_start_utc.astimezone(tz.zone).date()
