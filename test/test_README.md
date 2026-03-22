@@ -40,16 +40,16 @@ The real ENTSO-E data tests use an actual API response from 2026-03-14 inlined a
 
 ### Cyclomatic complexity
 
-Measured across 76 functions:
+Measured across 88 blocks (classes, functions, methods) in all four Python files:
 
 | Grade | Threshold | Count |
 |---|---|---|
-| A/B | CC ≤ 10 | 68 |
-| C | CC 11–15 | 6 |
-| D | CC 16–20 | 2 |
-| F | CC > 20 | 0 |
+| A/B | CC ≤ 10 | 71 |
+| C | CC 11–15 | 9 |
+| D | CC 16–20 | 6 |
+| F | CC > 20 | 2 |
 
-The two D-grade functions (`_select_with_min_block` CC=19, `close_gap_merge` CC=17) are selection algorithms whose complexity is inherent to their logic. All other functions are C or better.
+The two F-grade functions are `_validate_charging_profile` (CC=27) — grown through incremental addition of schedule, `any`, and mixed-value validation — and `_select_with_min_block` (CC=20), a selection algorithm whose complexity is inherent to its logic. The D-grade functions (`_send_delivery_ntfy`, `_send_set_charging_profile`, `close_gap_merge`, `_select_spillover`, `build_plan`, `_resolve_tz`) are similarly algorithm-heavy. Average complexity: B (5.9).
 
 ---
 
