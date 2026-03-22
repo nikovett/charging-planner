@@ -113,13 +113,13 @@ ntfy:
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or omit/`any` for no constraint |
 | `charging.preferred_window_end` | `any` | End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight. Equal start and end is an error. Use `23:45` for end of day — `23:59` excludes the last 15-minute slot. Omit or set to `any` for no constraint (both fields must be omitted or `any` together) |
-| `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and `preferred_window_start` / `preferred_window_end` (use `any` for both to get a full 24-hour window). Each entry names the target day — the day being planned. The script always reads tomorrow's schedule entry. The first matching entry for the target day is used; falls back to top-level window if none match |
+| `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and `preferred_window_start` / `preferred_window_end` (both `any` or omitted = no window constraint, picks cheapest from all available prices). Each entry names the target day — the day being planned. The script always reads tomorrow's schedule entry. The first matching entry for the target day is used; falls back to top-level window if none match |
 
 ### Preferred window behaviour
 
 **The planner always plans for tomorrow.** The preferred window for tomorrow is taken from the matching `schedule` entry if one exists, otherwise from the top-level `preferred_window_start` / `preferred_window_end`.
 
-A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00–23:45`) stays within the target day. When both fields are set to `any` (or omitted), there is no window constraint — the planner picks the cheapest slots from all available prices from the script run onwards.
+A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00–23:45`) stays within the target day. Note that `00:00–23:45` excludes the last 15-minute slot of the day — use `any` if you want truly unconstrained selection. When both fields are set to `any` (or omitted), there is no window constraint — the planner picks the cheapest slots from all available prices from the script run onwards.
 
 | Schedule entry | Used by | Plans |
 |---|---|---|

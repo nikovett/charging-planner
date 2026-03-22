@@ -212,7 +212,7 @@ def _validate_entsoe_config(et: dict, errors: list) -> None:
 def _validate_hhmm(ch: dict, key: str, errors: list) -> Optional[tuple[int, int]]:
     """Parse and validate a HH:MM config field. Appends to errors and returns None on failure.
 
-    Returns None without error if the value is "any" — callers treat that as a 24-hour window.
+    Returns None without error if the value is "any" — callers treat that as no window constraint.
     """
     val = ch.get(key)
     if val is None:
@@ -380,7 +380,7 @@ class Config:
     max_price_eur:          Optional[float]   # None = no ceiling
     preferred_window_start: str               # validated HH:MM (unused when preferred_window_any)
     preferred_window_end:   str               # validated HH:MM (unused when preferred_window_any)
-    preferred_window_any:   bool              # True = full 24-hour window (preferred_window: any)
+    preferred_window_any:   bool              # True = no window constraint (preferred_window_start/end omitted or "any")
     schedule:               list              # day-specific window overrides (may be empty)
 
 
@@ -962,7 +962,7 @@ def _resolve_window_utc(
     """Resolve preferred window HH:MM strings to UTC datetimes.
 
     Determines the anchor date automatically from the clock:
-    - Same-day windows: tomorrow after local noon, today before noon.
+    - Same-day windows (start < end): tomorrow if window start has passed, today otherwise.
     - Overnight windows (start > end, e.g. 22:00–06:30): today if the window
       start is still in the future; tomorrow otherwise.
 
@@ -1779,7 +1779,7 @@ def _plan_one_profile(
         # Overnight windows (e.g. 22:00–06:30) anchor to today — they start
         # tonight. Same-day windows (e.g. 00:00–23:45) anchor to tomorrow — they
         # cover the full target day in local time.
-        # "any" is a true 24-hour window: midnight tomorrow → midnight+24h.
+        # "any" means no window constraint — all available prices from now are eligible.
         tomorrow = plan_date + timedelta(days=1)
         win_start_str, win_end_str = _resolve_schedule_window(cfg, tomorrow)
         if win_start_str == "any":
