@@ -275,11 +275,25 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
             # Validate window fields — "any" is accepted by _validate_hhmm directly
             _validate_hhmm(entry, "preferred_window_start", errors)
             _validate_hhmm(entry, "preferred_window_end", errors)
+            e_start_any = str(entry.get("preferred_window_start", "")).lower() == "any"
+            e_end_any   = str(entry.get("preferred_window_end",   "")).lower() == "any"
+            if e_start_any != e_end_any:
+                errors.append(
+                    f"charging.schedule[{i}]: preferred_window_start and preferred_window_end "
+                    "must both be 'any' or both be HH:MM."
+                )
 
     pw_s = _validate_hhmm(ch, "preferred_window_start", errors)
     pw_e = _validate_hhmm(ch, "preferred_window_end", errors)
-    # "any" returns None from _validate_hhmm without adding an error — skip equal-window check
-    if pw_s is not None and pw_e is not None:
+    # "any" returns None from _validate_hhmm without adding an error
+    start_is_any = str(ch.get("preferred_window_start", "")).lower() == "any"
+    end_is_any   = str(ch.get("preferred_window_end",   "")).lower() == "any"
+    if start_is_any != end_is_any:
+        errors.append(
+            "preferred_window_start and preferred_window_end must both be 'any' or both be HH:MM — "
+            "mixing 'any' with a time value is not allowed."
+        )
+    elif pw_s is not None and pw_e is not None:
         s_min = pw_s[0] * 60 + pw_s[1]
         e_min = pw_e[0] * 60 + pw_e[1]
         if s_min == e_min:
