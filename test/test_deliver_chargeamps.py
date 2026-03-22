@@ -291,7 +291,7 @@ class TestDeliver(unittest.TestCase):
         ["2026-03-15T20:00:00+00:00"],
         ["2026-03-16T04:30:00+00:00"],
     )
-    ENTRY = make_entry(connector_id=1, max_charging_rate=16.0)
+    ENTRY = make_entry(connector_id=1, max_charging_rate=16.0, restore_mode=True)
     TZ    = "Europe/Helsinki"
     CP_ID = "CHARGER-001"
 

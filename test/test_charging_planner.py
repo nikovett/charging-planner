@@ -254,6 +254,24 @@ class TestParseConfigs(unittest.TestCase):
         self.assertEqual(len(configs[0].schedule), 1)
         self.assertEqual(configs[0].schedule[0]["days"], ["saturday", "sunday"])
 
+    def test_schedule_any_window_valid(self):
+        import copy
+        raw = copy.deepcopy(self.BASE_RAW)
+        raw["charging"][0]["schedule"] = [
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "any", "preferred_window_end": "any"},
+        ]
+        configs = parse_configs(raw)
+        self.assertEqual(configs[0].schedule[0].get("preferred_window_start"), "any")
+
+    def test_top_level_any_window_valid(self):
+        import copy
+        raw = copy.deepcopy(self.BASE_RAW)
+        raw["charging"][0]["preferred_window_start"] = "any"
+        raw["charging"][0]["preferred_window_end"] = "any"
+        configs = parse_configs(raw)
+        self.assertTrue(configs[0].preferred_window_any)
+
     def test_empty_schedule_is_valid(self):
         import copy
         raw = copy.deepcopy(self.BASE_RAW)
@@ -350,11 +368,20 @@ class TestResolveScheduleWindow(unittest.TestCase):
         cfg = self._make_cfg([
             {"days": ["saturday"],
              "preferred_window_start": "08:00", "preferred_window_end": "20:00"},
-            {"days": ["saturday"],   # duplicate — second entry never reached
+            {"days": ["sunday"],
              "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
         ])
         start, end = _resolve_schedule_window(cfg, date(2026, 3, 21))
         self.assertEqual(start, "08:00")
+
+    def test_any_window_returns_sentinel(self):
+        cfg = self._make_cfg([
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "any", "preferred_window_end": "any"},
+        ])
+        start, end = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        self.assertEqual(start, "any")
+        self.assertEqual(end, "any")
 
 
 

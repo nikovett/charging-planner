@@ -210,18 +210,23 @@ def _validate_entsoe_config(et: dict, errors: list) -> None:
 
 
 def _validate_hhmm(ch: dict, key: str, errors: list) -> Optional[tuple[int, int]]:
-    """Parse and validate a HH:MM config field. Appends to errors and returns None on failure."""
+    """Parse and validate a HH:MM config field. Appends to errors and returns None on failure.
+
+    Returns None without error if the value is "any" — callers treat that as a 24-hour window.
+    """
     val = ch.get(key)
     if val is None:
-        errors.append(f"charging.{key} is required. Use 'HH:MM' (e.g. '00:00').")
+        errors.append(f"charging.{key} is required. Use 'HH:MM' (e.g. '00:00') or 'any'.")
         return None
+    if str(val).strip().lower() == "any":
+        return None   # sentinel — caller checks ch[key] == "any"
     try:
         h, m = map(int, str(val).split(":"))
         if not (0 <= h <= 23 and 0 <= m <= 59):
             raise ValueError
         return h, m
     except (ValueError, AttributeError):
-        errors.append(f"charging.{key}={val!r} is not valid. Use 'HH:MM' (00:00–23:59).")
+        errors.append(f"charging.{key}={val!r} is not valid. Use 'HH:MM' (00:00–23:59) or 'any'.")
         return None
 
 
@@ -267,12 +272,13 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
                         )
                     else:
                         seen_days.add(d)
-            # Validate window fields within the entry
+            # Validate window fields — "any" is accepted by _validate_hhmm directly
             _validate_hhmm(entry, "preferred_window_start", errors)
             _validate_hhmm(entry, "preferred_window_end", errors)
 
     pw_s = _validate_hhmm(ch, "preferred_window_start", errors)
     pw_e = _validate_hhmm(ch, "preferred_window_end", errors)
+    # "any" returns None from _validate_hhmm without adding an error — skip equal-window check
     if pw_s is not None and pw_e is not None:
         s_min = pw_s[0] * 60 + pw_s[1]
         e_min = pw_e[0] * 60 + pw_e[1]
@@ -357,8 +363,9 @@ class Config:
     continuous_only:        bool
     min_slot_minutes:       int
     max_price_eur:          Optional[float]   # None = no ceiling
-    preferred_window_start: str               # validated HH:MM
-    preferred_window_end:   str               # validated HH:MM
+    preferred_window_start: str               # validated HH:MM (unused when preferred_window_any)
+    preferred_window_end:   str               # validated HH:MM (unused when preferred_window_any)
+    preferred_window_any:   bool              # True = full 24-hour window (preferred_window: any)
     schedule:               list              # day-specific window overrides (may be empty)
 
 
@@ -384,8 +391,9 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         continuous_only=bool(ch.get("continuous_only", False)),
         min_slot_minutes=int(ch.get("min_slot_minutes", 30)),
         max_price_eur=ceil_cents / 100.0 if ceil_cents is not None else None,
-        preferred_window_start=ch["preferred_window_start"],
-        preferred_window_end=ch["preferred_window_end"],
+        preferred_window_start=ch.get("preferred_window_start", "00:00"),
+        preferred_window_end=ch.get("preferred_window_end", "23:45"),
+        preferred_window_any=str(ch.get("preferred_window_start", "")).lower() == "any",
         schedule=ch.get("schedule") or [],
     )
 
@@ -1712,12 +1720,17 @@ def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, s
     day_name = _DAY_NAMES[target_date.weekday()]
     for entry in cfg.schedule:
         if day_name in (entry.get("days") or []):
+            if str(entry.get("preferred_window_start", "")).lower() == "any":
+                log.info("Profile '%s': using schedule entry for %s (any)", cfg.name, day_name)
+                return "any", "any"
             log.info(
                 "Profile '%s': using schedule entry for %s (%s–%s)",
                 cfg.name, day_name,
                 entry["preferred_window_start"], entry["preferred_window_end"],
             )
             return entry["preferred_window_start"], entry["preferred_window_end"]
+    if cfg.preferred_window_any:
+        return "any", "any"
     return cfg.preferred_window_start, cfg.preferred_window_end
 
 
@@ -1742,15 +1755,22 @@ def _plan_one_profile(
     )
     plan_date = win_start_utc.astimezone(tz.zone).date()
 
-    if cfg.schedule:
+    if cfg.schedule or cfg.preferred_window_any:
         # Always look up tomorrow's schedule entry — the schedule describes what
         # to do for each target day, and we are always planning for tomorrow.
         # Overnight windows (e.g. 22:00–06:30) anchor to today — they start
-        # tonight. Wide windows (e.g. 00:00–23:45) anchor to tomorrow — they
+        # tonight. Same-day windows (e.g. 00:00–23:45) anchor to tomorrow — they
         # cover the full target day in local time.
+        # "any" is a true 24-hour window: midnight tomorrow → midnight+24h.
         tomorrow = plan_date + timedelta(days=1)
         win_start_str, win_end_str = _resolve_schedule_window(cfg, tomorrow)
-        if _is_overnight(win_start_str, win_end_str):
+        if win_start_str == "any":
+            win_start_utc = _hhmm_to_utc("00:00", tomorrow, tz.zone)
+            win_end_utc   = win_start_utc + timedelta(hours=24)
+            win_start_str, win_end_str = "00:00", "00:00 (+24h)"
+            log.info("Profile '%s': any window — full 24h: %s – %s",
+                     cfg.name, win_start_utc.isoformat(), win_end_utc.isoformat())
+        elif _is_overnight(win_start_str, win_end_str):
             win_start_utc, win_end_utc = _resolve_window_utc(
                 win_start_str, win_end_str, tz.zone, _anchor_date=plan_date,
             )
