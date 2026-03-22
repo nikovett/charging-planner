@@ -31,7 +31,7 @@ charging:
         restore_mode: false             # Charge Amps only: delivered schedule always changes the charger mode to "Schedule". Enabling this restores charging mode back to what it was before delivery.
 
   - name: overnight
-    required_hours: 6                   # Total hours of charging to schedule
+    required_hours: 5                   # Total hours of charging to schedule
     continuous_only: true               # One unbroken block, extended leftward if window is too short
     min_slot_minutes: 30
     max_price_cents_kwh: null
