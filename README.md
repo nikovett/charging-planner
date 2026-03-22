@@ -111,8 +111,8 @@ ntfy:
 | `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
 | `charging.min_slot_minutes` | `30` | Minimum continuous block length. Must be a multiple of 15 |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
-| `charging.preferred_window_start` | `00:00` | **Required.** Start of preferred charging window (`HH:MM`) |
-| `charging.preferred_window_end` | `06:30` | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight. Equal start and end is an error. Use `23:45` for end of day — `23:59` excludes the last 15-minute slot |
+| `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or omit/`any` for no constraint |
+| `charging.preferred_window_end` | `any` | End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight. Equal start and end is an error. Use `23:45` for end of day — `23:59` excludes the last 15-minute slot. Omit or set to `any` for no constraint (both fields must be omitted or `any` together) |
 | `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and `preferred_window_start` / `preferred_window_end` (use `any` for both to get a full 24-hour window). Each entry names the target day — the day being planned. The script always reads tomorrow's schedule entry. The first matching entry for the target day is used; falls back to top-level window if none match |
 
 ### Preferred window behaviour

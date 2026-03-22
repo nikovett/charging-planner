@@ -216,10 +216,9 @@ def _validate_hhmm(ch: dict, key: str, errors: list) -> Optional[tuple[int, int]
     """
     val = ch.get(key)
     if val is None:
-        errors.append(f"charging.{key} is required. Use 'HH:MM' (e.g. '00:00') or 'any'.")
-        return None
+        return None   # missing = treated as "any" by caller
     if str(val).strip().lower() == "any":
-        return None   # sentinel — caller checks ch[key] == "any"
+        return None   # explicit "any" — caller checks ch[key] == "any"
     try:
         h, m = map(int, str(val).split(":"))
         if not (0 <= h <= 23 and 0 <= m <= 59):
@@ -275,22 +274,22 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
             # Validate window fields — "any" is accepted by _validate_hhmm directly
             _validate_hhmm(entry, "preferred_window_start", errors)
             _validate_hhmm(entry, "preferred_window_end", errors)
-            e_start_any = str(entry.get("preferred_window_start", "")).lower() == "any"
-            e_end_any   = str(entry.get("preferred_window_end",   "")).lower() == "any"
+            e_start_any = entry.get("preferred_window_start") is None or str(entry.get("preferred_window_start", "")).lower() == "any"
+            e_end_any   = entry.get("preferred_window_end")   is None or str(entry.get("preferred_window_end",   "")).lower() == "any"
             if e_start_any != e_end_any:
                 errors.append(
                     f"charging.schedule[{i}]: preferred_window_start and preferred_window_end "
-                    "must both be 'any' or both be HH:MM."
+                    "must both be omitted/'any' or both be HH:MM."
                 )
 
     pw_s = _validate_hhmm(ch, "preferred_window_start", errors)
     pw_e = _validate_hhmm(ch, "preferred_window_end", errors)
     # "any" returns None from _validate_hhmm without adding an error
-    start_is_any = str(ch.get("preferred_window_start", "")).lower() == "any"
-    end_is_any   = str(ch.get("preferred_window_end",   "")).lower() == "any"
+    start_is_any = ch.get("preferred_window_start") is None or str(ch.get("preferred_window_start", "")).lower() == "any"
+    end_is_any   = ch.get("preferred_window_end")   is None or str(ch.get("preferred_window_end",   "")).lower() == "any"
     if start_is_any != end_is_any:
         errors.append(
-            "preferred_window_start and preferred_window_end must both be 'any' or both be HH:MM — "
+            "preferred_window_start and preferred_window_end must both be omitted/'any' or both be HH:MM — "
             "mixing 'any' with a time value is not allowed."
         )
     elif pw_s is not None and pw_e is not None:
@@ -310,6 +309,8 @@ def _warn_if_continuous_overflows_window(ch: dict) -> None:
     win_start = ch.get("preferred_window_start")
     win_end   = ch.get("preferred_window_end")
     if not (ch.get("continuous_only") and win_start and win_end):
+        return
+    if win_start is None or win_end is None or str(win_start).lower() == "any" or str(win_end).lower() == "any":
         return
     try:
         sh, sm = map(int, win_start.split(":"))
@@ -407,7 +408,10 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         max_price_eur=ceil_cents / 100.0 if ceil_cents is not None else None,
         preferred_window_start=ch.get("preferred_window_start", "00:00"),
         preferred_window_end=ch.get("preferred_window_end", "23:45"),
-        preferred_window_any=str(ch.get("preferred_window_start", "")).lower() == "any",
+        preferred_window_any=(
+            ch.get("preferred_window_start") is None or
+            str(ch.get("preferred_window_start", "")).lower() == "any"
+        ),
         schedule=ch.get("schedule") or [],
     )
 
@@ -1734,7 +1738,7 @@ def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, s
     day_name = _DAY_NAMES[target_date.weekday()]
     for entry in cfg.schedule:
         if day_name in (entry.get("days") or []):
-            if str(entry.get("preferred_window_start", "")).lower() == "any":
+            if entry.get("preferred_window_start") is None or str(entry.get("preferred_window_start", "")).lower() == "any":
                 log.info("Profile '%s': using schedule entry for %s (any)", cfg.name, day_name)
                 return "any", "any"
             log.info(
@@ -1779,10 +1783,11 @@ def _plan_one_profile(
         tomorrow = plan_date + timedelta(days=1)
         win_start_str, win_end_str = _resolve_schedule_window(cfg, tomorrow)
         if win_start_str == "any":
-            win_start_utc = _hhmm_to_utc("00:00", tomorrow, tz.zone)
-            win_end_utc   = win_start_utc + timedelta(hours=24)
-            win_start_str, win_end_str = "00:00", "00:00 (+24h)"
-            log.info("Profile '%s': any window — full 24h: %s – %s",
+            # "any" means no window constraint — use all available prices from now.
+            win_start_utc = datetime.now(tz=timezone.utc)
+            win_end_utc   = max(s.end for s in all_prices) if all_prices else win_start_utc
+            win_start_str, win_end_str = "any", "any"
+            log.info("Profile '%s': any window — all available slots: %s – %s",
                      cfg.name, win_start_utc.isoformat(), win_end_utc.isoformat())
         elif _is_overnight(win_start_str, win_end_str):
             win_start_utc, win_end_utc = _resolve_window_utc(
