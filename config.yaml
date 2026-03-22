@@ -22,7 +22,7 @@ charging:
         preferred_window_start: "22:00"
         preferred_window_end: "06:30"
       - days: [saturday, sunday]
-        preferred_window_start: any     # full 24-hour window — charge anytime on the target day
+        preferred_window_start: any     # no window constraint — pick cheapest slots from all available prices
         preferred_window_end: any
     deliveries:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
