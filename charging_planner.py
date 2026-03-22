@@ -1787,9 +1787,9 @@ def _plan_one_profile(
     # plan_date: the local calendar date the window starts on
     plan_date = win_start_utc.astimezone(tz.zone).date()
 
-    # display_prices: all fetched slots whose local date is plan_date (for price stats)
-    display_prices = [s for s in all_prices
-                      if s.start.astimezone(tz.zone).date() == plan_date]
+    # display_prices: all usable slots from the script run onwards.
+    # This is the full market the user could have chosen from at the time of planning.
+    display_prices = all_prices
 
     earliest_useful  = win_start_utc - timedelta(minutes=cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]

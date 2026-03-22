@@ -1164,8 +1164,7 @@ class TestWindowCoverageCheck(unittest.TestCase):
 
         # Only 1h of prices — far below 90% of any window
         one_hour = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 4)
-        with mock.patch("charging_planner.fetch_entsoe_prices",
-                        return_value=one_hour):
+        with mock.patch("charging_planner.fetch_entsoe_prices", return_value=one_hour):
             with self.assertRaises(SystemExit) as ctx:
                 cmd_plan({
                     "entsoe": {"api_key": "x", "area": "FI", "timezone": "Europe/Helsinki"},
