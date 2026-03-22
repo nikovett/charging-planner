@@ -67,10 +67,10 @@ charging:
     preferred_window_start: "22:00"
     preferred_window_end: "06:30"
     schedule:
-      - days: [sunday, monday, tuesday, wednesday, thursday]
+      - days: [monday, tuesday, wednesday, thursday, friday]
         preferred_window_start: "22:00"
         preferred_window_end: "06:30"
-      - days: [friday, saturday]
+      - days: [saturday, sunday]
         preferred_window_start: "00:00"
         preferred_window_end: "23:45"
     deliveries:
@@ -113,24 +113,22 @@ ntfy:
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `00:00` | **Required.** Start of preferred charging window (`HH:MM`) |
 | `charging.preferred_window_end` | `06:30` | **Required.** End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight. Equal start and end is an error. Use `23:45` for end of day — `23:59` excludes the last 15-minute slot |
-| `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and its own `preferred_window_start` / `preferred_window_end`. The first matching entry for the target day is used; falls back to top-level window if none match. Days not listed use the top-level window |
+| `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and its own `preferred_window_start` / `preferred_window_end`. Each entry names the target day — the day being planned. The script always reads tomorrow's schedule entry. The first matching entry for the target day is used; falls back to top-level window if none match |
 
 ### Preferred window behaviour
 
-**Which period is planned** — the planner always targets the next upcoming occurrence of the window:
+**The planner always plans for tomorrow.** The preferred window for tomorrow is taken from the matching `schedule` entry if one exists, otherwise from the top-level `preferred_window_start` / `preferred_window_end`.
 
-| Time | Window | Plans |
+A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00–23:45`) stays within the target day.
+
+| Schedule entry | Used by | Plans |
 |---|---|---|
-| 14:30 | `20:30–23:45` | today (window not yet started) |
-| 22:00 | `20:30–23:45` | tomorrow (window already started) |
-| 14:30 | `00:00–23:45` | tomorrow (same-day window already passed) |
-| 14:30 | `22:00–06:30` | tonight (overnight, window not yet started) |
+| `saturday: 00:00–23:45` | Friday's run | Saturday (full day) |
+| `sunday: 00:00–23:45` | Saturday's run | Sunday (full day) |
+| `monday: 22:00–06:30` | Sunday's run | Monday (Sunday evening–Monday morning) |
+| `friday: 22:00–06:30` | Thursday's run | Friday (Thursday evening–Friday morning) |
 
-For same-day windows (start before end, e.g. `00:00–23:45`) the planner targets tomorrow once today's window start has passed. This is the recommended pattern for weekend wide-open windows — run the script after ENTSO-E publishes prices (~12:00 UTC) and the cheapest slots from anywhere in tomorrow's day will be selected.
-
-**Important — schedule entries shift by one day for same-day windows.** Because a same-day window that has already started targets tomorrow, the schedule entry must be assigned to the *previous* day. For example, to get a full-day window on Saturday and Sunday, assign `00:00–23:45` to `friday` and `saturday` — the Friday run plans Saturday, and the Saturday run plans Sunday. Overnight windows (`22:00–06:30`) do not shift — the entry day matches the night it starts on, so `sunday` covers Sunday evening into Monday morning.
-
-For overnight windows (start after end, e.g. `22:00–06:30`) the target day is the day the window *starts* on. A schedule entry for `sunday` with `22:00–06:30` covers Sunday night into Monday morning.
+Days not listed in `schedule` use the top-level preferred window.
 
 **Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`.
 

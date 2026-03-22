@@ -1743,37 +1743,21 @@ def _plan_one_profile(
     plan_date = win_start_utc.astimezone(tz.zone).date()
 
     if cfg.schedule:
-        # Resolve the schedule entry for plan_date.
-        # For same-day windows (start < end, e.g. 00:00–23:45):
-        #   - If the window end is still in the future today → stay on plan_date
-        #   - If the window end has already passed → target tomorrow, re-check
-        #     schedule for that day (it may have a different entry)
-        # For overnight windows (start > end, e.g. 22:00–06:30):
-        #   - Always anchor to plan_date (start of the overnight window)
-        win_start_str, win_end_str = _resolve_schedule_window(cfg, plan_date)
-
-        if not _is_overnight(win_start_str, win_end_str):
-            now_local = datetime.now(tz=timezone.utc).astimezone(tz.zone)
-            sh, sm = map(int, win_start_str.split(":"))
-            win_start_today = now_local.replace(hour=sh, minute=sm, second=0, microsecond=0)
-            if now_local < win_start_today:
-                # Window start still in the future — use today's window
-                win_start_utc, win_end_utc = _resolve_window_utc(
-                    win_start_str, win_end_str, tz.zone, _anchor_date=plan_date,
-                )
-            else:
-                # Window start already passed — target tomorrow using the same
-                # window anchored to next_date. Do not re-look up the schedule
-                # for next_date — the same-day window applies to tomorrow.
-                next_date = plan_date + timedelta(days=1)
-                win_start_utc, win_end_utc = _resolve_window_utc(
-                    win_start_str, win_end_str, tz.zone, _anchor_date=next_date,
-                )
-        else:
+        # Always look up tomorrow's schedule entry — the schedule describes what
+        # to do for each target day, and we are always planning for tomorrow.
+        # Overnight windows (e.g. 22:00–06:30) anchor to today — they start
+        # tonight. Wide windows (e.g. 00:00–23:45) anchor to tomorrow — they
+        # cover the full target day in local time.
+        tomorrow = plan_date + timedelta(days=1)
+        win_start_str, win_end_str = _resolve_schedule_window(cfg, tomorrow)
+        if _is_overnight(win_start_str, win_end_str):
             win_start_utc, win_end_utc = _resolve_window_utc(
                 win_start_str, win_end_str, tz.zone, _anchor_date=plan_date,
             )
-
+        else:
+            win_start_utc, win_end_utc = _resolve_window_utc(
+                win_start_str, win_end_str, tz.zone, _anchor_date=tomorrow,
+            )
         plan_date = win_start_utc.astimezone(tz.zone).date()
     else:
         win_start_str, win_end_str = cfg.preferred_window_start, cfg.preferred_window_end

@@ -16,10 +16,12 @@ charging:
     preferred_window_start: "22:00"     # Quoted — would parse as 22 minutes without quotes
     preferred_window_end: "06:30"
     schedule:                           # Optional: day-specific window overrides
-      - days: [sunday, monday, tuesday, wednesday, thursday]
+                                        # Each entry describes the window for that target day.
+                                        # Overnight windows (22:00–06:30) start the evening before.
+      - days: [monday, tuesday, wednesday, thursday, friday]
         preferred_window_start: "22:00"
         preferred_window_end: "06:30"
-      - days: [friday, saturday]
+      - days: [saturday, sunday]
         preferred_window_start: "00:00"
         preferred_window_end: "23:45"
     deliveries:
