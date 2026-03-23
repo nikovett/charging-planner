@@ -642,56 +642,89 @@ function renderScheduleGrid(config) {
     ${rows}`;
 }
 
-// ── GitHub Actions integration ─────────────────────────────────────────────
+// ── Data loading ──────────────────────────────────────────────────────────
+// Plans are committed to data/ by GitHub Actions after each successful run.
+// config.yaml is fetched directly from the repo (works for public repos).
 
-const GHA_REPO  = ""; // e.g. "owner/charging-planner"
-const GHA_TOKEN = ""; // read-only token, or leave empty for demo
+const PLAN_NAMES = ["topup", "overnight"]; // must match profile names in config.yaml
 
-async function loadFromGHA() {
-  if (!GHA_REPO || !GHA_TOKEN) { loadDemo(); return; }
+async function loadFromRepo() {
   try {
-    const headers = { Authorization: `token ${GHA_TOKEN}`, Accept: "application/vnd.github.v3+json" };
-    const runs = await fetch(`https://api.github.com/repos/${GHA_REPO}/actions/runs?per_page=1&status=success`, { headers }).then(r => r.json());
-    const run = runs.workflow_runs?.[0];
-    if (!run) { loadDemo(); return; }
-
-    document.getElementById("run-time").textContent = new Date(run.updated_at).toLocaleString();
-
-    const artifacts = await fetch(run.artifacts_url, { headers }).then(r => r.json());
     const plans = [];
-    for (const art of artifacts.artifacts || []) {
-      if (!art.name.startsWith("plan-")) continue;
-      const dl = await fetch(`https://api.github.com/repos/${GHA_REPO}/actions/artifacts/${art.id}/zip`, { headers });
-      // In a real deployment, extract and parse JSON from the zip
+    for (const name of PLAN_NAMES) {
+      const res = await fetch(`data/plan-${name}.json`);
+      if (res.ok) plans.push(await res.json());
     }
-    if (plans.length) renderProfiles(plans);
-    else loadDemo();
+    if (plans.length) {
+      const latest = plans.reduce((a, b) => a.date > b.date ? a : b);
+      document.getElementById("run-time").textContent = latest.date;
+      renderProfiles(plans);
+    } else {
+      loadDemo();
+    }
   } catch(e) {
     loadDemo();
   }
+
+  // Load config for schedule grid
+  try {
+    const text = await fetch("config.yaml").then(r => r.text());
+    renderScheduleFromYaml(text);
+  } catch(e) {
+    renderScheduleGrid(DEMO_CONFIG);
+  }
 }
 
-async function triggerRun() {
-  if (!GHA_REPO || !GHA_TOKEN) {
-    alert("Configure GHA_REPO and GHA_TOKEN in index.html to trigger runs.");
-    return;
+function renderScheduleFromYaml(yaml) {
+  // Simple YAML parser for the schedule block — just enough for our config structure
+  const profiles = [];
+  let currentProfile = null;
+  let currentSchedule = null;
+  let inSchedule = false;
+  let currentEntry = null;
+
+  for (const raw of yaml.split("
+")) {
+    const line = raw.trimEnd();
+    const indent = line.length - line.trimStart().length;
+
+    if (indent === 2 && line.trim().startsWith("- name:")) {
+      currentProfile = { name: line.split("name:")[1].trim(), schedule: [] };
+      profiles.push(currentProfile);
+      inSchedule = false;
+    } else if (indent === 4 && line.trim() === "schedule:") {
+      inSchedule = true;
+    } else if (inSchedule && indent === 6 && line.trim().startsWith("- days:")) {
+      const daysStr = line.split("days:")[1].trim().replace(/[\[\]]/g,"");
+      currentEntry = { days: daysStr.split(",").map(d => d.trim()), start: null, end: null };
+      currentProfile.schedule.push(currentEntry);
+    } else if (inSchedule && currentEntry && indent === 8) {
+      if (line.includes("preferred_window_start:")) {
+        currentEntry.start = line.split(":").slice(1).join(":").trim().replace(/['"]/g,"");
+      } else if (line.includes("preferred_window_end:")) {
+        currentEntry.end = line.split(":").slice(1).join(":").trim().replace(/['"]/g,"");
+      }
+    } else if (indent <= 2 && line.trim() && !line.trim().startsWith("#") && currentProfile && inSchedule) {
+      if (!line.trim().startsWith("-") && !line.includes("schedule:")) inSchedule = false;
+    }
   }
-  await fetch(`https://api.github.com/repos/${GHA_REPO}/actions/workflows/schedule.yml/dispatches`, {
-    method: "POST",
-    headers: { Authorization: `token ${GHA_TOKEN}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
-    body: JSON.stringify({ ref: "main" })
-  });
-  alert("Run triggered. Check GitHub Actions for progress.");
+
+  if (profiles.length) renderScheduleGrid({ profiles });
+  else renderScheduleGrid(DEMO_CONFIG);
+}
+
+function triggerRun() {
+  alert("To trigger a manual run: go to your GitHub repo → Actions → Charging Planner → Run workflow.");
 }
 
 function loadDemo() {
-  document.getElementById("run-time").textContent = "demo · " + new Date().toLocaleDateString();
+  document.getElementById("run-time").textContent = "demo";
   renderProfiles(DEMO_PLANS);
   renderScheduleGrid(DEMO_CONFIG);
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
-loadFromGHA();
+loadFromRepo();
 </script>
 </body>
 </html>
