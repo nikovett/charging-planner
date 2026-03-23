@@ -443,6 +443,18 @@ const DEMO_PLANS = [
     avg_price_cents_kwh: 1.3605,
     preferred_window_start: "21:00", preferred_window_end: "06:30",
     windows: [{ start: "00:30", end: "05:30", duration_minutes: 300, avg_price_cents_kwh: 1.3605 }],
+  },
+  {
+    version: 1, date: "2026-03-22", area: "FI",
+    profile: "optimal", timezone: "Europe/Helsinki", utc_offset_hours: 2,
+    price_stats: { min_cents_kwh: 0.20, max_cents_kwh: 1.878, avg_cents_kwh: 0.9816 },
+    required_minutes: 270, total_minutes: 270,
+    avg_price_cents_kwh: 0.21,
+    preferred_window_start: "any", preferred_window_end: "any",
+    windows: [
+      { start: "14:15", end: "15:45", duration_minutes: 90, avg_price_cents_kwh: 0.21 },
+      { start: "16:30", end: "19:00", duration_minutes: 150, avg_price_cents_kwh: 0.22 },
+    ],
   }
 ];
 
@@ -457,6 +469,10 @@ const DEMO_CONFIG = {
     },
     {
       name: "overnight",
+      schedule: []
+    },
+    {
+      name: "optimal",
       schedule: []
     }
   ]
@@ -646,12 +662,22 @@ function renderScheduleGrid(config) {
 // Plans are committed to data/ by GitHub Actions after each successful run.
 // config.yaml is fetched directly from the repo (works for public repos).
 
-const PLAN_NAMES = ["topup", "overnight"]; // must match profile names in config.yaml
+// Profile names are discovered from config.yaml at runtime.
+// Fallback list used if config can't be parsed.
+const FALLBACK_PLAN_NAMES = ["topup", "overnight", "optimal"];
 
 async function loadFromRepo() {
   try {
+    // Try to discover profile names from config.yaml first
+    let names = FALLBACK_PLAN_NAMES;
+    try {
+      const text = await fetch("config.yaml").then(r => r.text());
+      const found = [...text.matchAll(/^  - name:\s*(\S+)/gm)].map(m => m[1]);
+      if (found.length) names = found;
+    } catch(e) {}
+
     const plans = [];
-    for (const name of PLAN_NAMES) {
+    for (const name of names) {
       const res = await fetch(`data/plan-${name}.json`);
       if (res.ok) plans.push(await res.json());
     }
