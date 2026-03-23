@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>charging-planner</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0a0a0a;
+    --bg2:       #111111;
+    --bg3:       #1a1a1a;
+    --border:    #222222;
+    --border2:   #2e2e2e;
+    --text:      #e8e8e8;
+    --muted:     #666666;
+    --dim:       #444444;
+    --accent:    #00d4a0;
+    --accent2:   #00a07a;
+    --warn:      #f59e0b;
+    --danger:    #ef4444;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  .shell {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 0 20px 60px;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 28px 0 24px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+  }
+  .logo span { color: var(--muted); }
+  .header-meta {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-align: right;
+  }
+  .status-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-right: 6px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* ── Section label ── */
+  .section-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  /* ── Profile cards ── */
+  .profiles { display: flex; flex-direction: column; gap: 24px; margin-bottom: 40px; }
+
+  .profile-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(12px);
+    animation: fadeUp 0.4s ease forwards;
+  }
+  .profile-card:nth-child(2) { animation-delay: 0.08s; }
+  @keyframes fadeUp {
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .card-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .profile-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    letter-spacing: 0.04em;
+  }
+  .profile-date {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── Stats row ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    border-bottom: 1px solid var(--border);
+  }
+  .stat {
+    padding: 14px 20px;
+    border-right: 1px solid var(--border);
+  }
+  .stat:last-child { border-right: none; }
+  .stat-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.2;
+  }
+  .stat-value.good { color: var(--accent); }
+  .stat-value.warn { color: var(--warn); }
+  .stat-unit {
+    font-size: 10px;
+    color: var(--muted);
+    margin-left: 2px;
+  }
+
+  /* ── Timeline ── */
+  .timeline-wrap { padding: 16px 20px 20px; }
+  .timeline-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .timeline {
+    position: relative;
+    height: 36px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 6px;
+  }
+  .timeline-window {
+    position: absolute;
+    top: 0; bottom: 0;
+    background: var(--accent);
+    opacity: 0.15;
+  }
+  .timeline-slot {
+    position: absolute;
+    top: 0; bottom: 0;
+    background: var(--accent);
+    border-radius: 1px;
+  }
+  .timeline-now {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 1px;
+    background: var(--warn);
+    opacity: 0.6;
+  }
+  .timeline-ticks {
+    display: flex;
+    justify-content: space-between;
+    padding: 0 2px;
+  }
+  .tick {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--dim);
+  }
+
+  /* ── Windows list ── */
+  .windows-list {
+    padding: 0 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .window-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .window-time { color: var(--text); min-width: 120px; }
+  .window-price { color: var(--accent); }
+  .window-dur { color: var(--muted); }
+
+  /* ── Market bar ── */
+  .market-bar-wrap { padding: 0 20px 20px; }
+  .market-bar {
+    height: 4px;
+    background: var(--bg3);
+    border-radius: 2px;
+    position: relative;
+    margin-top: 8px;
+  }
+  .market-bar-fill {
+    height: 100%;
+    background: var(--border2);
+    border-radius: 2px;
+    width: 100%;
+  }
+  .market-bar-avg {
+    position: absolute;
+    top: -2px;
+    width: 2px;
+    height: 8px;
+    background: var(--muted);
+    border-radius: 1px;
+  }
+  .market-bar-plan {
+    position: absolute;
+    top: -2px;
+    width: 2px;
+    height: 8px;
+    background: var(--accent);
+    border-radius: 1px;
+  }
+  .market-bar-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+  }
+  .market-bar-labels .plan-label { color: var(--accent); }
+
+  /* ── Trigger button ── */
+  .actions { margin-bottom: 32px; }
+  .btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    padding: 10px 20px;
+    background: transparent;
+    border: 1px solid var(--border2);
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 2px;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { border-color: var(--accent); color: var(--accent); }
+  .btn.primary:hover { background: var(--accent); color: var(--bg); }
+
+  /* ── Config view ── */
+  .config-section { margin-bottom: 40px; }
+  .schedule-grid {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .schedule-header {
+    display: grid;
+    grid-template-columns: 64px repeat(7, 1fr);
+    border-bottom: 1px solid var(--border);
+  }
+  .day-label {
+    padding: 8px 0;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    text-align: center;
+    letter-spacing: 0.06em;
+    border-right: 1px solid var(--border);
+  }
+  .day-label:last-child { border-right: none; }
+  .day-label.today { color: var(--accent); }
+  .schedule-row {
+    display: grid;
+    grid-template-columns: 64px repeat(7, 1fr);
+    border-bottom: 1px solid var(--border);
+    min-height: 28px;
+  }
+  .schedule-row:last-child { border-bottom: none; }
+  .row-label {
+    padding: 6px 10px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    border-right: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+  }
+  .day-cell {
+    border-right: 1px solid var(--border);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .day-cell:last-child { border-right: none; }
+  .day-cell.has-window {
+    background: rgba(0, 212, 160, 0.08);
+  }
+  .day-cell.any-window {
+    background: rgba(0, 212, 160, 0.04);
+  }
+  .cell-text {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--accent);
+    text-align: center;
+    padding: 2px 4px;
+    line-height: 1.4;
+  }
+  .cell-text.any { color: var(--accent2); }
+
+  /* ── Footer ── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .footer-text {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--dim);
+  }
+  .footer-link {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .footer-link:hover { color: var(--accent); }
+
+  /* ── Loading / empty ── */
+  .loading {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    padding: 40px 0;
+    text-align: center;
+  }
+
+  @media (max-width: 600px) {
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+    .stat:nth-child(2) { border-right: none; }
+    .stat:nth-child(3) { border-right: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header>
+    <div class="logo">charging<span>-</span>planner</div>
+    <div class="header-meta">
+      <div><span class="status-dot"></span>demo mode</div>
+      <div id="run-time">—</div>
+    </div>
+  </header>
+
+  <!-- Plans -->
+  <div class="section-label">latest plans</div>
+  <div class="profiles" id="profiles">
+    <div class="loading">loading plans…</div>
+  </div>
+
+  <!-- Actions -->
+  <div class="actions">
+    <button class="btn primary" onclick="triggerRun()">↻ trigger run</button>
+    <button class="btn" onclick="loadDemo()" style="margin-left:8px">load demo data</button>
+  </div>
+
+  <!-- Config -->
+  <div class="config-section">
+    <div class="section-label">weekly schedule</div>
+    <div class="schedule-grid" id="schedule-grid">
+      <div class="loading">no config loaded</div>
+    </div>
+  </div>
+
+  <footer>
+    <span class="footer-text">charging-planner · ENTSO-E day-ahead prices</span>
+    <a class="footer-link" href="https://github.com" id="repo-link">view repository →</a>
+  </footer>
+
+</div>
+
+<script>
+// ── Demo data (real plan JSONs from the project) ──────────────────────────
+
+const DEMO_PLANS = [
+  {
+    version: 1, date: "2026-03-22", area: "FI",
+    profile: "topup", timezone: "Europe/Helsinki", utc_offset_hours: 2,
+    price_stats: { min_cents_kwh: 0.20, max_cents_kwh: 1.878, avg_cents_kwh: 0.9816 },
+    required_minutes: 120, total_minutes: 120,
+    avg_price_cents_kwh: 0.2319,
+    preferred_window_start: "any", preferred_window_end: "any",
+    windows: [{ start: "14:15", end: "16:15", duration_minutes: 120, avg_price_cents_kwh: 0.2319 }],
+  },
+  {
+    version: 1, date: "2026-03-21", area: "FI",
+    profile: "overnight", timezone: "Europe/Helsinki", utc_offset_hours: 2,
+    price_stats: { min_cents_kwh: 1.079, max_cents_kwh: 1.648, avg_cents_kwh: 1.3348 },
+    required_minutes: 300, total_minutes: 300,
+    avg_price_cents_kwh: 1.3605,
+    preferred_window_start: "21:00", preferred_window_end: "06:30",
+    windows: [{ start: "00:30", end: "05:30", duration_minutes: 300, avg_price_cents_kwh: 1.3605 }],
+  }
+];
+
+const DEMO_CONFIG = {
+  profiles: [
+    {
+      name: "topup",
+      schedule: [
+        { days: ["monday","tuesday","wednesday","thursday","friday"], start: "22:00", end: "06:30" },
+        { days: ["saturday","sunday"], start: "any", end: "any" },
+      ]
+    },
+    {
+      name: "overnight",
+      schedule: []
+    }
+  ]
+};
+
+// ── Rendering ─────────────────────────────────────────────────────────────
+
+function hhmm(str) {
+  // parse "HH:MM" → minutes since midnight
+  if (!str || str === "any") return null;
+  const [h, m] = str.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function fmtDuration(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2,"0")}m`;
+}
+
+function savings(plan) {
+  const avg = plan.price_stats.avg_cents_kwh;
+  if (!avg) return null;
+  return ((1 - plan.avg_price_cents_kwh / avg) * 100);
+}
+
+function renderTimeline(plan) {
+  // 24-hour timeline showing the preferred window and scheduled slots
+  const totalMins = 24 * 60;
+  const ws = hhmm(plan.preferred_window_start);
+  const we = hhmm(plan.preferred_window_end);
+  const isAny = plan.preferred_window_start === "any";
+
+  let windowHTML = "";
+  if (!isAny && ws !== null && we !== null) {
+    if (we > ws) {
+      const l = (ws / totalMins * 100).toFixed(2);
+      const w = ((we - ws) / totalMins * 100).toFixed(2);
+      windowHTML = `<div class="timeline-window" style="left:${l}%;width:${w}%"></div>`;
+    } else {
+      // overnight: two segments
+      const w1 = ((totalMins - ws) / totalMins * 100).toFixed(2);
+      const w2 = (we / totalMins * 100).toFixed(2);
+      windowHTML = `<div class="timeline-window" style="left:${(ws/totalMins*100).toFixed(2)}%;width:${w1}%"></div>
+                    <div class="timeline-window" style="left:0%;width:${w2}%"></div>`;
+    }
+  }
+
+  const slotsHTML = plan.windows.map(w => {
+    const s = hhmm(w.start);
+    const e = hhmm(w.end);
+    if (s === null || e === null) return "";
+    const dur = e > s ? e - s : totalMins - s + e;
+    const l = (s / totalMins * 100).toFixed(2);
+    const wPct = (dur / totalMins * 100).toFixed(2);
+    return `<div class="timeline-slot" style="left:${l}%;width:${wPct}%" title="${w.start}–${w.end} @ ${w.avg_price_cents_kwh.toFixed(2)} c€/kWh"></div>`;
+  }).join("");
+
+  const ticks = [0,6,12,18,24].map(h => `<span class="tick">${String(h).padStart(2,"0")}:00</span>`).join("");
+
+  return `
+    <div class="timeline-wrap">
+      <div class="timeline-label">24h timeline</div>
+      <div class="timeline">
+        ${windowHTML}
+        ${slotsHTML}
+      </div>
+      <div class="timeline-ticks">${ticks}</div>
+    </div>`;
+}
+
+function renderMarketBar(plan) {
+  const ps = plan.price_stats;
+  const range = ps.max_cents_kwh - ps.min_cents_kwh;
+  const avgPct = range > 0 ? ((ps.avg_cents_kwh - ps.min_cents_kwh) / range * 100).toFixed(1) : 50;
+  const planPct = range > 0 ? ((plan.avg_price_cents_kwh - ps.min_cents_kwh) / range * 100).toFixed(1) : 50;
+  const sav = savings(plan);
+  const savStr = sav !== null
+    ? (sav > 0 ? `↓${sav.toFixed(0)}%` : `↑${Math.abs(sav).toFixed(0)}%`)
+    : "";
+  const savColor = sav !== null && sav > 0 ? "var(--accent)" : "var(--warn)";
+
+  return `
+    <div class="market-bar-wrap">
+      <div class="section-label" style="margin-bottom:4px">price vs market</div>
+      <div class="market-bar">
+        <div class="market-bar-fill"></div>
+        <div class="market-bar-avg" style="left:${avgPct}%" title="market avg ${ps.avg_cents_kwh.toFixed(2)}"></div>
+        <div class="market-bar-plan" style="left:${planPct}%" title="plan avg ${plan.avg_price_cents_kwh.toFixed(2)}"></div>
+      </div>
+      <div class="market-bar-labels">
+        <span>${ps.min_cents_kwh.toFixed(2)} c€/kWh</span>
+        <span class="plan-label" style="color:${savColor}">${plan.avg_price_cents_kwh.toFixed(2)} c€/kWh ${savStr}</span>
+        <span>${ps.max_cents_kwh.toFixed(2)} c€/kWh</span>
+      </div>
+    </div>`;
+}
+
+function renderProfile(plan) {
+  const sav = savings(plan);
+  const savStr = sav !== null
+    ? (sav > 0 ? `↓${sav.toFixed(0)}%` : `↑${Math.abs(sav).toFixed(0)}%`)
+    : "—";
+  const savClass = sav !== null && sav > 0 ? "good" : "warn";
+  const incomplete = plan.total_minutes < plan.required_minutes;
+
+  const windowsHTML = plan.windows.map(w =>
+    `<div class="window-row">
+      <span class="window-time">${w.start}–${w.end}</span>
+      <span class="window-price">${w.avg_price_cents_kwh.toFixed(2)} c€/kWh</span>
+      <span class="window-dur">${fmtDuration(w.duration_minutes)}</span>
+    </div>`
+  ).join("");
+
+  return `
+    <div class="profile-card">
+      <div class="card-header">
+        <span class="profile-name">${plan.profile}</span>
+        <span class="profile-date">${plan.date} · ${plan.timezone}</span>
+      </div>
+      <div class="stats-row">
+        <div class="stat">
+          <div class="stat-label">scheduled</div>
+          <div class="stat-value ${incomplete ? 'warn' : ''}">${fmtDuration(plan.total_minutes)}<span class="stat-unit">of ${fmtDuration(plan.required_minutes)}</span></div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">avg price</div>
+          <div class="stat-value">${plan.avg_price_cents_kwh.toFixed(2)}<span class="stat-unit">c€/kWh</span></div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">vs market</div>
+          <div class="stat-value ${savClass}">${savStr}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">market avg</div>
+          <div class="stat-value">${plan.price_stats.avg_cents_kwh.toFixed(2)}<span class="stat-unit">c€/kWh</span></div>
+        </div>
+      </div>
+      ${renderTimeline(plan)}
+      <div class="windows-list">${windowsHTML}</div>
+      ${renderMarketBar(plan)}
+    </div>`;
+}
+
+function renderProfiles(plans) {
+  const el = document.getElementById("profiles");
+  if (!plans.length) { el.innerHTML = '<div class="loading">no plans found</div>'; return; }
+  el.innerHTML = plans.map(renderProfile).join("");
+}
+
+// ── Config / schedule grid ─────────────────────────────────────────────────
+
+const DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
+const DAY_FULL = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+
+function renderScheduleGrid(config) {
+  const el = document.getElementById("schedule-grid");
+  const today = new Date().toLocaleDateString("en", {weekday:"short"}).toLowerCase().slice(0,3);
+
+  const headerCells = ["", ...DAYS].map((d,i) =>
+    `<div class="day-label ${d === today ? 'today' : ''}">${d}</div>`
+  ).join("");
+
+  const rows = config.profiles.map(profile => {
+    const cells = DAY_FULL.map(day => {
+      const entry = profile.schedule.find(e => e.days.includes(day));
+      if (!entry) return `<div class="day-cell"><span class="cell-text" style="color:var(--dim)">—</span></div>`;
+      if (entry.start === "any") return `<div class="day-cell any-window"><span class="cell-text any">any</span></div>`;
+      return `<div class="day-cell has-window"><span class="cell-text">${entry.start}<br>${entry.end}</span></div>`;
+    }).join("");
+
+    return `<div class="schedule-row">
+      <div class="row-label">${profile.name}</div>
+      ${cells}
+    </div>`;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="schedule-header">
+      <div class="day-label"></div>
+      ${DAYS.map((d,i) => `<div class="day-label ${DAYS[new Date().getDay()-1] === d ? 'today' : ''}">${d}</div>`).join("")}
+    </div>
+    ${rows}`;
+}
+
+// ── GitHub Actions integration ─────────────────────────────────────────────
+
+const GHA_REPO  = ""; // e.g. "owner/charging-planner"
+const GHA_TOKEN = ""; // read-only token, or leave empty for demo
+
+async function loadFromGHA() {
+  if (!GHA_REPO || !GHA_TOKEN) { loadDemo(); return; }
+  try {
+    const headers = { Authorization: `token ${GHA_TOKEN}`, Accept: "application/vnd.github.v3+json" };
+    const runs = await fetch(`https://api.github.com/repos/${GHA_REPO}/actions/runs?per_page=1&status=success`, { headers }).then(r => r.json());
+    const run = runs.workflow_runs?.[0];
+    if (!run) { loadDemo(); return; }
+
+    document.getElementById("run-time").textContent = new Date(run.updated_at).toLocaleString();
+
+    const artifacts = await fetch(run.artifacts_url, { headers }).then(r => r.json());
+    const plans = [];
+    for (const art of artifacts.artifacts || []) {
+      if (!art.name.startsWith("plan-")) continue;
+      const dl = await fetch(`https://api.github.com/repos/${GHA_REPO}/actions/artifacts/${art.id}/zip`, { headers });
+      // In a real deployment, extract and parse JSON from the zip
+    }
+    if (plans.length) renderProfiles(plans);
+    else loadDemo();
+  } catch(e) {
+    loadDemo();
+  }
+}
+
+async function triggerRun() {
+  if (!GHA_REPO || !GHA_TOKEN) {
+    alert("Configure GHA_REPO and GHA_TOKEN in index.html to trigger runs.");
+    return;
+  }
+  await fetch(`https://api.github.com/repos/${GHA_REPO}/actions/workflows/schedule.yml/dispatches`, {
+    method: "POST",
+    headers: { Authorization: `token ${GHA_TOKEN}`, Accept: "application/vnd.github.v3+json", "Content-Type": "application/json" },
+    body: JSON.stringify({ ref: "main" })
+  });
+  alert("Run triggered. Check GitHub Actions for progress.");
+}
+
+function loadDemo() {
+  document.getElementById("run-time").textContent = "demo · " + new Date().toLocaleDateString();
+  renderProfiles(DEMO_PLANS);
+  renderScheduleGrid(DEMO_CONFIG);
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+loadFromGHA();
+</script>
+</body>
+</html>
