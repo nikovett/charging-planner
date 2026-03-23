@@ -1768,10 +1768,18 @@ def _plan_one_profile(
 
     # Resolve window using top-level defaults first to determine plan_date,
     # then re-resolve with day-specific schedule entry if one matches.
-    win_start_utc, win_end_utc = _resolve_window_utc(
-        cfg.preferred_window_start, cfg.preferred_window_end, tz.zone
-    )
-    plan_date = win_start_utc.astimezone(tz.zone).date()
+    # If top-level window is "any", plan_date = today (tomorrow will be the target).
+    if cfg.preferred_window_any:
+        # "any" at top level — plan_date = today, target = tomorrow via schedule block
+        plan_date = datetime.now(tz=timezone.utc).astimezone(tz.zone).date()
+        win_start_utc = datetime.now(tz=timezone.utc)
+        win_end_utc   = max(s.end for s in all_prices) if all_prices else win_start_utc
+        win_start_str, win_end_str = "any", "any"
+    else:
+        win_start_utc, win_end_utc = _resolve_window_utc(
+            cfg.preferred_window_start, cfg.preferred_window_end, tz.zone
+        )
+        plan_date = win_start_utc.astimezone(tz.zone).date()
 
     if cfg.schedule or cfg.preferred_window_any:
         # Always look up tomorrow's schedule entry — the schedule describes what
