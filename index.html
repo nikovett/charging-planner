@@ -666,39 +666,53 @@ function renderScheduleGrid(config) {
 // Fallback list used if config can't be parsed.
 const FALLBACK_PLAN_NAMES = ["topup", "overnight", "optimal"];
 
+async function fetchWithTimeout(url, ms=4000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(id);
+    return res;
+  } catch(e) {
+    clearTimeout(id);
+    throw e;
+  }
+}
+
 async function loadFromRepo() {
+  // Try to discover profile names from config.yaml first
+  let names = FALLBACK_PLAN_NAMES;
+  let configText = null;
   try {
-    // Try to discover profile names from config.yaml first
-    let names = FALLBACK_PLAN_NAMES;
-    try {
-      const text = await fetch("config.yaml").then(r => r.text());
-      const found = [...text.matchAll(/^  - name:\s*(\S+)/gm)].map(m => m[1]);
+    const res = await fetchWithTimeout("config.yaml");
+    if (res.ok) {
+      configText = await res.text();
+      const found = [...configText.matchAll(/^  - name:\s*(\S+)/gm)].map(m => m[1]);
       if (found.length) names = found;
-    } catch(e) {}
+    }
+  } catch(e) {}
 
-    const plans = [];
-    for (const name of names) {
-      const res = await fetch(`data/plan-${name}.json`);
+  // Fetch plans
+  const plans = [];
+  for (const name of names) {
+    try {
+      const res = await fetchWithTimeout(`data/plan-${name}.json`);
       if (res.ok) plans.push(await res.json());
-    }
-    if (plans.length) {
-      const latest = plans.reduce((a, b) => a.date > b.date ? a : b);
-      document.getElementById("run-time").textContent = latest.date;
-      renderProfiles(plans);
-    } else {
-      loadDemo();
-    }
-  } catch(e) {
-    loadDemo();
+    } catch(e) {}
   }
 
-  // Load config for schedule grid
-  try {
-    const text = await fetch("config.yaml").then(r => r.text());
-    renderScheduleFromYaml(text);
-  } catch(e) {
-    renderScheduleGrid(DEMO_CONFIG);
+  if (plans.length) {
+    const latest = plans.reduce((a, b) => a.date > b.date ? a : b);
+    document.getElementById("run-time").textContent = latest.date;
+    renderProfiles(plans);
+  } else {
+    loadDemo();
+    return;
   }
+
+  // Render schedule grid from config
+  if (configText) renderScheduleFromYaml(configText);
+  else renderScheduleGrid(DEMO_CONFIG);
 }
 
 function renderScheduleFromYaml(yaml) {
