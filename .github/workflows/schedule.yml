@@ -7,6 +7,9 @@ on:
                             # so this always lands after publication.
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   plan:
     name: Build charging plan
@@ -50,3 +53,14 @@ jobs:
           name: charging-plan-${{ steps.plan.outputs.plan_date }}
           path: plan-*.json
           retention-days: 2
+
+      - name: Publish plans to data/ for dashboard
+        if: steps.plan.outputs.prices_available == 'true'
+        run: |
+          mkdir -p data
+          cp plan-*.json data/
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --cached --quiet || git commit -m "chore: update plan data [skip ci]"
+          git push
