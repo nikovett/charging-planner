@@ -1296,6 +1296,17 @@ def build_plan(p: PlanParams) -> dict:
     sel_prices = [s.price_eur_kwh for s in p.selected]
     overall_avg = (sum(sel_prices) / len(sel_prices) * 100) if sel_prices else 0.0
 
+    # Build price_slots — all available slots with charging flag for histogram
+    selected_starts = {s.start for s in p.selected}
+    price_slots = [
+        {
+            "start_utc":         s.start.isoformat(),
+            "price_cents_kwh":   round(s.price_eur_kwh * 100, 4),
+            "charging":          s.start in selected_starts,
+        }
+        for s in sorted(p.all_prices, key=lambda x: x.start)
+    ]
+
     return {
         "version":                PLAN_VERSION,
         "date":                   str(p.target_date),
@@ -1315,6 +1326,7 @@ def build_plan(p: PlanParams) -> dict:
         "windows":                win_list,
         "window_starts_utc":      [w[0].isoformat() for w in p.windows],
         "window_ends_utc":        [w[1].isoformat() for w in p.windows],
+        "price_slots":            price_slots,
         "ocpp_charging_profile":  build_ocpp_charging_profile(
             {"window_starts_utc": [w[0].isoformat() for w in p.windows],
              "window_ends_utc":   [w[1].isoformat() for w in p.windows]},
