@@ -610,7 +610,7 @@ function renderTimeline(plan) {
     if (i === minIdx) annotation = '<div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap">' + s.price_cents_kwh.toFixed(2) + '</div>';
     if (i === maxIdx) annotation = '<div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap">' + s.price_cents_kwh.toFixed(2) + '</div>';
 
-    return '<div title="' + tip + '" style="position:relative;display:inline-block;width:' + barW + ';height:' + h + '%;background:' + bg + ';' + border + 'margin-right:' + gapPx + 'px;vertical-align:bottom;box-sizing:border-box">' + annotation + '</div>';
+    return '<div title="' + tip + '" style="position:relative;display:inline-block;width:' + barW + ';height:' + h + '%;background:' + bg + ';' + border + 'margin-right:' + gapPx + 'px;vertical-align:bottom;box-sizing:border-box;border-radius:2px 2px 0 0">' + annotation + '</div>';
   }).join("");
 
   // Midnight separator
