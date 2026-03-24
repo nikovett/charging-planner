@@ -451,31 +451,52 @@ function savings(plan) {
 
 // ── Rendering ─────────────────────────────────────────────────────────────
 function renderTimeline(plan) {
-  const totalMins = 24 * 60;
-  const ws = hhmm(plan.preferred_window_start);
-  const we = hhmm(plan.preferred_window_end);
-  const isAny = plan.preferred_window_start === "any";
+  var utcOffset = (plan.utc_offset_hours || 0) * 60;
+  var rangeStart, rangeEnd;
+
+  if (plan.window_starts_utc && plan.window_starts_utc.length) {
+    var wsUtc = new Date(plan.window_starts_utc[0]).getTime() + utcOffset * 60000;
+    var weUtc = new Date(plan.window_ends_utc[plan.window_ends_utc.length - 1]).getTime() + utcOffset * 60000;
+    rangeStart = Math.floor(wsUtc / 3600000 - 2) * 60;
+    rangeEnd   = Math.ceil(weUtc  / 3600000 + 2) * 60;
+  } else {
+    rangeStart = 0;
+    rangeEnd   = 24 * 60;
+  }
+  var totalMins = rangeEnd - rangeStart;
+
   var windowHTML = "";
-  if (!isAny && ws !== null && we !== null) {
-    if (we > ws) {
-      windowHTML = '<div class="timeline-window" style="left:' + (ws/totalMins*100).toFixed(2) + '%;width:' + ((we-ws)/totalMins*100).toFixed(2) + '%"></div>';
-    } else {
-      windowHTML = '<div class="timeline-window" style="left:' + (ws/totalMins*100).toFixed(2) + '%;width:' + ((totalMins-ws)/totalMins*100).toFixed(2) + '%"></div>'
-                 + '<div class="timeline-window" style="left:0%;width:' + (we/totalMins*100).toFixed(2) + '%"></div>';
+  if (plan.window_starts_utc && plan.window_starts_utc.length && plan.preferred_window_start !== "any") {
+    var wStartMins = (new Date(plan.window_starts_utc[0]).getTime() + utcOffset * 60000) / 60000;
+    var wEndMins   = (new Date(plan.window_ends_utc[plan.window_ends_utc.length-1]).getTime() + utcOffset * 60000) / 60000;
+    var wl = ((wStartMins - rangeStart) / totalMins * 100).toFixed(2);
+    var ww = ((wEndMins - wStartMins) / totalMins * 100).toFixed(2);
+    windowHTML = '<div class="timeline-window" style="left:' + wl + '%;width:' + ww + '%"></div>';
+  }
+
+  var slotsHTML = "";
+  if (plan.window_starts_utc) {
+    for (var i = 0; i < plan.window_starts_utc.length; i++) {
+      var sMin = (new Date(plan.window_starts_utc[i]).getTime() + utcOffset * 60000) / 60000;
+      var eMin = (new Date(plan.window_ends_utc[i]).getTime() + utcOffset * 60000) / 60000;
+      var sl = ((sMin - rangeStart) / totalMins * 100).toFixed(2);
+      var sw = ((eMin - sMin) / totalMins * 100).toFixed(2);
+      slotsHTML += '<div class="timeline-slot" style="left:' + sl + '%;width:' + sw + '%"></div>';
     }
   }
-  var slotsHTML = plan.windows.map(function(w) {
-    var s = hhmm(w.start), e = hhmm(w.end);
-    if (s === null || e === null) return "";
-    var dur = e > s ? e - s : totalMins - s + e;
-    return '<div class="timeline-slot" style="left:' + (s/totalMins*100).toFixed(2) + '%;width:' + (dur/totalMins*100).toFixed(2) + '%"></div>';
-  }).join("");
-  var ticks = [0,6,12,18,24].map(function(h) {
-    return '<span class="tick">' + String(h).padStart(2,"0") + ":00</span>";
-  }).join("");
-  return '<div class="timeline-wrap"><div class="timeline-label">24h timeline</div>'
+
+  var tickHTML = "";
+  var tickStep = totalMins <= 240 ? 60 : totalMins <= 480 ? 120 : 360;
+  var tickStart = Math.ceil(rangeStart / tickStep) * tickStep;
+  for (var t = tickStart; t <= rangeEnd; t += tickStep) {
+    var pct = ((t - rangeStart) / totalMins * 100).toFixed(1);
+    var hh  = Math.floor(((t % (24*60)) + 24*60) % (24*60) / 60);
+    tickHTML += '<span class="tick" style="position:absolute;left:' + pct + '%">' + String(hh).padStart(2,"0") + ':00</span>';
+  }
+
+  return '<div class="timeline-wrap"><div class="timeline-label">charging window</div>'
        + '<div class="timeline">' + windowHTML + slotsHTML + '</div>'
-       + '<div class="timeline-ticks">' + ticks + '</div></div>';
+       + '<div class="timeline-ticks" style="position:relative;height:16px">' + tickHTML + '</div></div>';
 }
 
 function renderMarketBar(plan) {
