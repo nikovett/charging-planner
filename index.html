@@ -110,6 +110,7 @@
   /* ── Flip card ── */
   .flip-card {
     perspective: 1200px;
+    -webkit-perspective: 1200px;
     cursor: pointer;
   }
   .flip-card-inner {
@@ -122,6 +123,9 @@
   .flip-card.flipped .flip-card-inner {
     transform: rotateY(180deg);
   }
+  .flip-card.flipped .flip-card-front {
+    visibility: hidden;
+  }
   .flip-card-front,
   .flip-card-back {
     backface-visibility: hidden;
@@ -129,6 +133,8 @@
     background: var(--bg2);
     border-radius: 2px;
     overflow: hidden;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
   }
   .flip-card-front {
     position: relative;
