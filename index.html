@@ -962,7 +962,7 @@ function loadFromRepo() {
   var configText = null;
   var names = FALLBACK_PLAN_NAMES;
 
-  fetchWithTimeout("config.yaml").then(function(res) {
+  fetchWithTimeout("config.yaml?t=" + Date.now()).then(function(res) {
     if (!res.ok) throw new Error("config not ok");
     return res.text();
   }).then(function(text) {
@@ -971,7 +971,7 @@ function loadFromRepo() {
     if (parsed) names = parsed.profiles.map(function(p) { return p.name; });
   }).catch(function() {}).finally(function() {
     var fetches = names.map(function(name) {
-      return fetchWithTimeout("data/plan-" + name + ".json").then(function(res) {
+      return fetchWithTimeout("data/plan-" + name + ".json?t=" + Date.now()).then(function(res) {
         return res.ok ? res.json() : null;
       }).catch(function() { return null; });
     });
