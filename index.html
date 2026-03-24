@@ -797,10 +797,10 @@ function renderBackFace(profileName) {
   var cfg = PROFILE_CONFIG[profileName] || {};
   var cfgFields = [
     ["required",      cfg.requiredHours !== undefined ? cfg.requiredHours + "h" : "—"],
-    ["mode",          cfg.continuous !== undefined ? (cfg.continuous ? "continuous" : "split") : "—"],
+    ["mode",          cfg.continuous !== undefined ? '<span class="pill on">' + (cfg.continuous ? "continuous" : "split") + '</span>' : "—"],
     ["min slot",      !cfg.continuous && cfg.minSlot ? cfg.minSlot + " min" : "—"],
     ["price ceiling", cfg.maxPrice != null ? cfg.maxPrice.toFixed(2) + " c€/kWh" : "none"],
-    ["delivery",      cfg.handlers && cfg.handlers.length ? (cfg.handlers.filter(function(h){return h.enabled;}).length > 0 ? "✓ configured" : "disabled") : "—"],
+    ["delivery",      cfg.handlers && cfg.handlers.length ? (cfg.handlers.filter(function(h){return h.enabled;}).length > 0 ? '<span class="pill on">✓ configured</span>' : '<span class="pill">disabled</span>') : "—"],
   ];
   var table = '<table style="width:100%;border-collapse:collapse">'
     + '<thead><tr>'
