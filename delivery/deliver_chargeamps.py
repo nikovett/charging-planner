@@ -15,7 +15,7 @@ Environment variables:
 config.yaml delivery entry:
     deliveries:
       - handler: "chargeamps"
-        charge_point_id_env: "CHARGER_ID_1"   # single ID or a list
+        charge_point_id: "CHARGER_ID_1"   # single ID or a list
         connector_id: 1                        # default 1
         max_charging_rate: 16.0               # amps — default 16.0 A
 """
@@ -107,6 +107,9 @@ def _ca_request(
     headers = {
         "accept":       "*/*",
         "content-type": "application/json",
+        "origin":       "https://my.charge.space",
+        "referer":      "https://my.charge.space/",
+        "user-agent":   "Mozilla/5.0 (compatible; charging-planner/1.0)",
     }
     if token:
         headers["authorization"] = f"Bearer {token}"
