@@ -507,9 +507,29 @@ function renderProfile(plan) {
          + '<span class="window-price">' + w.avg_price_cents_kwh.toFixed(2) + ' c\u20ac/kWh</span>'
          + '<span class="window-dur">' + fmtDuration(w.duration_minutes) + '</span></div>';
   }).join("");
+  // Derive charging period from UTC window times
+  var chargePeriod = plan.date;
+  if (plan.window_starts_utc && plan.window_ends_utc && plan.window_starts_utc.length) {
+    var utcOffset = (plan.utc_offset_hours || 0) * 60;
+    var toLocal = function(utcStr) {
+      var d = new Date(utcStr);
+      d = new Date(d.getTime() + utcOffset * 60000);
+      return d;
+    };
+    var startLocal = toLocal(plan.window_starts_utc[0]);
+    var endLocal   = toLocal(plan.window_ends_utc[plan.window_ends_utc.length - 1]);
+    var fmt = function(d) {
+      return d.toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
+    };
+    var startStr = fmt(startLocal);
+    var endStr   = fmt(endLocal);
+    chargePeriod = startStr === endStr ? startStr : startStr + " → " + endStr;
+  }
+  var modeLabel = PROFILE_CONFIG[plan.profile] && PROFILE_CONFIG[plan.profile].continuous !== undefined
+    ? ' <span style="color:var(--muted);font-size:10px">(' + (PROFILE_CONFIG[plan.profile].continuous ? 'continuous' : 'split') + ')</span>' : '';
   return '<div class="profile-card">'
-       + '<div class="card-header"><span class="profile-name">' + plan.profile + (PROFILE_CONFIG[plan.profile] && PROFILE_CONFIG[plan.profile].continuous !== undefined ? ' <span style="color:var(--muted);font-size:10px">(' + (PROFILE_CONFIG[plan.profile].continuous ? 'continuous' : 'split') + ')</span>' : '') + '</span>'
-       + '<span class="profile-date">' + plan.date + ' \u00b7 ' + plan.timezone + '</span></div>'
+       + '<div class="card-header"><span class="profile-name">' + plan.profile + modeLabel + '</span>'
+       + '<span class="profile-date">charges ' + chargePeriod + '</span></div>'
        + '<div class="stats-row">'
        + '<div class="stat"><div class="stat-label">scheduled</div><div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
        + '<div class="stat"><div class="stat-label">avg price</div><div class="stat-value">' + plan.avg_price_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>'
