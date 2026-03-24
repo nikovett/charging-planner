@@ -676,54 +676,8 @@ function renderProfile(plan) {
   }
   var modeLabel = PROFILE_CONFIG[plan.profile] && PROFILE_CONFIG[plan.profile].continuous !== undefined
     ? ' <span style="color:var(--muted);font-size:10px">(' + (PROFILE_CONFIG[plan.profile].continuous ? 'continuous' : 'split') + ')</span>' : '';
-  // Build back face config rows from PROFILE_CONFIG
-  var cfg = PROFILE_CONFIG[plan.profile] || {};
-  var cfgFields = [
-    ["required",      cfg.requiredHours !== undefined ? cfg.requiredHours + "h" : "—"],
-    ["mode",          cfg.continuous !== undefined ? (cfg.continuous ? "continuous" : "split") : "—"],
-    ["min slot",      !cfg.continuous && cfg.minSlot ? cfg.minSlot + " min" : "—"],
-    ["price ceiling", cfg.maxPrice != null ? cfg.maxPrice.toFixed(2) + " c€/kWh" : "none"],
-    ["delivery",      cfg.handlers && cfg.handlers.length ? (cfg.handlers.filter(function(h){return h.enabled;}).length > 0 ? "✓ configured" : "disabled") : "—"],
-  ];
-  var backRows = '<table style="width:100%;border-collapse:collapse">'
-    + '<thead><tr>'
-    + cfgFields.map(function(r) { return '<th style="font-family:var(--mono);font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap">' + r[0] + '</th>'; }).join("")
-    + '</tr></thead>'
-    + '<tbody><tr>'
-    + cfgFields.map(function(r) { return '<td style="font-family:var(--mono);font-size:11px;color:var(--text);padding:8px 8px;white-space:nowrap">' + r[1] + '</td>'; }).join("")
-    + '</tr></tbody></table>';
 
-  // Weekly schedule mini-grid for this profile
-  var DAYS_S = ["mon","tue","wed","thu","fri","sat","sun"];
-  var DAYS_F = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
-  var todayIdx = (new Date().getDay() + 6) % 7;
-  var schedHeaders = DAYS_S.map(function(d, i) {
-    return '<div class="day-label' + (i === todayIdx ? ' today' : '') + '">' + d + '</div>';
-  }).join("");
-  var schedCells = DAYS_F.map(function(day) {
-    var entry = null;
-    for (var i = 0; i < (cfg.schedule || []).length; i++) {
-      if (cfg.schedule[i].days.indexOf(day) !== -1) { entry = cfg.schedule[i]; break; }
-    }
-    if (!entry) {
-      if (cfg.defaultStart) {
-        if (cfg.defaultStart === "any") return '<div class="day-cell any-window"><span class="cell-text any">any</span></div>';
-        return '<div class="day-cell has-window"><span class="cell-text">' + cfg.defaultStart + '<br>' + cfg.defaultEnd + '</span></div>';
-      }
-      return '<div class="day-cell"><span class="cell-text" style="color:var(--dim)">—</span></div>';
-    }
-    if (entry.start === "any") return '<div class="day-cell any-window"><span class="cell-text any">any</span></div>';
-    return '<div class="day-cell has-window"><span class="cell-text">' + entry.start + '<br>' + entry.end + '</span></div>';
-  }).join("");
-  var backSchedule = '<div style="margin-top:16px">'
-    + '<div class="back-title" style="margin-bottom:8px">weekly schedule</div>'
-    + '<div class="schedule-grid">'
-    + '<div class="schedule-header"><div class="day-label"></div>' + schedHeaders + '</div>'
-    + '<div class="schedule-row"><div class="row-label">' + plan.profile + '</div>' + schedCells + '</div>'
-    + '</div></div>';
-
-
-  return '<div class="profile-card flip-card" onclick="this.classList.toggle(&quot;flipped&quot;)">'
+  return '<div class="profile-card flip-card" onclick="flipCard(this)">'
        + '<div class="flip-card-inner">'
        + '<div class="flip-card-front">'
        + '<div class="card-header"><span class="profile-name">' + plan.profile + modeLabel + '</span>'
@@ -739,12 +693,7 @@ function renderProfile(plan) {
        + renderMarketBar(plan)
        + '<div class="flip-hint">tap to see config →</div>'
        + '</div>'
-       + '<div class="flip-card-back">'
-       + '<div class="back-title">' + plan.profile + ' — configuration</div>'
-       + backRows
-       + backSchedule
-       + '<div class="flip-hint" style="position:static;margin-top:16px;display:block;text-align:right">← tap to go back</div>'
-       + '</div>'
+       + '<div class="flip-card-back" data-profile="' + plan.profile + '"><div class="flip-hint" style="position:static;margin-top:16px;display:block;text-align:right">← tap to go back</div></div>'
        + '</div></div>';
 }
 
@@ -841,6 +790,75 @@ function parseConfigYaml(yaml) {
     }
   }
   return profiles.length ? { profiles: profiles } : null;
+}
+
+// ── Flip card ────────────────────────────────────────────────────────────
+function renderBackFace(profileName) {
+  var cfg = PROFILE_CONFIG[profileName] || {};
+  var cfgFields = [
+    ["required",      cfg.requiredHours !== undefined ? cfg.requiredHours + "h" : "—"],
+    ["mode",          cfg.continuous !== undefined ? (cfg.continuous ? "continuous" : "split") : "—"],
+    ["min slot",      !cfg.continuous && cfg.minSlot ? cfg.minSlot + " min" : "—"],
+    ["price ceiling", cfg.maxPrice != null ? cfg.maxPrice.toFixed(2) + " c€/kWh" : "none"],
+    ["delivery",      cfg.handlers && cfg.handlers.length ? (cfg.handlers.filter(function(h){return h.enabled;}).length > 0 ? "✓ configured" : "disabled") : "—"],
+  ];
+  var table = '<table style="width:100%;border-collapse:collapse">'
+    + '<thead><tr>'
+    + cfgFields.map(function(r) {
+        return '<th style="font-family:var(--mono);font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap">' + r[0] + '</th>';
+      }).join("")
+    + '</tr></thead><tbody><tr>'
+    + cfgFields.map(function(r) {
+        return '<td style="font-family:var(--mono);font-size:11px;color:var(--text);padding:8px 8px;white-space:nowrap">' + r[1] + '</td>';
+      }).join("")
+    + '</tr></tbody></table>';
+
+  var DAYS_S = ["mon","tue","wed","thu","fri","sat","sun"];
+  var DAYS_F = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+  var todayIdx = (new Date().getDay() + 6) % 7;
+  var schedHeaders = DAYS_S.map(function(d, i) {
+    return '<div class="day-label' + (i === todayIdx ? ' today' : '') + '">' + d + '</div>';
+  }).join("");
+  var schedCells = DAYS_F.map(function(day) {
+    var entry = null;
+    for (var i = 0; i < (cfg.schedule || []).length; i++) {
+      if (cfg.schedule[i].days.indexOf(day) !== -1) { entry = cfg.schedule[i]; break; }
+    }
+    if (!entry) {
+      if (cfg.defaultStart) {
+        if (cfg.defaultStart === "any") return '<div class="day-cell any-window"><span class="cell-text any">any</span></div>';
+        return '<div class="day-cell has-window"><span class="cell-text">' + cfg.defaultStart + '<br>' + cfg.defaultEnd + '</span></div>';
+      }
+      return '<div class="day-cell"><span class="cell-text" style="color:var(--dim)">—</span></div>';
+    }
+    if (entry.start === "any") return '<div class="day-cell any-window"><span class="cell-text any">any</span></div>';
+    return '<div class="day-cell has-window"><span class="cell-text">' + entry.start + '<br>' + entry.end + '</span></div>';
+  }).join("");
+
+  var schedule = '<div style="margin-top:20px">'
+    + '<div class="back-title" style="margin-bottom:8px">weekly schedule</div>'
+    + '<div class="schedule-grid">'
+    + '<div class="schedule-header"><div class="day-label"></div>' + schedHeaders + '</div>'
+    + '<div class="schedule-row"><div class="row-label">' + profileName + '</div>' + schedCells + '</div>'
+    + '</div></div>';
+
+  return '<div class="back-title">' + profileName + ' — configuration</div>'
+       + table
+       + schedule
+       + '<div class="flip-hint" style="position:static;margin-top:16px;display:block;text-align:right">← tap to go back</div>';
+}
+
+function flipCard(el) {
+  el.classList.toggle("flipped");
+  if (el.classList.contains("flipped")) {
+    var back = el.querySelector(".flip-card-back");
+    var profileName = back.getAttribute("data-profile");
+    if (back.getAttribute("data-rendered") !== "1") {
+      var hint = back.querySelector(".flip-hint");
+      back.innerHTML = renderBackFace(profileName);
+      back.setAttribute("data-rendered", "1");
+    }
+  }
 }
 
 // ── Data loading ──────────────────────────────────────────────────────────
