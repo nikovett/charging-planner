@@ -486,14 +486,20 @@ function renderTimeline(plan) {
     }
   }
 
-  // Midnight separator — find all 00:00 points within the range
+  // Midnight separator with date labels
   var midnightHTML = "";
   var firstMidnight = Math.ceil(rangeStart / (24*60)) * (24*60);
   for (var m = firstMidnight; m < rangeEnd; m += 24*60) {
     if (m > rangeStart) {
       var mp = ((m - rangeStart) / totalMins * 100).toFixed(2);
-      midnightHTML += '<div style="position:absolute;left:' + mp + '%;top:0;bottom:0;width:1px;background:var(--border2);opacity:0.8"></div>'
-                    + '<span style="position:absolute;left:' + mp + '%;top:2px;font-family:var(--mono);font-size:8px;color:var(--dim);transform:translateX(-50%)">00:00</span>';
+      // m is minutes since epoch in local time (UTC + offset).
+      // Convert to UTC ms for Date construction.
+      var mUtcMs = (m - utcOffset) * 60000;
+      var dateBefore = new Date(mUtcMs - 60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
+      var dateAfter  = new Date(mUtcMs).toLocaleDateString("en",          { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
+      midnightHTML += '<div style="position:absolute;left:' + mp + '%;top:0;bottom:0;width:1px;background:var(--border2)"></div>'
+                    + '<span style="position:absolute;left:' + mp + '%;top:2px;font-family:var(--mono);font-size:8px;color:var(--dim);transform:translateX(-100%);padding-right:4px;white-space:nowrap">' + dateBefore + '</span>'
+                    + '<span style="position:absolute;left:' + mp + '%;top:2px;font-family:var(--mono);font-size:8px;color:var(--dim);padding-left:4px;white-space:nowrap">' + dateAfter + '</span>';
     }
   }
 
