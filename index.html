@@ -488,6 +488,7 @@ function renderTimeline(plan) {
 
   // Midnight separator with date labels
   var midnightHTML = "";
+  var dateLabelHTML = "";
   var firstMidnight = Math.ceil(rangeStart / (24*60)) * (24*60);
   for (var m = firstMidnight; m < rangeEnd; m += 24*60) {
     if (m > rangeStart) {
@@ -498,9 +499,9 @@ function renderTimeline(plan) {
       // Format in local time by adding utcOffset before formatting as UTC
       var dateBefore = new Date(mUtcMs - 60000 + utcOffset*60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
       var dateAfter  = new Date(mUtcMs         + utcOffset*60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
-      midnightHTML += '<div style="position:absolute;left:' + mp + '%;top:0;bottom:0;width:1px;background:var(--border2)"></div>'
-                    + '<span style="position:absolute;left:' + mp + '%;top:2px;font-family:var(--mono);font-size:8px;color:var(--dim);transform:translateX(-100%);padding-right:4px;white-space:nowrap">' + dateBefore + '</span>'
-                    + '<span style="position:absolute;left:' + mp + '%;top:2px;font-family:var(--mono);font-size:8px;color:var(--dim);padding-left:4px;white-space:nowrap">' + dateAfter + '</span>';
+      midnightHTML  += '<div style="position:absolute;left:' + mp + '%;top:0;bottom:0;width:1px;background:var(--border2)"></div>';
+      dateLabelHTML += '<span style="position:absolute;left:' + mp + '%;transform:translateX(-100%);padding-right:6px;font-family:var(--mono);font-size:9px;color:var(--dim);white-space:nowrap">' + dateBefore + '</span>'
+                     + '<span style="position:absolute;left:' + mp + '%;padding-left:6px;font-family:var(--mono);font-size:9px;color:var(--dim);white-space:nowrap">' + dateAfter + '</span>';
     }
   }
 
@@ -513,7 +514,10 @@ function renderTimeline(plan) {
     tickHTML += '<span class="tick" style="position:absolute;left:' + pct + '%">' + String(hh).padStart(2,"0") + ':00</span>';
   }
 
-  return '<div class="timeline-wrap"><div class="timeline-label">charging window</div>'
+  return '<div class="timeline-wrap">'
+       + '<div style="position:relative;height:16px;margin-bottom:4px">'
+       + '<span style="font-family:var(--mono);font-size:10px;letter-spacing:0.08em;color:var(--muted);text-transform:uppercase">charging window</span>'
+       + dateLabelHTML + '</div>'
        + '<div class="timeline" style="position:relative">' + windowHTML + slotsHTML + midnightHTML + '</div>'
        + '<div class="timeline-ticks" style="position:relative;height:16px">' + tickHTML + '</div></div>';
 }
