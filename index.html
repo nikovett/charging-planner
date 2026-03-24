@@ -441,6 +441,9 @@ const DEMO_CONFIG = {
   ]
 };
 
+// Profile config map populated when config.yaml is loaded
+var PROFILE_CONFIG = {};
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 function hhmm(str) {
   if (!str || str === "any") return null;
@@ -519,7 +522,7 @@ function renderProfile(plan) {
          + '<span class="window-dur">' + fmtDuration(w.duration_minutes) + '</span></div>';
   }).join("");
   return '<div class="profile-card">'
-       + '<div class="card-header"><span class="profile-name">' + plan.profile + '</span>'
+       + '<div class="card-header"><span class="profile-name">' + plan.profile + (PROFILE_CONFIG[plan.profile] && PROFILE_CONFIG[plan.profile].continuous !== undefined ? ' <span style="color:var(--muted);font-size:10px">(' + (PROFILE_CONFIG[plan.profile].continuous ? 'continuous' : 'split') + ')</span>' : '') + '</span>'
        + '<span class="profile-date">' + plan.date + ' \u00b7 ' + plan.timezone + '</span></div>'
        + '<div class="stats-row">'
        + '<div class="stat"><div class="stat-label">scheduled</div><div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
@@ -554,7 +557,13 @@ function renderScheduleGrid(config) {
       for (var i = 0; i < profile.schedule.length; i++) {
         if (profile.schedule[i].days.indexOf(day) !== -1) { entry = profile.schedule[i]; break; }
       }
-      if (!entry) return '<div class="day-cell"><span class="cell-text" style="color:var(--dim)">\u2014</span></div>';
+      if (!entry) {
+        if (profile.defaultStart) {
+          if (profile.defaultStart === "any") return '<div class="day-cell any-window"><span class="cell-text any">any</span></div>';
+          return '<div class="day-cell has-window"><span class="cell-text">' + profile.defaultStart + '<br>' + profile.defaultEnd + '</span></div>';
+        }
+        return '<div class="day-cell"><span class="cell-text" style="color:var(--dim)">\u2014</span></div>';
+      }
       if (entry.start === "any") return '<div class="day-cell any-window"><span class="cell-text any">any</span></div>';
       return '<div class="day-cell has-window"><span class="cell-text">' + entry.start + '<br>' + entry.end + '</span></div>';
     }).join("");
@@ -581,6 +590,12 @@ function parseConfigYaml(yaml) {
       profiles.push(currentProfile);
       inSchedule = false;
       currentEntry = null;
+    } else if (currentProfile && indent === 4 && trimmed.indexOf("continuous_only:") === 0) {
+      currentProfile.continuous = trimmed.split(":")[1].trim().indexOf("true") === 0;
+    } else if (currentProfile && indent === 4 && trimmed.indexOf("preferred_window_start:") === 0) {
+      currentProfile.defaultStart = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "").split("#")[0].trim();
+    } else if (currentProfile && indent === 4 && trimmed.indexOf("preferred_window_end:") === 0) {
+      currentProfile.defaultEnd = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "").split("#")[0].trim();
     } else if (currentProfile && indent === 4 && trimmed.indexOf("schedule:") === 0) {
       inSchedule = true;
     } else if (inSchedule && indent === 6 && trimmed.indexOf("- days:") === 0) {
@@ -590,9 +605,9 @@ function parseConfigYaml(yaml) {
       currentProfile.schedule.push(currentEntry);
     } else if (inSchedule && currentEntry && indent === 8) {
       if (trimmed.indexOf("preferred_window_start:") === 0) {
-        currentEntry.start = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "");
+        currentEntry.start = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "").split("#")[0].trim();
       } else if (trimmed.indexOf("preferred_window_end:") === 0) {
-        currentEntry.end = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "");
+        currentEntry.end = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "").split("#")[0].trim();
       }
     } else if (indent <= 2 && trimmed && trimmed[0] !== "#" && currentProfile && inSchedule) {
       if (trimmed.indexOf("-") !== 0 && trimmed.indexOf("schedule:") !== 0) inSchedule = false;
@@ -643,8 +658,10 @@ function loadFromRepo() {
         renderProfiles(plans);
         if (configText) {
           var parsed = parseConfigYaml(configText);
-          if (parsed) renderScheduleGrid(parsed);
-          else renderScheduleGrid(DEMO_CONFIG);
+          if (parsed) {
+            renderScheduleGrid(parsed);
+            parsed.profiles.forEach(function(p) { PROFILE_CONFIG[p.name] = p; });
+          } else renderScheduleGrid(DEMO_CONFIG);
         } else {
           renderScheduleGrid(DEMO_CONFIG);
         }
