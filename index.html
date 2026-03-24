@@ -475,12 +475,7 @@
   </div>
 
   <!-- Config -->
-  <div class="config-section">
-    <div class="section-label">weekly schedule</div>
-    <div class="schedule-grid" id="schedule-grid">
-      <div class="loading">no config loaded</div>
-    </div>
-  </div>
+
 
   <footer>
     <span class="footer-text">charging-planner · ENTSO-E day-ahead prices</span>
@@ -904,9 +899,8 @@ function loadFromRepo() {
         if (configText) {
           var parsed = parseConfigYaml(configText);
           if (parsed) {
-            renderScheduleGrid(parsed);
             parsed.profiles.forEach(function(p) { PROFILE_CONFIG[p.name] = p; });
-          } else renderScheduleGrid(DEMO_CONFIG);
+          }
         } else {
           renderScheduleGrid(DEMO_CONFIG);
         }
@@ -920,7 +914,6 @@ function loadFromRepo() {
 function loadDemo() {
   document.getElementById("run-time").textContent = "created demo";
   renderProfiles(DEMO_PLANS);
-  renderScheduleGrid(DEMO_CONFIG);
 }
 
 loadFromRepo();
