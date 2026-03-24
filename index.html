@@ -405,8 +405,7 @@ const DEMO_PLANS = [
     version: 1, date: "2026-03-22", area: "FI",
     profile: "topup", timezone: "Europe/Helsinki", utc_offset_hours: 2,
     price_stats: { min_cents_kwh: 0.20, max_cents_kwh: 1.878, avg_cents_kwh: 0.9816 },
-    required_minutes: 120, total_minutes: 120,
-    avg_price_cents_kwh: 0.2319,
+    required_minutes: 120, total_minutes: 120, avg_price_cents_kwh: 0.2319,
     preferred_window_start: "22:00", preferred_window_end: "06:30",
     windows: [{ start: "14:15", end: "16:15", duration_minutes: 120, avg_price_cents_kwh: 0.2319 }],
   },
@@ -414,8 +413,7 @@ const DEMO_PLANS = [
     version: 1, date: "2026-03-21", area: "FI",
     profile: "overnight", timezone: "Europe/Helsinki", utc_offset_hours: 2,
     price_stats: { min_cents_kwh: 1.079, max_cents_kwh: 1.648, avg_cents_kwh: 1.3348 },
-    required_minutes: 300, total_minutes: 300,
-    avg_price_cents_kwh: 1.3605,
+    required_minutes: 300, total_minutes: 300, avg_price_cents_kwh: 1.3605,
     preferred_window_start: "21:00", preferred_window_end: "06:30",
     windows: [{ start: "00:30", end: "05:30", duration_minutes: 300, avg_price_cents_kwh: 1.3605 }],
   },
@@ -423,8 +421,7 @@ const DEMO_PLANS = [
     version: 1, date: "2026-03-22", area: "FI",
     profile: "optimal", timezone: "Europe/Helsinki", utc_offset_hours: 2,
     price_stats: { min_cents_kwh: 0.20, max_cents_kwh: 1.878, avg_cents_kwh: 0.9816 },
-    required_minutes: 270, total_minutes: 270,
-    avg_price_cents_kwh: 0.21,
+    required_minutes: 270, total_minutes: 270, avg_price_cents_kwh: 0.21,
     preferred_window_start: "any", preferred_window_end: "any",
     windows: [
       { start: "14:15", end: "15:45", duration_minutes: 90, avg_price_cents_kwh: 0.21 },
@@ -447,8 +444,8 @@ const DEMO_CONFIG = {
 // ── Helpers ───────────────────────────────────────────────────────────────
 function hhmm(str) {
   if (!str || str === "any") return null;
-  const [h, m] = str.split(":").map(Number);
-  return h * 60 + m;
+  const parts = str.split(":");
+  return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
 }
 
 function fmtDuration(minutes) {
@@ -469,222 +466,193 @@ function renderTimeline(plan) {
   const ws = hhmm(plan.preferred_window_start);
   const we = hhmm(plan.preferred_window_end);
   const isAny = plan.preferred_window_start === "any";
-
-  let windowHTML = "";
+  var windowHTML = "";
   if (!isAny && ws !== null && we !== null) {
     if (we > ws) {
-      const l = (ws / totalMins * 100).toFixed(2);
-      const w = ((we - ws) / totalMins * 100).toFixed(2);
-      windowHTML = '<div class="timeline-window" style="left:' + l + '%;width:' + w + '%"></div>';
+      windowHTML = '<div class="timeline-window" style="left:' + (ws/totalMins*100).toFixed(2) + '%;width:' + ((we-ws)/totalMins*100).toFixed(2) + '%"></div>';
     } else {
-      const w1 = ((totalMins - ws) / totalMins * 100).toFixed(2);
-      const w2 = (we / totalMins * 100).toFixed(2);
-      windowHTML = '<div class="timeline-window" style="left:' + (ws/totalMins*100).toFixed(2) + '%;width:' + w1 + '%"></div>'
-                 + '<div class="timeline-window" style="left:0%;width:' + w2 + '%"></div>';
+      windowHTML = '<div class="timeline-window" style="left:' + (ws/totalMins*100).toFixed(2) + '%;width:' + ((totalMins-ws)/totalMins*100).toFixed(2) + '%"></div>'
+                 + '<div class="timeline-window" style="left:0%;width:' + (we/totalMins*100).toFixed(2) + '%"></div>';
     }
   }
-
-  const slotsHTML = plan.windows.map(function(w) {
-    const s = hhmm(w.start);
-    const e = hhmm(w.end);
+  var slotsHTML = plan.windows.map(function(w) {
+    var s = hhmm(w.start), e = hhmm(w.end);
     if (s === null || e === null) return "";
-    const dur = e > s ? e - s : totalMins - s + e;
-    const l = (s / totalMins * 100).toFixed(2);
-    const wp = (dur / totalMins * 100).toFixed(2);
-    return '<div class="timeline-slot" style="left:' + l + '%;width:' + wp + '%" title="' + w.start + '\u2013' + w.end + ' @ ' + w.avg_price_cents_kwh.toFixed(2) + ' c\u20ac/kWh"></div>';
+    var dur = e > s ? e - s : totalMins - s + e;
+    return '<div class="timeline-slot" style="left:' + (s/totalMins*100).toFixed(2) + '%;width:' + (dur/totalMins*100).toFixed(2) + '%"></div>';
   }).join("");
-
-  const ticks = [0,6,12,18,24].map(function(h) {
+  var ticks = [0,6,12,18,24].map(function(h) {
     return '<span class="tick">' + String(h).padStart(2,"0") + ":00</span>";
   }).join("");
-
-  return '<div class="timeline-wrap">'
-       + '<div class="timeline-label">24h timeline</div>'
+  return '<div class="timeline-wrap"><div class="timeline-label">24h timeline</div>'
        + '<div class="timeline">' + windowHTML + slotsHTML + '</div>'
-       + '<div class="timeline-ticks">' + ticks + '</div>'
-       + '</div>';
+       + '<div class="timeline-ticks">' + ticks + '</div></div>';
 }
 
 function renderMarketBar(plan) {
-  const ps = plan.price_stats;
-  const range = ps.max_cents_kwh - ps.min_cents_kwh;
-  const avgPct = range > 0 ? ((ps.avg_cents_kwh - ps.min_cents_kwh) / range * 100).toFixed(1) : 50;
-  const planPct = range > 0 ? ((plan.avg_price_cents_kwh - ps.min_cents_kwh) / range * 100).toFixed(1) : 50;
-  const sav = savings(plan);
-  const savStr = sav !== null ? (sav > 0 ? "\u2193" + sav.toFixed(0) + "%" : "\u2191" + Math.abs(sav).toFixed(0) + "%") : "";
-  const savColor = sav !== null && sav > 0 ? "var(--accent)" : "var(--warn)";
-
-  return '<div class="market-bar-wrap">'
-       + '<div class="section-label" style="margin-bottom:4px">price vs market</div>'
-       + '<div class="market-bar">'
-       + '<div class="market-bar-fill"></div>'
-       + '<div class="market-bar-avg" style="left:' + avgPct + '%" title="market avg ' + ps.avg_cents_kwh.toFixed(2) + '"></div>'
-       + '<div class="market-bar-plan" style="left:' + planPct + '%" title="plan avg ' + plan.avg_price_cents_kwh.toFixed(2) + '"></div>'
-       + '</div>'
+  var ps = plan.price_stats;
+  var range = ps.max_cents_kwh - ps.min_cents_kwh;
+  var avgPct  = range > 0 ? ((ps.avg_cents_kwh - ps.min_cents_kwh) / range * 100).toFixed(1) : 50;
+  var planPct = range > 0 ? ((plan.avg_price_cents_kwh - ps.min_cents_kwh) / range * 100).toFixed(1) : 50;
+  var sav = savings(plan);
+  var savStr = sav !== null ? (sav > 0 ? "\u2193" + sav.toFixed(0) + "%" : "\u2191" + Math.abs(sav).toFixed(0) + "%") : "";
+  var savColor = sav !== null && sav > 0 ? "var(--accent)" : "var(--warn)";
+  return '<div class="market-bar-wrap"><div class="section-label" style="margin-bottom:4px">price vs market</div>'
+       + '<div class="market-bar"><div class="market-bar-fill"></div>'
+       + '<div class="market-bar-avg" style="left:' + avgPct + '%"></div>'
+       + '<div class="market-bar-plan" style="left:' + planPct + '%"></div></div>'
        + '<div class="market-bar-labels">'
        + '<span>' + ps.min_cents_kwh.toFixed(2) + ' c\u20ac/kWh</span>'
-       + '<span class="plan-label" style="color:' + savColor + '">' + plan.avg_price_cents_kwh.toFixed(2) + ' c\u20ac/kWh ' + savStr + '</span>'
+       + '<span style="color:' + savColor + '">' + plan.avg_price_cents_kwh.toFixed(2) + ' c\u20ac/kWh ' + savStr + '</span>'
        + '<span>' + ps.max_cents_kwh.toFixed(2) + ' c\u20ac/kWh</span>'
        + '</div></div>';
 }
 
 function renderProfile(plan) {
-  const sav = savings(plan);
-  const savStr = sav !== null ? (sav > 0 ? "\u2193" + sav.toFixed(0) + "%" : "\u2191" + Math.abs(sav).toFixed(0) + "%") : "\u2014";
-  const savClass = sav !== null && sav > 0 ? "good" : "warn";
-  const incomplete = plan.total_minutes < plan.required_minutes;
-
-  const windowsHTML = plan.windows.map(function(w) {
-    return '<div class="window-row">'
-         + '<span class="window-time">' + w.start + '\u2013' + w.end + '</span>'
+  var sav = savings(plan);
+  var savStr = sav !== null ? (sav > 0 ? "\u2193" + sav.toFixed(0) + "%" : "\u2191" + Math.abs(sav).toFixed(0) + "%") : "\u2014";
+  var savClass = sav !== null && sav > 0 ? "good" : "warn";
+  var incomplete = plan.total_minutes < plan.required_minutes;
+  var windowsHTML = plan.windows.map(function(w) {
+    return '<div class="window-row"><span class="window-time">' + w.start + '\u2013' + w.end + '</span>'
          + '<span class="window-price">' + w.avg_price_cents_kwh.toFixed(2) + ' c\u20ac/kWh</span>'
-         + '<span class="window-dur">' + fmtDuration(w.duration_minutes) + '</span>'
-         + '</div>';
+         + '<span class="window-dur">' + fmtDuration(w.duration_minutes) + '</span></div>';
   }).join("");
-
   return '<div class="profile-card">'
-       + '<div class="card-header">'
-       + '<span class="profile-name">' + plan.profile + '</span>'
-       + '<span class="profile-date">' + plan.date + ' \u00b7 ' + plan.timezone + '</span>'
-       + '</div>'
+       + '<div class="card-header"><span class="profile-name">' + plan.profile + '</span>'
+       + '<span class="profile-date">' + plan.date + ' \u00b7 ' + plan.timezone + '</span></div>'
        + '<div class="stats-row">'
-       + '<div class="stat"><div class="stat-label">scheduled</div>'
-       + '<div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
-       + '<div class="stat"><div class="stat-label">avg price</div>'
-       + '<div class="stat-value">' + plan.avg_price_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>'
-       + '<div class="stat"><div class="stat-label">vs market</div>'
-       + '<div class="stat-value ' + savClass + '">' + savStr + '</div></div>'
-       + '<div class="stat"><div class="stat-label">market avg</div>'
-       + '<div class="stat-value">' + plan.price_stats.avg_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>'
+       + '<div class="stat"><div class="stat-label">scheduled</div><div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
+       + '<div class="stat"><div class="stat-label">avg price</div><div class="stat-value">' + plan.avg_price_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>'
+       + '<div class="stat"><div class="stat-label">vs market</div><div class="stat-value ' + savClass + '">' + savStr + '</div></div>'
+       + '<div class="stat"><div class="stat-label">market avg</div><div class="stat-value">' + plan.price_stats.avg_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>'
        + '</div>'
        + renderTimeline(plan)
        + '<div class="windows-list">' + windowsHTML + '</div>'
-       + renderMarketBar(plan)
-       + '</div>';
+       + renderMarketBar(plan) + '</div>';
 }
 
 function renderProfiles(plans) {
-  const el = document.getElementById("profiles");
+  var el = document.getElementById("profiles");
   if (!plans.length) { el.innerHTML = '<div class="loading">no plans found</div>'; return; }
   el.innerHTML = plans.map(renderProfile).join("");
 }
 
 // ── Schedule grid ─────────────────────────────────────────────────────────
-const DAYS_SHORT = ["mon","tue","wed","thu","fri","sat","sun"];
-const DAYS_FULL  = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+var DAYS_SHORT = ["mon","tue","wed","thu","fri","sat","sun"];
+var DAYS_FULL  = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
 
 function renderScheduleGrid(config) {
-  const el = document.getElementById("schedule-grid");
-  const todayIdx = (new Date().getDay() + 6) % 7;
-
-  const headerCells = DAYS_SHORT.map(function(d, i) {
+  var el = document.getElementById("schedule-grid");
+  var todayIdx = (new Date().getDay() + 6) % 7;
+  var headerCells = DAYS_SHORT.map(function(d, i) {
     return '<div class="day-label' + (i === todayIdx ? ' today' : '') + '">' + d + '</div>';
   }).join("");
-
-  const rows = config.profiles.map(function(profile) {
-    const cells = DAYS_FULL.map(function(day) {
-      const entry = profile.schedule.find(function(e) { return e.days.includes(day); });
+  var rows = config.profiles.map(function(profile) {
+    var cells = DAYS_FULL.map(function(day) {
+      var entry = null;
+      for (var i = 0; i < profile.schedule.length; i++) {
+        if (profile.schedule[i].days.indexOf(day) !== -1) { entry = profile.schedule[i]; break; }
+      }
       if (!entry) return '<div class="day-cell"><span class="cell-text" style="color:var(--dim)">\u2014</span></div>';
       if (entry.start === "any") return '<div class="day-cell any-window"><span class="cell-text any">any</span></div>';
       return '<div class="day-cell has-window"><span class="cell-text">' + entry.start + '<br>' + entry.end + '</span></div>';
     }).join("");
     return '<div class="schedule-row"><div class="row-label">' + profile.name + '</div>' + cells + '</div>';
   }).join("");
-
   el.innerHTML = '<div class="schedule-header"><div class="day-label"></div>' + headerCells + '</div>' + rows;
 }
 
 // ── Config YAML parser ────────────────────────────────────────────────────
-function renderScheduleFromYaml(yaml) {
-  const profiles = [];
-  let currentProfile = null;
-  let inSchedule = false;
-  let currentEntry = null;
+function parseConfigYaml(yaml) {
+  var profiles = [];
+  var currentProfile = null;
+  var inSchedule = false;
+  var currentEntry = null;
+  var lines = yaml.split("\n");
 
-  const lines = yaml.split("\n");
-  for (let li = 0; li < lines.length; li++) {
-    const raw = lines[li];
-    const line = raw.replace(/\s+$/, "");
-    const indent = line.length - line.replace(/^\s+/, "").length;
-    const trimmed = line.trim();
+  for (var li = 0; li < lines.length; li++) {
+    var line = lines[li].replace(/\s+$/, "");
+    var trimmed = line.replace(/^\s+/, "");
+    var indent = line.length - trimmed.length;
 
-    if (indent === 2 && trimmed.startsWith("- name:")) {
+    if (indent === 2 && trimmed.indexOf("- name:") === 0) {
       currentProfile = { name: trimmed.split("name:")[1].trim(), schedule: [] };
       profiles.push(currentProfile);
       inSchedule = false;
-    } else if (indent === 4 && trimmed === "schedule:") {
+      currentEntry = null;
+    } else if (currentProfile && indent === 4 && trimmed.indexOf("schedule:") === 0) {
       inSchedule = true;
-    } else if (inSchedule && indent === 6 && trimmed.startsWith("- days:")) {
-      const daysStr = trimmed.split("days:")[1].trim().replace(/[\[\]]/g, "");
-      currentEntry = { days: daysStr.split(",").map(function(d) { return d.trim(); }), start: null, end: null };
-      if (currentProfile) currentProfile.schedule.push(currentEntry);
+    } else if (inSchedule && indent === 6 && trimmed.indexOf("- days:") === 0) {
+      var daysStr = trimmed.split("days:")[1].trim().replace(/[\[\]]/g, "");
+      var days = daysStr.split(",").map(function(d) { return d.trim(); });
+      currentEntry = { days: days, start: null, end: null };
+      currentProfile.schedule.push(currentEntry);
     } else if (inSchedule && currentEntry && indent === 8) {
-      if (trimmed.includes("preferred_window_start:")) {
+      if (trimmed.indexOf("preferred_window_start:") === 0) {
         currentEntry.start = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "");
-      } else if (trimmed.includes("preferred_window_end:")) {
+      } else if (trimmed.indexOf("preferred_window_end:") === 0) {
         currentEntry.end = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "");
       }
-    } else if (indent <= 2 && trimmed && !trimmed.startsWith("#") && currentProfile && inSchedule) {
-      if (!trimmed.startsWith("-") && !trimmed.includes("schedule:")) inSchedule = false;
+    } else if (indent <= 2 && trimmed && trimmed[0] !== "#" && currentProfile && inSchedule) {
+      if (trimmed.indexOf("-") !== 0 && trimmed.indexOf("schedule:") !== 0) inSchedule = false;
     }
   }
-
-  if (profiles.length) renderScheduleGrid({ profiles: profiles });
-  else renderScheduleGrid(DEMO_CONFIG);
+  return profiles.length ? { profiles: profiles } : null;
 }
 
 // ── Data loading ──────────────────────────────────────────────────────────
-const FALLBACK_PLAN_NAMES = ["topup", "overnight", "optimal"];
+var FALLBACK_PLAN_NAMES = ["topup", "overnight", "optimal"];
 
-async function fetchWithTimeout(url, ms) {
+function fetchWithTimeout(url, ms) {
   ms = ms || 4000;
-  const controller = new AbortController();
-  const id = setTimeout(function() { controller.abort(); }, ms);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
+  var controller = new AbortController();
+  var id = setTimeout(function() { controller.abort(); }, ms);
+  return fetch(url, { signal: controller.signal }).then(function(res) {
     clearTimeout(id);
     return res;
-  } catch(e) {
+  }).catch(function(e) {
     clearTimeout(id);
     throw e;
-  }
+  });
 }
 
-async function loadFromRepo() {
-  let names = FALLBACK_PLAN_NAMES;
-  let configText = null;
+function loadFromRepo() {
+  var configText = null;
+  var names = FALLBACK_PLAN_NAMES;
 
-  try {
-    const res = await fetchWithTimeout("config.yaml");
-    if (res.ok) {
-      configText = await res.text();
-      const matches = configText.match(/^  - name:\s*(\S+)/gm) || [];
-      const found = matches.map(function(m) { return m.replace(/^  - name:\s*/, ""); });
-      if (found.length) names = found;
-    }
-  } catch(e) {}
+  fetchWithTimeout("config.yaml").then(function(res) {
+    if (!res.ok) throw new Error("config not ok");
+    return res.text();
+  }).then(function(text) {
+    configText = text;
+    var parsed = parseConfigYaml(text);
+    if (parsed) names = parsed.profiles.map(function(p) { return p.name; });
+  }).catch(function() {}).finally(function() {
+    var fetches = names.map(function(name) {
+      return fetchWithTimeout("data/plan-" + name + ".json").then(function(res) {
+        return res.ok ? res.json() : null;
+      }).catch(function() { return null; });
+    });
 
-  const plans = [];
-  for (let i = 0; i < names.length; i++) {
-    try {
-      const res = await fetchWithTimeout("data/plan-" + names[i] + ".json");
-      if (res.ok) plans.push(await res.json());
-    } catch(e) {}
-  }
-
-  if (plans.length) {
-    const latest = plans.reduce(function(a, b) { return a.date > b.date ? a : b; });
-    document.getElementById("run-time").textContent = latest.date;
-    renderProfiles(plans);
-    if (configText) renderScheduleFromYaml(configText);
-    else renderScheduleGrid(DEMO_CONFIG);
-  } else {
-    loadDemo();
-  }
-}
-
-function triggerRun() {
-  alert("To trigger a manual run: go to your GitHub repo \u2192 Actions \u2192 Charging Planner \u2192 Run workflow.");
+    Promise.all(fetches).then(function(results) {
+      var plans = results.filter(function(p) { return p !== null; });
+      if (plans.length) {
+        var latest = plans.reduce(function(a, b) { return a.date > b.date ? a : b; });
+        document.getElementById("run-time").textContent = latest.date;
+        renderProfiles(plans);
+        if (configText) {
+          var parsed = parseConfigYaml(configText);
+          if (parsed) renderScheduleGrid(parsed);
+          else renderScheduleGrid(DEMO_CONFIG);
+        } else {
+          renderScheduleGrid(DEMO_CONFIG);
+        }
+      } else {
+        loadDemo();
+      }
+    });
+  });
 }
 
 function loadDemo() {
