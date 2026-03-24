@@ -740,19 +740,23 @@ function renderProfileConfigTable(config) {
       ? '<span class="pill on">' + (p.continuous ? "continuous" : "split") + "</span>"
       : '<span class="pill">—</span>';
 
-    var minSlot = p.minSlot ? p.minSlot + " min" : "—";
+    var minSlot = (!p.continuous && p.minSlot) ? p.minSlot + " min" : '<span style="color:var(--dim)">—</span>';
 
     var maxPrice = p.maxPrice !== undefined && p.maxPrice !== null
       ? p.maxPrice.toFixed(2) + " c€/kWh"
       : '<span style="color:var(--dim)">none</span>';
 
-    var deliveries = "—";
+    var deliveries = '<span style="color:var(--dim)">—</span>';
     if (p.handlers && p.handlers.length) {
-      deliveries = p.handlers.map(function(h) {
-        return '<span class="pill' + (h.enabled ? " on" : "") + '">'
-             + (h.enabled ? "" : '<span style="color:var(--danger)">✗</span> ')
-             + h.name + "</span>";
-      }).join(" ");
+      var enabledCount  = p.handlers.filter(function(h) { return h.enabled; }).length;
+      var disabledCount = p.handlers.length - enabledCount;
+      if (enabledCount > 0 && disabledCount === 0) {
+        deliveries = '<span class="pill on">✓ configured</span>';
+      } else if (enabledCount > 0) {
+        deliveries = '<span class="pill on">✓ configured</span> <span class="pill">' + disabledCount + ' disabled</span>';
+      } else {
+        deliveries = '<span class="pill">' + disabledCount + ' disabled</span>';
+      }
     }
 
     var reqHours = p.requiredHours !== undefined ? p.requiredHours + "h" : "—";
