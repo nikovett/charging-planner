@@ -13,13 +13,13 @@ charging:
     continuous_only: false              # Cheapest individual slots (may be split across the window)
     min_slot_minutes: 30                # Minimum continuous block length (must be divisible by 15)
     max_price_cents_kwh: null           # Price ceiling in c€/kWh — skip slots above this (null = no limit)
-    preferred_window_start: "22:00"     # Quoted — would parse as 22 minutes without quotes
+    preferred_window_start: "21:00"     # Quoted — would parse as 22 minutes without quotes
     preferred_window_end: "06:30"
     schedule:                           # Optional: day-specific window overrides
                                         # Each entry describes the window for that target day.
-                                        # Overnight windows (22:00–06:30) start the evening before.
+                                        # Overnight windows (21:00–06:30) start the evening before.
       - days: [monday, tuesday, wednesday, thursday, friday]
-        preferred_window_start: "22:00"
+        preferred_window_start: "21:00"
         preferred_window_end: "06:30"
       - days: [saturday, sunday]
         preferred_window_start: any     # no window constraint — pick cheapest slots from all available prices
@@ -33,12 +33,21 @@ charging:
         restore_mode: false             # Charge Amps only: delivered schedule always changes the charger mode to "Schedule". Enabling this restores charging mode back to what it was before delivery.
 
   - name: overnight
-    required_hours: 5                   # Total hours of charging to schedule
+    required_hours: 4.5                 # Total hours of charging to schedule
     continuous_only: true               # One unbroken block, extended leftward if window is too short
     min_slot_minutes: 30
     max_price_cents_kwh: null
     preferred_window_start: "21:00"     # Overnight window — wraps midnight
     preferred_window_end: "06:30"
+    schedule:                           # Optional: day-specific window overrides
+                                        # Each entry describes the window for that target day.
+                                        # Overnight windows (21:00–06:30) start the evening before.
+      - days: [monday, tuesday, wednesday, thursday, friday]
+        preferred_window_start: "21:00"
+        preferred_window_end: "06:30"
+      - days: [saturday, sunday]
+        preferred_window_start: any     # no window constraint — pick cheapest slots from all available prices
+        preferred_window_end: any
     deliveries:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
         enabled: false                  # configured but set to false to temporarily disable this delivery
