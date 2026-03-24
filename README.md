@@ -81,7 +81,7 @@ charging:
         restore_mode: false
 
   - name: overnight
-    required_hours: 6
+    required_hours: 4.5
     continuous_only: true
     preferred_window_start: "21:00"
     preferred_window_end: "06:30"
@@ -91,6 +91,12 @@ charging:
         connector_id: 1
         max_charging_rate: 16.0
         restore_mode: true
+
+  - name: optimal
+    required_hours: 4.5
+    continuous_only: true
+    preferred_window_start: any     # no window constraint
+    preferred_window_end: any
 
 ntfy:
   enabled: true
@@ -219,7 +225,7 @@ Day-ahead prices are published at approximately 12:00 UTC each day. If the scrip
 
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 
-Each successful run writes a formatted markdown summary to the GitHub Actions job view and uploads a run artifact containing all `plan-{name}.json` files.
+Each successful run writes a formatted markdown summary to the GitHub Actions job view and uploads a run artifact containing all `plan-{name}.json` files. It also commits the plan JSONs to `data/` in the repository so the GitHub Pages dashboard can fetch them without authentication.
 
 ---
 
@@ -246,6 +252,21 @@ The buffer covers charge rate tapering in the upper SoC range, cold-climate dera
 **Trigger**: Charge Amps LUNA firmware update to OCPP 2.0.1 or 2.1. These versions provide reliable SoC measurand reporting in `MeterValues` and support the ISO 15118-20 SoC target negotiation between car and charger. OCPP 1.6 has a SoC measurand but its availability depends heavily on the charger and car combination.
 
 `required_hours` will remain as a config fallback for when the car is not plugged in at plan-build time or SoC data is unavailable.
+
+---
+
+## Dashboard
+
+A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan JSONs from `data/` and `config.yaml` directly from the repository — no token or backend needed.
+
+Features:
+- One flip card per profile — front shows the plan, back shows profile configuration and weekly schedule
+- Price histogram with all available slots, charging windows highlighted in green, min/max price labelled
+- Stats row: scheduled hours, avg price, market avg, vs market percentage
+- Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")
+- Weekly schedule grid per profile showing configured windows for each day
+
+To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose `main` and `/ (root)`. The site will be live at `https://<username>.github.io/<repo>/`.
 
 ---
 
@@ -284,6 +305,11 @@ One `plan-{name}.json` file is written per profile:
   ],
   "window_starts_utc": ["2026-03-14T22:00:00+00:00"],
   "window_ends_utc":   ["2026-03-15T04:00:00+00:00"],
+  "price_slots": [
+    { "start_utc": "2026-03-14T20:00:00+00:00", "price_cents_kwh": 0.82, "charging": false },
+    { "start_utc": "2026-03-14T22:00:00+00:00", "price_cents_kwh": 0.91, "charging": true },
+    ...
+  ],
   "ocpp_charging_profile": {
     "chargingProfileId": 1,
     "stackLevel": 0,
@@ -304,6 +330,8 @@ One `plan-{name}.json` file is written per profile:
 ```
 
 `window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems.
+
+`price_slots` contains all available price slots from the script run onwards, each with `start_utc`, `price_cents_kwh`, and `charging: true/false`. Used by the dashboard to render the price histogram with charging windows highlighted.
 
 ### OCPP smart charging
 
