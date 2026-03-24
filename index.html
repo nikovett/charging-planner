@@ -622,8 +622,10 @@ function renderTimeline(plan) {
   var minLabelPct = ((minIdx + 0.5) / n * 100).toFixed(1);
   var maxLabelPct = ((maxIdx + 0.5) / n * 100).toFixed(1);
   // Min/max labels rendered inside histogram at top of bar
-  var minMaxHTML = '<span style="position:absolute;left:' + minLabelPct + '%;bottom:' + (25 + 0/n*70 + 2).toFixed(1) + '%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3">' + visible[minIdx].price_cents_kwh.toFixed(2) + '</span>'
-    + '<span style="position:absolute;left:' + maxLabelPct + '%;top:2px;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap;z-index:3">' + visible[maxIdx].price_cents_kwh.toFixed(2) + '</span>';
+  var minBarH = 25; // min bar is always 25%
+  var maxBarH = 95; // max bar is always 95%
+  var minMaxHTML = '<span style="position:absolute;left:' + minLabelPct + '%;bottom:' + (minBarH + 1) + '%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3">' + visible[minIdx].price_cents_kwh.toFixed(2) + '</span>'
+    + '<span style="position:absolute;left:' + maxLabelPct + '%;bottom:' + (maxBarH + 1) + '%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap;z-index:3">' + visible[maxIdx].price_cents_kwh.toFixed(2) + '</span>';
 
   var barsHTML = visible.map(function(s, i) {
     var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 70)).toFixed(1);
@@ -653,8 +655,8 @@ function renderTimeline(plan) {
       var db = new Date(mUtcMs - 60000 + utcOffset*60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
       var da = new Date(mUtcMs         + utcOffset*60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
       // Day numbers shown inside histogram at top, flanking the separator
-      var dbDay = new Date(mUtcMs - 60000 + utcOffset*60000).getDate();
-      var daDay = new Date(mUtcMs         + utcOffset*60000).getDate();
+      var dbDay = new Date(mUtcMs - 60000 + utcOffset*60000).getUTCDate();
+      var daDay = new Date(mUtcMs         + utcOffset*60000).getUTCDate();
       midnightHTML  += '<div style="position:absolute;left:' + mp + '%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.15);z-index:2;pointer-events:none"></div>'
                      + '<span style="position:absolute;left:' + mp + '%;top:4px;transform:translateX(-100%);padding-right:4px;font-family:var(--mono);font-size:7px;color:var(--dim);white-space:nowrap;z-index:3">' + dbDay + '</span>'
                      + '<span style="position:absolute;left:' + mp + '%;top:4px;padding-left:4px;font-family:var(--mono);font-size:7px;color:var(--dim);white-space:nowrap;z-index:3">' + daDay + '</span>';
