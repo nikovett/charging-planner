@@ -598,7 +598,7 @@ function renderTimeline(plan) {
 
   // Bars
   var barsHTML = visible.map(function(s, i) {
-    var h = Math.max(3, ((s.price_cents_kwh - minP) / rangeP * 86 + 3)).toFixed(1);
+    var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 63)).toFixed(1);
     var isMin = i === minIdx, isMax = i === maxIdx;
     var bg = s.charging ? "var(--accent)" : isMax ? "var(--warn)" : isMin ? "var(--accent2)" : "var(--dim)";
     var border = s.charging ? "border-top:1px solid var(--accent2);" : isMax ? "border-top:1px solid var(--warn);" : isMin ? "border-top:1px solid var(--accent2);" : "border-top:1px solid var(--border2);";
