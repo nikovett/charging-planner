@@ -316,6 +316,51 @@
   }
   .cell-text.any { color: var(--accent2); }
 
+  /* ── Profile config table ── */
+  .config-table {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .config-table th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 8px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .config-table th:last-child { border-right: none; }
+  .config-table td {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  .config-table td:last-child { border-right: none; }
+  .config-table tr:last-child td { border-bottom: none; }
+  .config-table .pill {
+    display: inline-block;
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 2px;
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    margin-right: 3px;
+    white-space: nowrap;
+  }
+  .config-table .pill.on { border-color: var(--accent2); color: var(--accent); }
+
   /* ── Footer ── */
   footer {
     border-top: 1px solid var(--border);
@@ -375,6 +420,11 @@
     <div class="schedule-grid" id="schedule-grid">
       <div class="loading">no config loaded</div>
     </div>
+  </div>
+
+  <div class="config-section" style="margin-top:32px">
+    <div class="section-label">profile configuration</div>
+    <div id="profile-config-table"></div>
   </div>
 
   <footer>
@@ -640,8 +690,22 @@ function parseConfigYaml(yaml) {
       profiles.push(currentProfile);
       inSchedule = false;
       currentEntry = null;
+    } else if (currentProfile && indent === 4 && trimmed.indexOf("required_hours:") === 0) {
+      currentProfile.requiredHours = parseFloat(trimmed.split(":")[1].trim());
     } else if (currentProfile && indent === 4 && trimmed.indexOf("continuous_only:") === 0) {
       currentProfile.continuous = trimmed.split(":")[1].trim().indexOf("true") === 0;
+    } else if (currentProfile && indent === 4 && trimmed.indexOf("min_slot_minutes:") === 0) {
+      currentProfile.minSlot = parseInt(trimmed.split(":")[1].trim(), 10);
+    } else if (currentProfile && indent === 4 && trimmed.indexOf("max_price_cents_kwh:") === 0) {
+      var mpVal = trimmed.split(":")[1].trim().split("#")[0].trim();
+      currentProfile.maxPrice = mpVal === "null" ? null : parseFloat(mpVal);
+    } else if (currentProfile && indent === 6 && trimmed.indexOf("- handler:") === 0) {
+      if (!currentProfile.handlers) currentProfile.handlers = [];
+      var hName = trimmed.split(":")[1].trim().split("#")[0].trim();
+      // Check if this delivery is enabled (look ahead for enabled: false)
+      currentProfile.handlers.push({ name: hName, enabled: true });
+    } else if (currentProfile && currentProfile.handlers && currentProfile.handlers.length && indent === 8 && trimmed.indexOf("enabled:") === 0) {
+      currentProfile.handlers[currentProfile.handlers.length - 1].enabled = trimmed.split(":")[1].trim().indexOf("false") === -1;
     } else if (currentProfile && indent === 4 && trimmed.indexOf("preferred_window_start:") === 0) {
       currentProfile.defaultStart = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "").split("#")[0].trim();
     } else if (currentProfile && indent === 4 && trimmed.indexOf("preferred_window_end:") === 0) {
@@ -664,6 +728,51 @@ function parseConfigYaml(yaml) {
     }
   }
   return profiles.length ? { profiles: profiles } : null;
+}
+
+// ── Profile config table ─────────────────────────────────────────────────
+function renderProfileConfigTable(config) {
+  var el = document.getElementById("profile-config-table");
+  if (!el) return;
+
+  var rows = config.profiles.map(function(p) {
+    var modeCell = p.continuous !== undefined
+      ? '<span class="pill on">' + (p.continuous ? "continuous" : "split") + "</span>"
+      : '<span class="pill">—</span>';
+
+    var minSlot = p.minSlot ? p.minSlot + " min" : "—";
+
+    var maxPrice = p.maxPrice !== undefined && p.maxPrice !== null
+      ? p.maxPrice.toFixed(2) + " c€/kWh"
+      : '<span style="color:var(--dim)">none</span>';
+
+    var deliveries = "—";
+    if (p.handlers && p.handlers.length) {
+      deliveries = p.handlers.map(function(h) {
+        return '<span class="pill' + (h.enabled ? " on" : "") + '">'
+             + (h.enabled ? "" : '<span style="color:var(--danger)">✗</span> ')
+             + h.name + "</span>";
+      }).join(" ");
+    }
+
+    var reqHours = p.requiredHours !== undefined ? p.requiredHours + "h" : "—";
+
+    return "<tr>"
+         + "<td><strong>" + p.name + "</strong></td>"
+         + "<td>" + reqHours + "</td>"
+         + "<td>" + modeCell + "</td>"
+         + "<td>" + minSlot + "</td>"
+         + "<td>" + maxPrice + "</td>"
+         + "<td>" + deliveries + "</td>"
+         + "</tr>";
+  }).join("");
+
+  el.innerHTML = "<table class='config-table'>"
+    + "<thead><tr>"
+    + "<th>profile</th><th>required</th><th>mode</th><th>min slot</th><th>price ceiling</th><th>delivery</th>"
+    + "</tr></thead>"
+    + "<tbody>" + rows + "</tbody>"
+    + "</table>";
 }
 
 // ── Data loading ──────────────────────────────────────────────────────────
@@ -711,6 +820,7 @@ function loadFromRepo() {
           if (parsed) {
             renderScheduleGrid(parsed);
             parsed.profiles.forEach(function(p) { PROFILE_CONFIG[p.name] = p; });
+            renderProfileConfigTable(parsed);
           } else renderScheduleGrid(DEMO_CONFIG);
         } else {
           renderScheduleGrid(DEMO_CONFIG);
