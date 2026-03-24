@@ -558,9 +558,9 @@ function renderTimeline(plan) {
   if (!slots || !slots.length) return renderTimelineLegacy(plan);
 
   var utcOffset = (plan.utc_offset_hours || 0) * 60;
-  var prices = slots.map(function(s) { return s.price_cents_kwh; });
-  var minP = Math.min.apply(null, prices);
-  var maxP = Math.max.apply(null, prices);
+  // Use plan-level price stats for consistent Y scaling across all slots
+  var minP = plan.price_stats ? plan.price_stats.min_cents_kwh : Math.min.apply(null, slots.map(function(s){return s.price_cents_kwh;}));
+  var maxP = plan.price_stats ? plan.price_stats.max_cents_kwh : Math.max.apply(null, slots.map(function(s){return s.price_cents_kwh;}));
   var rangeP = maxP - minP || 1;
 
   // 24h window centered on charging midpoint
@@ -589,6 +589,7 @@ function renderTimeline(plan) {
   var barW = "calc(" + (100/n).toFixed(4) + "% - " + gapPx + "px)";
 
   // Min/max slot indices
+  // Find min/max within visible slots (may differ from plan stats if some slots are outside range)
   var minIdx = 0, maxIdx = 0;
   for (var i = 1; i < visible.length; i++) {
     if (visible[i].price_cents_kwh < visible[minIdx].price_cents_kwh) minIdx = i;
@@ -597,7 +598,7 @@ function renderTimeline(plan) {
 
   // Bars
   var barsHTML = visible.map(function(s, i) {
-    var h = Math.max(3, ((s.price_cents_kwh - minP) / rangeP * 88 + 6)).toFixed(1);
+    var h = Math.max(4, ((s.price_cents_kwh - minP) / rangeP * 82 + 6)).toFixed(1);
     var bg = s.charging ? "var(--accent)" : "var(--dim)";
     var border = s.charging ? "border-top:1px solid var(--accent2);" : "border-top:1px solid var(--border2);";
     var lm = new Date(s.start_utc).getTime() / 60000 + utcOffset;
