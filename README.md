@@ -159,6 +159,22 @@ See [`delivery/README.md`](delivery/README.md) for full handler configuration re
 
 ---
 
+## Dashboard
+
+A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan JSONs from `data/` and `config.yaml` directly from the repository — no token or backend needed.
+
+Features:
+- One flip card per profile — front shows the plan, back shows profile configuration and weekly schedule
+- Price histogram with all available slots, charging windows highlighted in green, min/max price labelled
+- Stats row: scheduled hours, avg price, market avg, vs market percentage
+- Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")
+- Weekly schedule grid per profile showing configured windows for each day
+
+To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose `main` and `/ (root)`. The site will be live at `https://<username>.github.io/<repo>/`.
+
+---
+
+
 ## Push notifications (ntfy)
 
 After delivery completes, `delivery/deliver.py` sends a single push notification containing the plan summary and delivery status for each charger. The notification is sent to the configured ntfy topic.
@@ -226,47 +242,6 @@ Day-ahead prices are published at approximately 12:00 UTC each day. If the scrip
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 
 Each successful run writes a formatted markdown summary to the GitHub Actions job view and uploads a run artifact containing all `plan-{name}.json` files. It also commits the plan JSONs to `data/` in the repository so the GitHub Pages dashboard can fetch them without authentication.
-
----
-
-## Future work
-
-### Plug & Schedule — SoC-derived required hours
-
-Currently `required_hours` is a static value that must be set conservatively for the worst case (long drive, cold weather, nearly empty battery). This means the planner often schedules more charging than needed, which reduces its ability to find the cheapest windows.
-
-**The goal** is to derive `required_hours` dynamically when the car is plugged in: read the current state of charge and the target SoC from the charger at plan-build time, then calculate the actual energy needed using the car's battery capacity and charging rate. A day with a short commute and 70% remaining SoC would produce a 1h plan; a day starting from 20% would produce a 5h plan. The planner finds the cheapest windows for the actual need — not a worst-case estimate.
-
-The calculation would be approximately:
-
-```
-energy_needed_kwh = (target_soc - current_soc) * battery_capacity_kwh
-charging_rate_kw  = min(max_charging_rate, car_max_charging_rate_kw)
-required_hours    = (energy_needed_kwh / charging_rate_kw) * buffer_factor
-```
-
-The buffer covers charge rate tapering in the upper SoC range, cold-climate derating, and possible load balancing reductions.
-
-`max_charging_rate` is already configured per delivery entry. The only additional static config values needed are `battery_capacity_kwh` and `car_max_charging_rate_kw` — both known per car and set once. The only truly dynamic runtime inputs are `current_soc` and `target_soc`, read from the charger at plan-build time.
-
-**Trigger**: Charge Amps LUNA firmware update to OCPP 2.0.1 or 2.1. These versions provide reliable SoC measurand reporting in `MeterValues` and support the ISO 15118-20 SoC target negotiation between car and charger. OCPP 1.6 has a SoC measurand but its availability depends heavily on the charger and car combination.
-
-`required_hours` will remain as a config fallback for when the car is not plugged in at plan-build time or SoC data is unavailable.
-
----
-
-## Dashboard
-
-A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan JSONs from `data/` and `config.yaml` directly from the repository — no token or backend needed.
-
-Features:
-- One flip card per profile — front shows the plan, back shows profile configuration and weekly schedule
-- Price histogram with all available slots, charging windows highlighted in green, min/max price labelled
-- Stats row: scheduled hours, avg price, market avg, vs market percentage
-- Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")
-- Weekly schedule grid per profile showing configured windows for each day
-
-To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose `main` and `/ (root)`. The site will be live at `https://<username>.github.io/<repo>/`.
 
 ---
 
@@ -348,3 +323,30 @@ For a split plan with two windows separated by a gap, the schedule periods alter
 ```
 
 The profile is `TxDefaultProfile` (`Absolute` kind), meaning it applies automatically to any transaction started on the EVSE without needing a transaction ID in advance. OCPP 2.0.1 and 2.1 use `id` instead of `chargingProfileId` — pass `ocpp_version` in the delivery config to get the correct field names.
+
+## Future work
+
+### Plug & Schedule — SoC-derived required hours
+
+Currently `required_hours` is a static value that must be set conservatively for the worst case (long drive, cold weather, nearly empty battery). This means the planner often schedules more charging than needed, which reduces its ability to find the cheapest windows.
+
+**The goal** is to derive `required_hours` dynamically when the car is plugged in: read the current state of charge and the target SoC from the charger at plan-build time, then calculate the actual energy needed using the car's battery capacity and charging rate. A day with a short commute and 70% remaining SoC would produce a 1h plan; a day starting from 20% would produce a 5h plan. The planner finds the cheapest windows for the actual need — not a worst-case estimate.
+
+The calculation would be approximately:
+
+```
+energy_needed_kwh = (target_soc - current_soc) * battery_capacity_kwh
+charging_rate_kw  = min(max_charging_rate, car_max_charging_rate_kw)
+required_hours    = (energy_needed_kwh / charging_rate_kw) * buffer_factor
+```
+
+The buffer covers charge rate tapering in the upper SoC range, cold-climate derating, and possible load balancing reductions.
+
+`max_charging_rate` is already configured per delivery entry. The only additional static config values needed are `battery_capacity_kwh` and `car_max_charging_rate_kw` — both known per car and set once. The only truly dynamic runtime inputs are `current_soc` and `target_soc`, read from the charger at plan-build time.
+
+**Trigger**: Charge Amps LUNA firmware update to OCPP 2.0.1 or 2.1. These versions provide reliable SoC measurand reporting in `MeterValues` and support the ISO 15118-20 SoC target negotiation between car and charger. OCPP 1.6 has a SoC measurand but its availability depends heavily on the charger and car combination.
+
+`required_hours` will remain as a config fallback for when the car is not plugged in at plan-build time or SoC data is unavailable.
+
+---
+
