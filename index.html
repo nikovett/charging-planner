@@ -984,6 +984,17 @@ function loadFromRepo() {
       if (plans.length) {
         var latest = plans.reduce(function(a, b) { return a.date > b.date ? a : b; });
         document.getElementById("run-time").textContent = "created " + latest.date;
+      // Show staleness warning if plan is more than 1 day old
+      var planDate = new Date(latest.date + "T00:00:00Z");
+      var today    = new Date();
+      today.setUTCHours(0,0,0,0);
+      var ageDays  = Math.floor((today - planDate) / 86400000);
+      if (ageDays > 1) {
+        var warn = document.createElement("div");
+        warn.style.cssText = "font-family:var(--mono);font-size:11px;color:var(--warn);text-align:center;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:8px;letter-spacing:0.04em";
+        warn.textContent = "\u26a0 plan data is " + ageDays + " days old — prices may not have been available yet";
+        document.querySelector(".shell").insertBefore(warn, document.getElementById("profiles"));
+      }
         renderProfiles(plans);
         if (configText) {
           var parsed = parseConfigYaml(configText);
