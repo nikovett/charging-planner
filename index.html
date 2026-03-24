@@ -723,8 +723,7 @@ function renderScheduleFromYaml(yaml) {
   let inSchedule = false;
   let currentEntry = null;
 
-  for (const raw of yaml.split("
-")) {
+  for (const raw of yaml.split("\n")) {
     const line = raw.trimEnd();
     const indent = line.length - line.trimStart().length;
 
