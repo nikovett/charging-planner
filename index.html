@@ -136,15 +136,19 @@
   .flip-card-back {
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%;
+    box-sizing: border-box;
     transform: rotateY(180deg);
     overflow-y: auto;
     visibility: hidden;
+    background: var(--bg2);
   }
   .flip-card.flipped .flip-card-back {
     visibility: visible;
   }
   .flip-card-back-inner {
     padding: 20px;
+    overflow: hidden;
   }
   .flip-hint {
     font-family: var(--mono);
@@ -367,6 +371,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
   }
   .day-cell:last-child { border-right: none; }
   .day-cell.has-window {
@@ -927,7 +932,7 @@ function renderBackFace(profileName) {
     return '<div class="day-cell has-window"><span class="cell-text">' + entry.start + '<br>' + entry.end + '</span></div>';
   }).join("");
 
-  var schedule = '<div style="margin-top:20px">'
+  var schedule = '<div style="margin-top:20px;overflow:hidden">'
     + '<div class="back-title" style="margin-bottom:8px">weekly schedule</div>'
     + '<div class="schedule-grid">'
     + '<div class="schedule-header"><div class="day-label"></div>' + schedHeaders + '</div>'
