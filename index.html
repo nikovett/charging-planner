@@ -265,24 +265,6 @@
   }
   .market-bar-labels .plan-label { color: var(--accent); }
 
-  /* ── Trigger button ── */
-  .actions { margin-bottom: 32px; }
-  .btn {
-    font-family: var(--mono);
-    font-size: 12px;
-    letter-spacing: 0.06em;
-    padding: 10px 20px;
-    background: transparent;
-    border: 1px solid var(--border2);
-    color: var(--text);
-    cursor: pointer;
-    border-radius: 2px;
-    transition: border-color 0.15s, color 0.15s;
-  }
-  .btn:hover { border-color: var(--accent); color: var(--accent); }
-  .btn.primary { border-color: var(--accent); color: var(--accent); }
-  .btn.primary:hover { background: var(--accent); color: var(--bg); }
-
   /* ── Config view ── */
   .config-section { margin-bottom: 40px; }
   .schedule-grid {
@@ -401,12 +383,6 @@
     <div class="loading">loading plans…</div>
   </div>
 
-  <!-- Actions -->
-  <div class="actions">
-    <button class="btn primary" onclick="triggerRun()">↻ trigger run</button>
-    <button class="btn" onclick="loadDemo()" style="margin-left:8px">load demo data</button>
-  </div>
-
   <!-- Config -->
   <div class="config-section">
     <div class="section-label">weekly schedule</div>
@@ -423,8 +399,7 @@
 </div>
 
 <script>
-// ── Demo data (real plan JSONs from the project) ──────────────────────────
-
+// ── Demo data ─────────────────────────────────────────────────────────────
 const DEMO_PLANS = [
   {
     version: 1, date: "2026-03-22", area: "FI",
@@ -432,7 +407,7 @@ const DEMO_PLANS = [
     price_stats: { min_cents_kwh: 0.20, max_cents_kwh: 1.878, avg_cents_kwh: 0.9816 },
     required_minutes: 120, total_minutes: 120,
     avg_price_cents_kwh: 0.2319,
-    preferred_window_start: "any", preferred_window_end: "any",
+    preferred_window_start: "22:00", preferred_window_end: "06:30",
     windows: [{ start: "14:15", end: "16:15", duration_minutes: 120, avg_price_cents_kwh: 0.2319 }],
   },
   {
@@ -460,28 +435,17 @@ const DEMO_PLANS = [
 
 const DEMO_CONFIG = {
   profiles: [
-    {
-      name: "topup",
-      schedule: [
-        { days: ["monday","tuesday","wednesday","thursday","friday"], start: "22:00", end: "06:30" },
-        { days: ["saturday","sunday"], start: "any", end: "any" },
-      ]
-    },
-    {
-      name: "overnight",
-      schedule: []
-    },
-    {
-      name: "optimal",
-      schedule: []
-    }
+    { name: "topup", schedule: [
+      { days: ["monday","tuesday","wednesday","thursday","friday"], start: "22:00", end: "06:30" },
+      { days: ["saturday","sunday"], start: "any", end: "any" },
+    ]},
+    { name: "overnight", schedule: [] },
+    { name: "optimal", schedule: [] }
   ]
 };
 
-// ── Rendering ─────────────────────────────────────────────────────────────
-
+// ── Helpers ───────────────────────────────────────────────────────────────
 function hhmm(str) {
-  // parse "HH:MM" → minutes since midnight
   if (!str || str === "any") return null;
   const [h, m] = str.split(":").map(Number);
   return h * 60 + m;
@@ -490,17 +454,17 @@ function hhmm(str) {
 function fmtDuration(minutes) {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
-  return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2,"0")}m`;
+  return m === 0 ? h + "h" : h + "h" + String(m).padStart(2, "0") + "m";
 }
 
 function savings(plan) {
   const avg = plan.price_stats.avg_cents_kwh;
   if (!avg) return null;
-  return ((1 - plan.avg_price_cents_kwh / avg) * 100);
+  return (1 - plan.avg_price_cents_kwh / avg) * 100;
 }
 
+// ── Rendering ─────────────────────────────────────────────────────────────
 function renderTimeline(plan) {
-  // 24-hour timeline showing the preferred window and scheduled slots
   const totalMins = 24 * 60;
   const ws = hhmm(plan.preferred_window_start);
   const we = hhmm(plan.preferred_window_end);
@@ -511,37 +475,34 @@ function renderTimeline(plan) {
     if (we > ws) {
       const l = (ws / totalMins * 100).toFixed(2);
       const w = ((we - ws) / totalMins * 100).toFixed(2);
-      windowHTML = `<div class="timeline-window" style="left:${l}%;width:${w}%"></div>`;
+      windowHTML = '<div class="timeline-window" style="left:' + l + '%;width:' + w + '%"></div>';
     } else {
-      // overnight: two segments
       const w1 = ((totalMins - ws) / totalMins * 100).toFixed(2);
       const w2 = (we / totalMins * 100).toFixed(2);
-      windowHTML = `<div class="timeline-window" style="left:${(ws/totalMins*100).toFixed(2)}%;width:${w1}%"></div>
-                    <div class="timeline-window" style="left:0%;width:${w2}%"></div>`;
+      windowHTML = '<div class="timeline-window" style="left:' + (ws/totalMins*100).toFixed(2) + '%;width:' + w1 + '%"></div>'
+                 + '<div class="timeline-window" style="left:0%;width:' + w2 + '%"></div>';
     }
   }
 
-  const slotsHTML = plan.windows.map(w => {
+  const slotsHTML = plan.windows.map(function(w) {
     const s = hhmm(w.start);
     const e = hhmm(w.end);
     if (s === null || e === null) return "";
     const dur = e > s ? e - s : totalMins - s + e;
     const l = (s / totalMins * 100).toFixed(2);
-    const wPct = (dur / totalMins * 100).toFixed(2);
-    return `<div class="timeline-slot" style="left:${l}%;width:${wPct}%" title="${w.start}–${w.end} @ ${w.avg_price_cents_kwh.toFixed(2)} c€/kWh"></div>`;
+    const wp = (dur / totalMins * 100).toFixed(2);
+    return '<div class="timeline-slot" style="left:' + l + '%;width:' + wp + '%" title="' + w.start + '\u2013' + w.end + ' @ ' + w.avg_price_cents_kwh.toFixed(2) + ' c\u20ac/kWh"></div>';
   }).join("");
 
-  const ticks = [0,6,12,18,24].map(h => `<span class="tick">${String(h).padStart(2,"0")}:00</span>`).join("");
+  const ticks = [0,6,12,18,24].map(function(h) {
+    return '<span class="tick">' + String(h).padStart(2,"0") + ":00</span>";
+  }).join("");
 
-  return `
-    <div class="timeline-wrap">
-      <div class="timeline-label">24h timeline</div>
-      <div class="timeline">
-        ${windowHTML}
-        ${slotsHTML}
-      </div>
-      <div class="timeline-ticks">${ticks}</div>
-    </div>`;
+  return '<div class="timeline-wrap">'
+       + '<div class="timeline-label">24h timeline</div>'
+       + '<div class="timeline">' + windowHTML + slotsHTML + '</div>'
+       + '<div class="timeline-ticks">' + ticks + '</div>'
+       + '</div>';
 }
 
 function renderMarketBar(plan) {
@@ -550,71 +511,56 @@ function renderMarketBar(plan) {
   const avgPct = range > 0 ? ((ps.avg_cents_kwh - ps.min_cents_kwh) / range * 100).toFixed(1) : 50;
   const planPct = range > 0 ? ((plan.avg_price_cents_kwh - ps.min_cents_kwh) / range * 100).toFixed(1) : 50;
   const sav = savings(plan);
-  const savStr = sav !== null
-    ? (sav > 0 ? `↓${sav.toFixed(0)}%` : `↑${Math.abs(sav).toFixed(0)}%`)
-    : "";
+  const savStr = sav !== null ? (sav > 0 ? "\u2193" + sav.toFixed(0) + "%" : "\u2191" + Math.abs(sav).toFixed(0) + "%") : "";
   const savColor = sav !== null && sav > 0 ? "var(--accent)" : "var(--warn)";
 
-  return `
-    <div class="market-bar-wrap">
-      <div class="section-label" style="margin-bottom:4px">price vs market</div>
-      <div class="market-bar">
-        <div class="market-bar-fill"></div>
-        <div class="market-bar-avg" style="left:${avgPct}%" title="market avg ${ps.avg_cents_kwh.toFixed(2)}"></div>
-        <div class="market-bar-plan" style="left:${planPct}%" title="plan avg ${plan.avg_price_cents_kwh.toFixed(2)}"></div>
-      </div>
-      <div class="market-bar-labels">
-        <span>${ps.min_cents_kwh.toFixed(2)} c€/kWh</span>
-        <span class="plan-label" style="color:${savColor}">${plan.avg_price_cents_kwh.toFixed(2)} c€/kWh ${savStr}</span>
-        <span>${ps.max_cents_kwh.toFixed(2)} c€/kWh</span>
-      </div>
-    </div>`;
+  return '<div class="market-bar-wrap">'
+       + '<div class="section-label" style="margin-bottom:4px">price vs market</div>'
+       + '<div class="market-bar">'
+       + '<div class="market-bar-fill"></div>'
+       + '<div class="market-bar-avg" style="left:' + avgPct + '%" title="market avg ' + ps.avg_cents_kwh.toFixed(2) + '"></div>'
+       + '<div class="market-bar-plan" style="left:' + planPct + '%" title="plan avg ' + plan.avg_price_cents_kwh.toFixed(2) + '"></div>'
+       + '</div>'
+       + '<div class="market-bar-labels">'
+       + '<span>' + ps.min_cents_kwh.toFixed(2) + ' c\u20ac/kWh</span>'
+       + '<span class="plan-label" style="color:' + savColor + '">' + plan.avg_price_cents_kwh.toFixed(2) + ' c\u20ac/kWh ' + savStr + '</span>'
+       + '<span>' + ps.max_cents_kwh.toFixed(2) + ' c\u20ac/kWh</span>'
+       + '</div></div>';
 }
 
 function renderProfile(plan) {
   const sav = savings(plan);
-  const savStr = sav !== null
-    ? (sav > 0 ? `↓${sav.toFixed(0)}%` : `↑${Math.abs(sav).toFixed(0)}%`)
-    : "—";
+  const savStr = sav !== null ? (sav > 0 ? "\u2193" + sav.toFixed(0) + "%" : "\u2191" + Math.abs(sav).toFixed(0) + "%") : "\u2014";
   const savClass = sav !== null && sav > 0 ? "good" : "warn";
   const incomplete = plan.total_minutes < plan.required_minutes;
 
-  const windowsHTML = plan.windows.map(w =>
-    `<div class="window-row">
-      <span class="window-time">${w.start}–${w.end}</span>
-      <span class="window-price">${w.avg_price_cents_kwh.toFixed(2)} c€/kWh</span>
-      <span class="window-dur">${fmtDuration(w.duration_minutes)}</span>
-    </div>`
-  ).join("");
+  const windowsHTML = plan.windows.map(function(w) {
+    return '<div class="window-row">'
+         + '<span class="window-time">' + w.start + '\u2013' + w.end + '</span>'
+         + '<span class="window-price">' + w.avg_price_cents_kwh.toFixed(2) + ' c\u20ac/kWh</span>'
+         + '<span class="window-dur">' + fmtDuration(w.duration_minutes) + '</span>'
+         + '</div>';
+  }).join("");
 
-  return `
-    <div class="profile-card">
-      <div class="card-header">
-        <span class="profile-name">${plan.profile}</span>
-        <span class="profile-date">${plan.date} · ${plan.timezone}</span>
-      </div>
-      <div class="stats-row">
-        <div class="stat">
-          <div class="stat-label">scheduled</div>
-          <div class="stat-value ${incomplete ? 'warn' : ''}">${fmtDuration(plan.total_minutes)}<span class="stat-unit">of ${fmtDuration(plan.required_minutes)}</span></div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">avg price</div>
-          <div class="stat-value">${plan.avg_price_cents_kwh.toFixed(2)}<span class="stat-unit">c€/kWh</span></div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">vs market</div>
-          <div class="stat-value ${savClass}">${savStr}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">market avg</div>
-          <div class="stat-value">${plan.price_stats.avg_cents_kwh.toFixed(2)}<span class="stat-unit">c€/kWh</span></div>
-        </div>
-      </div>
-      ${renderTimeline(plan)}
-      <div class="windows-list">${windowsHTML}</div>
-      ${renderMarketBar(plan)}
-    </div>`;
+  return '<div class="profile-card">'
+       + '<div class="card-header">'
+       + '<span class="profile-name">' + plan.profile + '</span>'
+       + '<span class="profile-date">' + plan.date + ' \u00b7 ' + plan.timezone + '</span>'
+       + '</div>'
+       + '<div class="stats-row">'
+       + '<div class="stat"><div class="stat-label">scheduled</div>'
+       + '<div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
+       + '<div class="stat"><div class="stat-label">avg price</div>'
+       + '<div class="stat-value">' + plan.avg_price_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>'
+       + '<div class="stat"><div class="stat-label">vs market</div>'
+       + '<div class="stat-value ' + savClass + '">' + savStr + '</div></div>'
+       + '<div class="stat"><div class="stat-label">market avg</div>'
+       + '<div class="stat-value">' + plan.price_stats.avg_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>'
+       + '</div>'
+       + renderTimeline(plan)
+       + '<div class="windows-list">' + windowsHTML + '</div>'
+       + renderMarketBar(plan)
+       + '</div>';
 }
 
 function renderProfiles(plans) {
@@ -623,52 +569,77 @@ function renderProfiles(plans) {
   el.innerHTML = plans.map(renderProfile).join("");
 }
 
-// ── Config / schedule grid ─────────────────────────────────────────────────
-
-const DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
-const DAY_FULL = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+// ── Schedule grid ─────────────────────────────────────────────────────────
+const DAYS_SHORT = ["mon","tue","wed","thu","fri","sat","sun"];
+const DAYS_FULL  = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
 
 function renderScheduleGrid(config) {
   const el = document.getElementById("schedule-grid");
-  const today = new Date().toLocaleDateString("en", {weekday:"short"}).toLowerCase().slice(0,3);
+  const todayIdx = (new Date().getDay() + 6) % 7;
 
-  const headerCells = ["", ...DAYS].map((d,i) =>
-    `<div class="day-label ${d === today ? 'today' : ''}">${d}</div>`
-  ).join("");
-
-  const rows = config.profiles.map(profile => {
-    const cells = DAY_FULL.map(day => {
-      const entry = profile.schedule.find(e => e.days.includes(day));
-      if (!entry) return `<div class="day-cell"><span class="cell-text" style="color:var(--dim)">—</span></div>`;
-      if (entry.start === "any") return `<div class="day-cell any-window"><span class="cell-text any">any</span></div>`;
-      return `<div class="day-cell has-window"><span class="cell-text">${entry.start}<br>${entry.end}</span></div>`;
-    }).join("");
-
-    return `<div class="schedule-row">
-      <div class="row-label">${profile.name}</div>
-      ${cells}
-    </div>`;
+  const headerCells = DAYS_SHORT.map(function(d, i) {
+    return '<div class="day-label' + (i === todayIdx ? ' today' : '') + '">' + d + '</div>';
   }).join("");
 
-  el.innerHTML = `
-    <div class="schedule-header">
-      <div class="day-label"></div>
-      ${DAYS.map((d,i) => `<div class="day-label ${DAYS[new Date().getDay()-1] === d ? 'today' : ''}">${d}</div>`).join("")}
-    </div>
-    ${rows}`;
+  const rows = config.profiles.map(function(profile) {
+    const cells = DAYS_FULL.map(function(day) {
+      const entry = profile.schedule.find(function(e) { return e.days.includes(day); });
+      if (!entry) return '<div class="day-cell"><span class="cell-text" style="color:var(--dim)">\u2014</span></div>';
+      if (entry.start === "any") return '<div class="day-cell any-window"><span class="cell-text any">any</span></div>';
+      return '<div class="day-cell has-window"><span class="cell-text">' + entry.start + '<br>' + entry.end + '</span></div>';
+    }).join("");
+    return '<div class="schedule-row"><div class="row-label">' + profile.name + '</div>' + cells + '</div>';
+  }).join("");
+
+  el.innerHTML = '<div class="schedule-header"><div class="day-label"></div>' + headerCells + '</div>' + rows;
+}
+
+// ── Config YAML parser ────────────────────────────────────────────────────
+function renderScheduleFromYaml(yaml) {
+  const profiles = [];
+  let currentProfile = null;
+  let inSchedule = false;
+  let currentEntry = null;
+
+  const lines = yaml.split("\n");
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li];
+    const line = raw.replace(/\s+$/, "");
+    const indent = line.length - line.replace(/^\s+/, "").length;
+    const trimmed = line.trim();
+
+    if (indent === 2 && trimmed.startsWith("- name:")) {
+      currentProfile = { name: trimmed.split("name:")[1].trim(), schedule: [] };
+      profiles.push(currentProfile);
+      inSchedule = false;
+    } else if (indent === 4 && trimmed === "schedule:") {
+      inSchedule = true;
+    } else if (inSchedule && indent === 6 && trimmed.startsWith("- days:")) {
+      const daysStr = trimmed.split("days:")[1].trim().replace(/[\[\]]/g, "");
+      currentEntry = { days: daysStr.split(",").map(function(d) { return d.trim(); }), start: null, end: null };
+      if (currentProfile) currentProfile.schedule.push(currentEntry);
+    } else if (inSchedule && currentEntry && indent === 8) {
+      if (trimmed.includes("preferred_window_start:")) {
+        currentEntry.start = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "");
+      } else if (trimmed.includes("preferred_window_end:")) {
+        currentEntry.end = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g, "");
+      }
+    } else if (indent <= 2 && trimmed && !trimmed.startsWith("#") && currentProfile && inSchedule) {
+      if (!trimmed.startsWith("-") && !trimmed.includes("schedule:")) inSchedule = false;
+    }
+  }
+
+  if (profiles.length) renderScheduleGrid({ profiles: profiles });
+  else renderScheduleGrid(DEMO_CONFIG);
 }
 
 // ── Data loading ──────────────────────────────────────────────────────────
-// Plans are committed to data/ by GitHub Actions after each successful run.
-// config.yaml is fetched directly from the repo (works for public repos).
-
-// Profile names are discovered from config.yaml at runtime.
-// Fallback list used if config can't be parsed.
 const FALLBACK_PLAN_NAMES = ["topup", "overnight", "optimal"];
 
-async function fetchWithTimeout(url, ms=4000) {
+async function fetchWithTimeout(url, ms) {
+  ms = ms || 4000;
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), ms);
+  const id = setTimeout(function() { controller.abort(); }, ms);
   try {
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(id);
@@ -680,80 +651,40 @@ async function fetchWithTimeout(url, ms=4000) {
 }
 
 async function loadFromRepo() {
-  // Try to discover profile names from config.yaml first
   let names = FALLBACK_PLAN_NAMES;
   let configText = null;
+
   try {
     const res = await fetchWithTimeout("config.yaml");
     if (res.ok) {
       configText = await res.text();
-      const found = [...configText.matchAll(/^  - name:\s*(\S+)/gm)].map(m => m[1]);
+      const matches = configText.match(/^  - name:\s*(\S+)/gm) || [];
+      const found = matches.map(function(m) { return m.replace(/^  - name:\s*/, ""); });
       if (found.length) names = found;
     }
   } catch(e) {}
 
-  // Fetch plans
   const plans = [];
-  for (const name of names) {
+  for (let i = 0; i < names.length; i++) {
     try {
-      const res = await fetchWithTimeout(`data/plan-${name}.json`);
+      const res = await fetchWithTimeout("data/plan-" + names[i] + ".json");
       if (res.ok) plans.push(await res.json());
     } catch(e) {}
   }
 
   if (plans.length) {
-    const latest = plans.reduce((a, b) => a.date > b.date ? a : b);
+    const latest = plans.reduce(function(a, b) { return a.date > b.date ? a : b; });
     document.getElementById("run-time").textContent = latest.date;
     renderProfiles(plans);
+    if (configText) renderScheduleFromYaml(configText);
+    else renderScheduleGrid(DEMO_CONFIG);
   } else {
     loadDemo();
-    return;
   }
-
-  // Render schedule grid from config
-  if (configText) renderScheduleFromYaml(configText);
-  else renderScheduleGrid(DEMO_CONFIG);
-}
-
-function renderScheduleFromYaml(yaml) {
-  // Simple YAML parser for the schedule block — just enough for our config structure
-  const profiles = [];
-  let currentProfile = null;
-  let currentSchedule = null;
-  let inSchedule = false;
-  let currentEntry = null;
-
-  for (const raw of yaml.split("\n")) {
-    const line = raw.trimEnd();
-    const indent = line.length - line.trimStart().length;
-
-    if (indent === 2 && line.trim().startsWith("- name:")) {
-      currentProfile = { name: line.split("name:")[1].trim(), schedule: [] };
-      profiles.push(currentProfile);
-      inSchedule = false;
-    } else if (indent === 4 && line.trim() === "schedule:") {
-      inSchedule = true;
-    } else if (inSchedule && indent === 6 && line.trim().startsWith("- days:")) {
-      const daysStr = line.split("days:")[1].trim().replace(/[\[\]]/g,"");
-      currentEntry = { days: daysStr.split(",").map(d => d.trim()), start: null, end: null };
-      currentProfile.schedule.push(currentEntry);
-    } else if (inSchedule && currentEntry && indent === 8) {
-      if (line.includes("preferred_window_start:")) {
-        currentEntry.start = line.split(":").slice(1).join(":").trim().replace(/['"]/g,"");
-      } else if (line.includes("preferred_window_end:")) {
-        currentEntry.end = line.split(":").slice(1).join(":").trim().replace(/['"]/g,"");
-      }
-    } else if (indent <= 2 && line.trim() && !line.trim().startsWith("#") && currentProfile && inSchedule) {
-      if (!line.trim().startsWith("-") && !line.includes("schedule:")) inSchedule = false;
-    }
-  }
-
-  if (profiles.length) renderScheduleGrid({ profiles });
-  else renderScheduleGrid(DEMO_CONFIG);
 }
 
 function triggerRun() {
-  alert("To trigger a manual run: go to your GitHub repo → Actions → Charging Planner → Run workflow.");
+  alert("To trigger a manual run: go to your GitHub repo \u2192 Actions \u2192 Charging Planner \u2192 Run workflow.");
 }
 
 function loadDemo() {
@@ -762,7 +693,6 @@ function loadDemo() {
   renderScheduleGrid(DEMO_CONFIG);
 }
 
-// ── Init ───────────────────────────────────────────────────────────────────
 loadFromRepo();
 </script>
 </body>
