@@ -326,7 +326,7 @@
   /* ── Config view ── */
   .config-section { margin-bottom: 40px; }
   .schedule-grid {
-    background: var(--bg2);
+    background: var(--border);  /* shows through gaps as dividers */
     border: 1px solid var(--border);
     border-radius: 2px;
     overflow: hidden;
@@ -337,6 +337,8 @@
     display: grid;
     grid-template-columns: minmax(40px, 64px) repeat(7, 1fr);
     border-bottom: 1px solid var(--border);
+    gap: 1px;
+    background: var(--border);
   }
   .day-label {
     padding: 8px 0;
@@ -345,13 +347,14 @@
     color: var(--muted);
     text-align: center;
     letter-spacing: 0.06em;
-    border-right: 1px solid var(--border);
+    background: var(--bg2);
   }
-  .day-label:last-child { border-right: none; }
   .day-label.today { color: var(--accent); }
   .schedule-row {
     display: grid;
     grid-template-columns: minmax(40px, 64px) repeat(7, 1fr);
+    gap: 1px;
+    background: var(--border);
     border-bottom: 1px solid var(--border);
     min-height: 28px;
   }
@@ -361,19 +364,18 @@
     font-family: var(--mono);
     font-size: 10px;
     color: var(--muted);
-    border-right: 1px solid var(--border);
     display: flex;
     align-items: center;
+    background: var(--bg2);
   }
   .day-cell {
-    border-right: 1px solid var(--border);
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
+    background: var(--bg2);
     overflow: hidden;
   }
-  .day-cell:last-child { border-right: none; }
   .day-cell.has-window {
     background: rgba(0, 212, 160, 0.08);
   }
