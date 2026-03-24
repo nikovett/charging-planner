@@ -1,48 +1,64 @@
 {
   "version": 1,
-  "date": "2026-03-23",
+  "date": "2026-03-24",
   "area": "FI",
   "price_source": "ENTSO-E",
   "timezone": "Europe/Helsinki",
   "utc_offset_hours": 2,
   "price_stats": {
     "min_cents_kwh": 0.345,
-    "max_cents_kwh": 1.761,
-    "avg_cents_kwh": 0.9046
+    "max_cents_kwh": 3.0,
+    "avg_cents_kwh": 1.1653
   },
   "required_minutes": 120,
   "total_minutes": 120,
-  "avg_price_cents_kwh": 0.8875,
-  "preferred_window_start": "22:00",
+  "avg_price_cents_kwh": 0.3805,
+  "preferred_window_start": "21:00",
   "preferred_window_end": "06:30",
   "windows": [
     {
-      "start": "00:00",
-      "end": "02:00",
-      "duration_minutes": 120,
-      "avg_price_cents_kwh": 0.8875
+      "start": "01:30",
+      "end": "03:00",
+      "duration_minutes": 90,
+      "avg_price_cents_kwh": 0.3787
+    },
+    {
+      "start": "03:45",
+      "end": "04:15",
+      "duration_minutes": 30,
+      "avg_price_cents_kwh": 0.386
     }
   ],
   "window_starts_utc": [
-    "2026-03-23T22:00:00+00:00"
+    "2026-03-24T23:30:00+00:00",
+    "2026-03-25T01:45:00+00:00"
   ],
   "window_ends_utc": [
-    "2026-03-24T00:00:00+00:00"
+    "2026-03-25T01:00:00+00:00",
+    "2026-03-25T02:15:00+00:00"
   ],
   "ocpp_charging_profile": {
     "chargingProfileId": 1,
     "stackLevel": 0,
     "chargingProfilePurpose": "TxDefaultProfile",
     "chargingProfileKind": "Absolute",
-    "validFrom": "2026-03-23T22:00:00+00:00",
-    "validTo": "2026-03-24T00:00:00+00:00",
+    "validFrom": "2026-03-24T23:30:00+00:00",
+    "validTo": "2026-03-25T02:15:00+00:00",
     "chargingSchedule": {
-      "startSchedule": "2026-03-23T22:00:00+00:00",
-      "duration": 7200,
+      "startSchedule": "2026-03-24T23:30:00+00:00",
+      "duration": 9900,
       "chargingRateUnit": "W",
       "chargingSchedulePeriod": [
         {
           "startPeriod": 0,
+          "limit": 11000.0
+        },
+        {
+          "startPeriod": 5400,
+          "limit": 0.0
+        },
+        {
+          "startPeriod": 8100,
           "limit": 11000.0
         }
       ]

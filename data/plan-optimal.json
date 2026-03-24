@@ -1,43 +1,43 @@
 {
   "version": 1,
-  "date": "2026-03-23",
+  "date": "2026-03-24",
   "area": "FI",
   "price_source": "ENTSO-E",
   "timezone": "Europe/Helsinki",
   "utc_offset_hours": 2,
   "price_stats": {
     "min_cents_kwh": 0.345,
-    "max_cents_kwh": 1.761,
-    "avg_cents_kwh": 0.9046
+    "max_cents_kwh": 3.0,
+    "avg_cents_kwh": 1.1653
   },
   "required_minutes": 270,
   "total_minutes": 270,
-  "avg_price_cents_kwh": 0.3917,
+  "avg_price_cents_kwh": 0.3875,
   "preferred_window_start": "any",
   "preferred_window_end": "any",
   "windows": [
     {
-      "start": "12:15",
-      "end": "16:45",
+      "start": "00:15",
+      "end": "04:45",
       "duration_minutes": 270,
-      "avg_price_cents_kwh": 0.3917
+      "avg_price_cents_kwh": 0.3875
     }
   ],
   "window_starts_utc": [
-    "2026-03-24T10:15:00+00:00"
+    "2026-03-24T22:15:00+00:00"
   ],
   "window_ends_utc": [
-    "2026-03-24T14:45:00+00:00"
+    "2026-03-25T02:45:00+00:00"
   ],
   "ocpp_charging_profile": {
     "chargingProfileId": 1,
     "stackLevel": 0,
     "chargingProfilePurpose": "TxDefaultProfile",
     "chargingProfileKind": "Absolute",
-    "validFrom": "2026-03-24T10:15:00+00:00",
-    "validTo": "2026-03-24T14:45:00+00:00",
+    "validFrom": "2026-03-24T22:15:00+00:00",
+    "validTo": "2026-03-25T02:45:00+00:00",
     "chargingSchedule": {
-      "startSchedule": "2026-03-24T10:15:00+00:00",
+      "startSchedule": "2026-03-24T22:15:00+00:00",
       "duration": 16200,
       "chargingRateUnit": "W",
       "chargingSchedulePeriod": [
