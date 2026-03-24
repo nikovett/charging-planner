@@ -64,19 +64,6 @@
     color: var(--muted);
     text-align: right;
   }
-  .status-dot {
-    display: inline-block;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--accent);
-    margin-right: 6px;
-    animation: pulse 2s ease-in-out infinite;
-  }
-  @keyframes pulse {
-    0%,100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-
   /* ── Section label ── */
   .section-label {
     font-family: var(--mono);
@@ -372,7 +359,6 @@
   <header>
     <div class="logo">charging<span>-</span>planner</div>
     <div class="header-meta">
-      <div><span class="status-dot"></span>demo mode</div>
       <div id="run-time">—</div>
     </div>
   </header>
