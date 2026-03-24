@@ -621,8 +621,11 @@ function renderTimeline(plan) {
   // Compute label positions for min/max
   var minLabelPct = ((minIdx + 0.5) / n * 100).toFixed(1);
   var maxLabelPct = ((maxIdx + 0.5) / n * 100).toFixed(1);
-  dateLabelHTML += '<span style="position:absolute;left:' + minLabelPct + '%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;bottom:0">' + visible[minIdx].price_cents_kwh.toFixed(2) + '</span>';
-  dateLabelHTML += '<span style="position:absolute;left:' + maxLabelPct + '%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap;bottom:0">' + visible[maxIdx].price_cents_kwh.toFixed(2) + '</span>';
+  // Min/max labels rendered as overlay above histogram bars
+  var minMaxHTML = '<div style="position:absolute;top:-14px;left:0;right:0;pointer-events:none">'
+    + '<span style="position:absolute;left:' + minLabelPct + '%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap">' + visible[minIdx].price_cents_kwh.toFixed(2) + '</span>'
+    + '<span style="position:absolute;left:' + maxLabelPct + '%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap">' + visible[maxIdx].price_cents_kwh.toFixed(2) + '</span>'
+    + '</div>';
 
   var barsHTML = visible.map(function(s, i) {
     var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 70)).toFixed(1);
@@ -671,12 +674,13 @@ function renderTimeline(plan) {
        + '<div style="position:relative;height:24px;margin-bottom:4px">'
        + '<span style="font-family:var(--mono);font-size:10px;letter-spacing:0.08em;color:var(--muted);text-transform:uppercase;line-height:16px">price histogram</span>'
        + dateLabelHTML + '</div>'
+       + '<div style="position:relative">' + minMaxHTML
        + '<div style="position:relative;width:100%;height:90px;background:var(--bg3);border:1px solid var(--border);border-radius:2px;overflow:hidden;box-sizing:border-box;display:flex;align-items:flex-end">'
        + barsHTML
        + midnightHTML
        + '</div>'
        + '<div class="timeline-ticks" style="position:relative;height:16px">' + tickHTML + '</div>'
-       + '</div>';
+       + '</div></div>';
 }
 
 
