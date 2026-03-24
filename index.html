@@ -116,6 +116,8 @@
     position: relative;
     transition: transform 0.55s cubic-bezier(0.4, 0.2, 0.2, 1);
     transform-style: preserve-3d;
+    border: 1px solid var(--border);
+    border-radius: 2px;
   }
   .flip-card.flipped .flip-card-inner {
     transform: rotateY(180deg);
@@ -125,7 +127,6 @@
     backface-visibility: hidden;
     -webkit-backface-visibility: hidden;
     background: var(--bg2);
-    border: 1px solid var(--border);
     border-radius: 2px;
     overflow: hidden;
   }
@@ -319,6 +320,8 @@
     border: 1px solid var(--border);
     border-radius: 2px;
     overflow: hidden;
+    width: 100%;
+    box-sizing: border-box;
   }
   .schedule-header {
     display: grid;
