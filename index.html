@@ -495,8 +495,9 @@ function renderTimeline(plan) {
       // m is minutes since epoch in local time (UTC + offset).
       // Convert to UTC ms for Date construction.
       var mUtcMs = (m - utcOffset) * 60000;
-      var dateBefore = new Date(mUtcMs - 60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
-      var dateAfter  = new Date(mUtcMs).toLocaleDateString("en",          { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
+      // Format in local time by adding utcOffset before formatting as UTC
+      var dateBefore = new Date(mUtcMs - 60000 + utcOffset*60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
+      var dateAfter  = new Date(mUtcMs         + utcOffset*60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
       midnightHTML += '<div style="position:absolute;left:' + mp + '%;top:0;bottom:0;width:1px;background:var(--border2)"></div>'
                     + '<span style="position:absolute;left:' + mp + '%;top:2px;font-family:var(--mono);font-size:8px;color:var(--dim);transform:translateX(-100%);padding-right:4px;white-space:nowrap">' + dateBefore + '</span>'
                     + '<span style="position:absolute;left:' + mp + '%;top:2px;font-family:var(--mono);font-size:8px;color:var(--dim);padding-left:4px;white-space:nowrap">' + dateAfter + '</span>';
