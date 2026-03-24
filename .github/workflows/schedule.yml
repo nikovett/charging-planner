@@ -46,14 +46,6 @@ jobs:
           OCPP_ENDPOINT_URL: ${{ secrets.OCPP_ENDPOINT_URL }}
         run: python delivery/deliver.py plan-*.json --config config.yaml
 
-      - name: Upload plan artifact
-        if: steps.plan.outputs.prices_available == 'true'
-        uses: actions/upload-artifact@v6
-        with:
-          name: charging-plan-${{ steps.plan.outputs.plan_date }}
-          path: plan-*.json
-          retention-days: 2
-
       - name: Publish plans to data/ for dashboard
         if: steps.plan.outputs.prices_available == 'true'
         run: |
