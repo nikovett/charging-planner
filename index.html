@@ -137,8 +137,14 @@
     position: absolute;
     top: 0; left: 0; right: 0; bottom: 0;
     transform: rotateY(180deg);
-    padding: 20px;
     overflow-y: auto;
+    visibility: hidden;
+  }
+  .flip-card.flipped .flip-card-back {
+    visibility: visible;
+  }
+  .flip-card-back-inner {
+    padding: 20px;
   }
   .flip-hint {
     font-family: var(--mono);
@@ -928,10 +934,10 @@ function renderBackFace(profileName) {
     + '<div class="schedule-row"><div class="row-label">' + profileName + '</div>' + schedCells + '</div>'
     + '</div></div>';
 
-  return '<div class="back-title">' + profileName + ' — configuration</div>'
+  return '<div class="flip-card-back-inner"><div class="back-title">' + profileName + ' — configuration</div>'
        + table
        + schedule
-       + '<div class="flip-hint" style="position:static;margin-top:16px;display:block;text-align:right">← tap to go back</div>';
+       + '<div class="flip-hint" style="position:static;margin-top:16px;display:block;text-align:right">← tap to go back</div></div>';
 }
 
 function flipCard(el) {
