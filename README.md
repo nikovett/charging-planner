@@ -241,7 +241,7 @@ Day-ahead prices are published at approximately 12:00 UTC each day. If the scrip
 
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 
-Each successful run writes a formatted markdown summary to the GitHub Actions job view and uploads a run artifact containing all `plan-{name}.json` files. It also commits the plan JSONs to `data/` in the repository so the GitHub Pages dashboard can fetch them without authentication.
+Each successful run writes a formatted markdown summary to the GitHub Actions job view and commits the plan JSONs to `data/` in the repository so the GitHub Pages dashboard can fetch them without authentication.
 
 ---
 

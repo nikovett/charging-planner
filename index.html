@@ -322,7 +322,7 @@
   }
   .schedule-header {
     display: grid;
-    grid-template-columns: 64px repeat(7, 1fr);
+    grid-template-columns: minmax(40px, 64px) repeat(7, 1fr);
     border-bottom: 1px solid var(--border);
   }
   .day-label {
@@ -338,7 +338,7 @@
   .day-label.today { color: var(--accent); }
   .schedule-row {
     display: grid;
-    grid-template-columns: 64px repeat(7, 1fr);
+    grid-template-columns: minmax(40px, 64px) repeat(7, 1fr);
     border-bottom: 1px solid var(--border);
     min-height: 28px;
   }
@@ -886,14 +886,13 @@ function renderBackFace(profileName) {
     ["delivery",      cfg.handlers && cfg.handlers.length ? (cfg.handlers.filter(function(h){return h.enabled;}).length > 0 ? '<span class="pill on">✓ configured</span>' : '<span class="pill">disabled</span>') : "—"],
   ];
   var cols = cfgFields.length;
-  var table = '<div style="display:grid;grid-template-columns:repeat(' + cols + ',1fr);border-bottom:1px solid var(--border)">'
-    + cfgFields.map(function(r) {
-        return '<div style="font-family:var(--mono);font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);padding:6px 8px;border-right:1px solid var(--border)">' + r[0] + '</div>';
-      }).join("")
-    + '</div>'
-    + '<div style="display:grid;grid-template-columns:repeat(' + cols + ',1fr)">'
-    + cfgFields.map(function(r) {
-        return '<div style="font-family:var(--mono);font-size:11px;color:var(--text);padding:8px 8px;border-right:1px solid var(--border)">' + r[1] + '</div>';
+  var table = '<div style="display:grid;grid-template-columns:repeat(' + cols + ',1fr)">'
+    + cfgFields.map(function(r, i) {
+        var borderR = i < cols - 1 ? "border-right:1px solid var(--border);" : "";
+        return '<div style="' + borderR + 'border-bottom:1px solid var(--border)">'
+             + '<div style="font-family:var(--mono);font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);padding:6px 8px">' + r[0] + '</div>'
+             + '<div style="font-family:var(--mono);font-size:11px;color:var(--text);padding:4px 8px 8px">' + r[1] + '</div>'
+             + '</div>';
       }).join("")
     + '</div>';
 
