@@ -553,6 +553,8 @@ const DEMO_CONFIG = {
 
 // Profile config map populated when config.yaml is loaded
 var PROFILE_CONFIG = {};
+// Plan data map populated when JSONs are loaded
+var PLAN_DATA = {};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function hhmm(str) {
@@ -797,12 +799,14 @@ function renderProfile(plan) {
        + '<div class="stats-row">'
        + '<div class="stat"><div class="stat-label">scheduled</div><div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
        + '<div class="stat"><div class="stat-label">@ avg price</div><div class="stat-value">' + plan.avg_price_cents_kwh.toFixed(2) + '<span class="stat-unit">c€/kWh</span></div></div>'
-       + (plan.avg_optimal_price_cents_kwh !== undefined
-          ? '<div class="stat"><div class="stat-label">vs optimal</div><div class="stat-value ' + (plan.avg_price_cents_kwh <= plan.avg_optimal_price_cents_kwh * 1.02 ? 'good' : 'warn') + '">'
-            + (plan.avg_price_cents_kwh <= plan.avg_optimal_price_cents_kwh
-              ? '\u2193' + ((1 - plan.avg_price_cents_kwh / plan.avg_optimal_price_cents_kwh) * 100).toFixed(0) + '%'
-              : '\u2191' + ((plan.avg_price_cents_kwh / plan.avg_optimal_price_cents_kwh - 1) * 100).toFixed(0) + '%')
-            + '</div></div>'
+       + (plan.avg_optimal_price_cents_kwh !== undefined && plan.price_slots
+          ? (function() {
+              var chargingSlots = plan.price_slots.filter(function(s) { return s.charging; });
+              var matchingSlots = plan.price_slots.filter(function(s) { return s.charging && s.optimal; });
+              var overlapPct = chargingSlots.length > 0 ? Math.round(matchingSlots.length / chargingSlots.length * 100) : 0;
+              var cls = overlapPct === 100 ? 'good' : overlapPct >= 75 ? '' : 'warn';
+              return '<div class="stat"><div class="stat-label">vs optimal</div><div class="stat-value ' + cls + '">' + overlapPct + '%</div></div>';
+            })()
           : '<div class="stat"><div class="stat-label">market avg</div><div class="stat-value">' + plan.price_stats.avg_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>')
        + '<div class="stat"><div class="stat-label">vs market</div><div class="stat-value ' + savClass + '">' + savStr + '</div></div>'
        + '</div>'
