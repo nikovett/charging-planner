@@ -654,7 +654,7 @@ function renderTimeline(plan) {
     }
     var nowPrice = nowSlot ? nowSlot.price_cents_kwh.toFixed(2) + " c\u20ac" : "";
     midnightHTML = '<div style="position:absolute;left:' + nowPct + '%;top:0;bottom:0;width:1px;background:var(--accent);opacity:0.8;z-index:2;pointer-events:none"></div>'
-                 + '<span style="position:absolute;left:' + nowPct + '%;top:3px;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;text-align:center;line-height:1.4">now<br>' + nowPrice + '</span>';
+                 + '<span style="position:absolute;left:' + nowPct + '%;top:3px;padding-left:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;line-height:1.4">now<br>' + nowPrice + '</span>';
   }
 
 
