@@ -642,23 +642,21 @@ function renderTimeline(plan) {
     return '<div title="' + tip + '" style="position:relative;display:inline-block;width:' + barW + ';height:' + h + '%;background:' + bg + ';' + border + 'margin-right:' + gapPx + 'px;vertical-align:bottom;box-sizing:border-box;border-radius:2px 2px 0 0">' + annotation + '</div>';
   }).join("");
 
-  // Midnight separator
-  var midnightHTML = "", dateLabelHTML = "";
-  var firstMidnight = Math.ceil(rangeStart / (24*60)) * (24*60);
-  for (var m = firstMidnight; m < rangeEnd; m += 24*60) {
-    if (m > rangeStart) {
-      var mp = ((m - rangeStart) / totalMins * 100).toFixed(2);
-      var mUtcMs = (m - utcOffset) * 60000;
-      var db = new Date(mUtcMs - 60000 + utcOffset*60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
-      var da = new Date(mUtcMs         + utcOffset*60000).toLocaleDateString("en", { weekday:"short", day:"numeric", month:"short", timeZone:"UTC" });
-      // Day numbers shown inside histogram at top, flanking the separator
-      var dbDay = new Date(mUtcMs - 60000 + utcOffset*60000).getUTCDate();
-      var daDay = new Date(mUtcMs         + utcOffset*60000).getUTCDate();
-      midnightHTML  += '<div style="position:absolute;left:' + mp + '%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.15);z-index:2;pointer-events:none"></div>'
-                     + '<span style="position:absolute;left:' + mp + '%;top:4px;transform:translateX(-100%);padding-right:4px;font-family:var(--mono);font-size:7px;color:var(--dim);white-space:nowrap;z-index:3">' + dbDay + '</span>'
-                     + '<span style="position:absolute;left:' + mp + '%;top:4px;padding-left:4px;font-family:var(--mono);font-size:7px;color:var(--dim);white-space:nowrap;z-index:3">' + daDay + '</span>';
+  // "Now" separator — current time position on histogram
+  var midnightHTML = "";
+  var nowMins = new Date().getTime() / 60000 + utcOffset;
+  if (nowMins >= rangeStart && nowMins < rangeEnd) {
+    var nowPct = ((nowMins - rangeStart) / totalMins * 100).toFixed(2);
+    var nowSlot = null;
+    for (var ni = 0; ni < visible.length; ni++) {
+      var slotMins = new Date(visible[ni].start_utc).getTime() / 60000 + utcOffset;
+      if (slotMins <= nowMins && nowMins < slotMins + 15) { nowSlot = visible[ni]; break; }
     }
+    var nowPrice = nowSlot ? nowSlot.price_cents_kwh.toFixed(2) + " c\u20ac" : "";
+    midnightHTML = '<div style="position:absolute;left:' + nowPct + '%;top:0;bottom:0;width:1px;background:var(--accent);opacity:0.8;z-index:2;pointer-events:none"></div>'
+                 + '<span style="position:absolute;left:' + nowPct + '%;top:3px;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;text-align:center;line-height:1.4">now<br>' + nowPrice + '</span>';
   }
+
 
   // Tick labels every 6h
   var tickHTML = "";
