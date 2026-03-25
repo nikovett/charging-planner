@@ -913,6 +913,32 @@ function parseConfigYaml(yaml) {
   return profiles.length ? { profiles: profiles } : null;
 }
 
+// ── Optimal histogram for back card ──────────────────────────────────────
+function renderOptimalHistogram(plan) {
+  var slots = plan.price_slots;
+  if (!slots || !slots.length) return "";
+  var minP = plan.price_stats ? plan.price_stats.min_cents_kwh : 0;
+  var maxP = plan.price_stats ? plan.price_stats.max_cents_kwh : 1;
+  var rangeP = maxP - minP || 1;
+  var n = slots.length;
+  var barW = "calc(" + (100/n).toFixed(4) + "% - 1px)";
+  var barsHTML = slots.map(function(s) {
+    var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 70)).toFixed(1);
+    var bg = s.optimal ? "var(--accent)" : "var(--dim)";
+    var border = s.optimal ? "border-top:1px solid var(--accent2);" : "border-top:1px solid var(--border2);";
+    return '<div style="display:inline-block;width:' + barW + ';height:' + h + '%;background:' + bg + ';' + border + 'margin-right:1px;vertical-align:bottom;box-sizing:border-box;border-radius:2px 2px 0 0"></div>';
+  }).join("");
+  var optSlots = slots.filter(function(s) { return s.optimal; });
+  var optAvg = optSlots.length ? (optSlots.reduce(function(a,b){return a+b.price_cents_kwh;},0)/optSlots.length).toFixed(2) : null;
+  return '<div style="margin-top:16px">'
+       + '<div style="font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">optimal slots'
+       + (optAvg ? '<span style="float:right;color:var(--text);font-size:11px;text-transform:none;letter-spacing:0">' + optAvg + ' c\u20ac/kWh</span>' : '')
+       + '</div>'
+       + '<div style="position:relative;width:100%;height:50px;background:var(--bg3);border:1px solid var(--border);border-radius:2px;overflow:visible;box-sizing:border-box;display:flex;align-items:flex-end">'
+       + barsHTML
+       + '</div></div>';
+}
+
 // ── Flip card ────────────────────────────────────────────────────────────
 function renderBackFace(profileName) {
   var cfg = PROFILE_CONFIG[profileName] || {};
