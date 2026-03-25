@@ -1241,6 +1241,9 @@ class PlanParams:
     timezone_name:          str
     preferred_window_start: str
     preferred_window_end:   str
+    max_price_eur:          Optional[float] = None
+    min_slot_minutes:       int             = 30
+    continuous_only:        bool            = False
 
 
 def build_plan(p: PlanParams) -> dict:
@@ -1296,13 +1299,28 @@ def build_plan(p: PlanParams) -> dict:
     sel_prices = [s.price_eur_kwh for s in p.selected]
     overall_avg = (sum(sel_prices) / len(sel_prices) * 100) if sel_prices else 0.0
 
-    # Build price_slots — all available slots with charging flag for histogram
+    # Build price_slots — all available slots with charging and optimal flags
     selected_starts = {s.start for s in p.selected}
+
+    # Compute optimal slots: cheapest possible ignoring window constraints only.
+    # Respects continuous_only and min_slot_minutes so comparison is fair.
+    optimal_selected = select_charging_windows(
+        p.all_prices,
+        required_minutes=p.required_minutes,
+        continuous_only=p.continuous_only,
+        max_price=p.max_price_eur,
+        min_slot_minutes=p.min_slot_minutes,
+    )
+    optimal_starts = {s.start for s in optimal_selected}
+    opt_prices = [s.price_eur_kwh for s in optimal_selected]
+    avg_optimal = round(sum(opt_prices) / len(opt_prices) * 100, 4) if opt_prices else 0.0
+
     price_slots = [
         {
             "start_utc":         s.start.isoformat(),
             "price_cents_kwh":   round(s.price_eur_kwh * 100, 4),
             "charging":          s.start in selected_starts,
+            "optimal":           s.start in optimal_starts,
         }
         for s in sorted(p.all_prices, key=lambda x: x.start)
     ]
@@ -1321,6 +1339,7 @@ def build_plan(p: PlanParams) -> dict:
         "required_minutes":       p.required_minutes,
         "total_minutes":          total_min,
         "avg_price_cents_kwh":    round(overall_avg, 4),
+        "avg_optimal_price_cents_kwh": avg_optimal,
         "preferred_window_start": p.preferred_window_start,
         "preferred_window_end":   p.preferred_window_end,
         "windows":                win_list,
@@ -1851,6 +1870,9 @@ def _plan_one_profile(
         timezone_name=tz.name,
         preferred_window_start=win_start_str,
         preferred_window_end=win_end_str,
+        max_price_eur=cfg.max_price_eur,
+        min_slot_minutes=cfg.min_slot_minutes,
+        continuous_only=cfg.continuous_only,
     ))
     plan["profile"] = cfg.name
 

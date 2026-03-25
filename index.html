@@ -797,7 +797,13 @@ function renderProfile(plan) {
        + '<div class="stats-row">'
        + '<div class="stat"><div class="stat-label">scheduled</div><div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
        + '<div class="stat"><div class="stat-label">@ avg price</div><div class="stat-value">' + plan.avg_price_cents_kwh.toFixed(2) + '<span class="stat-unit">c€/kWh</span></div></div>'
-       + '<div class="stat"><div class="stat-label">market avg</div><div class="stat-value">' + plan.price_stats.avg_cents_kwh.toFixed(2) + '<span class="stat-unit">c€/kWh</span></div></div>'
+       + (plan.avg_optimal_price_cents_kwh !== undefined
+          ? '<div class="stat"><div class="stat-label">vs optimal</div><div class="stat-value ' + (plan.avg_price_cents_kwh <= plan.avg_optimal_price_cents_kwh * 1.02 ? 'good' : 'warn') + '">'
+            + (plan.avg_price_cents_kwh <= plan.avg_optimal_price_cents_kwh
+              ? '\u2193' + ((1 - plan.avg_price_cents_kwh / plan.avg_optimal_price_cents_kwh) * 100).toFixed(0) + '%'
+              : '\u2191' + ((plan.avg_price_cents_kwh / plan.avg_optimal_price_cents_kwh - 1) * 100).toFixed(0) + '%')
+            + '</div></div>'
+          : '<div class="stat"><div class="stat-label">market avg</div><div class="stat-value">' + plan.price_stats.avg_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>')
        + '<div class="stat"><div class="stat-label">vs market</div><div class="stat-value ' + savClass + '">' + savStr + '</div></div>'
        + '</div>'
        + renderTimeline(plan)
@@ -953,8 +959,10 @@ function renderBackFace(profileName) {
     + '<div class="schedule-row"><div class="row-label">' + profileName + '</div>' + schedCells + '</div>'
     + '</div></div>';
 
+  var optHistogram = PLAN_DATA[profileName] ? renderOptimalHistogram(PLAN_DATA[profileName]) : '';
   return '<div class="flip-card-back-inner"><div class="back-title">' + profileName + ' — configuration</div>'
        + table
+       + optHistogram
        + schedule
        + '<div class="flip-hint" style="position:static;margin-top:16px;display:block;text-align:right">← tap to go back</div></div>';
 }
@@ -1009,6 +1017,7 @@ function loadFromRepo() {
     Promise.all(fetches).then(function(results) {
       var plans = results.filter(function(p) { return p !== null; });
       if (plans.length) {
+        plans.forEach(function(p) { PLAN_DATA[p.profile] = p; });
         var latest = plans.reduce(function(a, b) { return a.date > b.date ? a : b; });
         document.getElementById("run-time").textContent = "created " + latest.date;
       // Show staleness warning if plan is more than 1 day old
@@ -1040,6 +1049,7 @@ function loadFromRepo() {
 
 function loadDemo() {
   document.getElementById("run-time").textContent = "created demo";
+  DEMO_PLANS.forEach(function(p) { PLAN_DATA[p.profile] = p; });
   renderProfiles(DEMO_PLANS);
 }
 
