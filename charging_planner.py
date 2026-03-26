@@ -546,6 +546,77 @@ def fetch_entsoe_prices(
             for i, s in enumerate(sorted(usable, key=lambda x: x.start))]
 
 
+SAHKOTIN_API = "https://sahkotin.fi/prices"
+
+
+def fetch_sahkotin_prices(area: str = "FI") -> list[Slot]:
+    """Fetch day-ahead prices from Sähkötin (sahkotin.fi) as a fallback.
+
+    Only available for the Finnish (FI) bidding zone.
+    Returns native 15-min slots in €/kWh ex-VAT, same structure as
+    fetch_entsoe_prices — the rest of the pipeline requires no changes.
+
+    Requests the same wide window as ENTSO-E: yesterday evening through
+    the day after tomorrow.
+
+    Raises PricesNotYetAvailable if the fetch fails or returns no usable data.
+    """
+    if area.upper() not in ("FI", "10YFI-1--------U"):
+        raise PricesNotYetAvailable(
+            f"Sähkötin fallback is only available for area FI (got '{area}')."
+        )
+    now_utc = datetime.now(tz=timezone.utc)
+    today   = now_utc.date()
+    # Same window as ENTSO-E
+    start = (today - timedelta(days=1)).strftime("%Y-%m-%dT20:00:00.000Z")
+    end   = (today + timedelta(days=1)).strftime("%Y-%m-%dT23:00:00.000Z")
+    url = f"{SAHKOTIN_API}?quarter&fix&start={start}&end={end}"
+
+    log.info("Fetching Sähkötin prices: area=%s", area)
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        raw = _http_request_with_retry(req, timeout=20, retries=3, backoff=3.0,
+                                       label="Sähkötin")
+    except Exception as e:
+        raise PricesNotYetAvailable(f"Sähkötin fetch failed: {e}")
+
+    try:
+        data = json.loads(raw)
+        prices = data["prices"]
+    except Exception as e:
+        raise PricesNotYetAvailable(f"Sähkötin JSON parse failed: {e}")
+
+    if not prices:
+        raise PricesNotYetAvailable("Sähkötin returned no price data.")
+
+    # Response: [{"date": "2024-01-01T00:00:00.000Z", "value": 4.961}, ...]
+    # ?fix converts €/MWh → c€/kWh, so divide by 100 to get €/kWh ex-VAT
+    slots: list[Slot] = []
+    for entry in prices:
+        slot_start = datetime.fromisoformat(entry["date"].replace("Z", "+00:00"))
+        slot_end   = slot_start + timedelta(minutes=15)
+        price_eur_kwh = entry["value"] / 100  # c€/kWh → €/kWh
+        slots.append(Slot(
+            start=slot_start,
+            end=slot_end,
+            duration_minutes=15,
+            price_eur_kwh=price_eur_kwh,
+        ))
+
+    if not slots:
+        raise PricesNotYetAvailable("Sähkötin returned no parseable slots.")
+
+    usable = [s for s in slots if s.end > now_utc]
+    if not usable:
+        raise PricesNotYetAvailable("Sähkötin returned no usable future slots.")
+
+    result = [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
+                   price_eur_kwh=s.price_eur_kwh, slot=i)
+              for i, s in enumerate(sorted(usable, key=lambda x: x.start))]
+    log.info("Sähkötin: %d usable 15-min slots fetched", len(result))
+    return result
+
+
 FORECAST_URL = (
     "https://raw.githubusercontent.com/vividfog/nordpool-predict-fi"
     "/main/deploy/prediction.json"
@@ -2054,26 +2125,22 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
 
     try:
         all_prices, price_source = _fetch_prices(cfg0)
-    except PricesNotYetAvailable as exc:
-        log.warning("%s — trying forecast fallback.", exc)
-        try:
-            all_prices = fetch_forecast_prices(cfg0.area)
-            price_source = "forecast"
-            log.info("Using forecast prices as fallback.")
-        except PricesNotYetAvailable as exc2:
-            log.warning("%s", exc2)
-            _notify_prices_unavailable(raw_config.get("ntfy", {}))
-            sys.exit(0)
     except Exception as exc:
-        log.error("ENTSO-E fetch failed: %s — trying forecast fallback.", exc)
+        log.warning("ENTSO-E unavailable (%s) — trying Sähkötin.", exc)
         try:
-            all_prices = fetch_forecast_prices(cfg0.area)
-            price_source = "forecast"
-            log.info("Using forecast prices as fallback.")
+            all_prices = fetch_sahkotin_prices(cfg0.area)
+            price_source = "Sähkötin"
+            log.info("Using Sähkötin prices.")
         except PricesNotYetAvailable as exc2:
-            log.warning("%s", exc2)
-            _notify_prices_unavailable(raw_config.get("ntfy", {}))
-            sys.exit(1)
+            log.warning("Sähkötin unavailable (%s) — trying forecast fallback.", exc2)
+            try:
+                all_prices = fetch_forecast_prices(cfg0.area)
+                price_source = "forecast"
+                log.info("Using forecast prices as last resort fallback.")
+            except PricesNotYetAvailable as exc3:
+                log.warning("%s", exc3)
+                _notify_prices_unavailable(raw_config.get("ntfy", {}))
+                sys.exit(1)
 
     plans = []
     skipped = []
