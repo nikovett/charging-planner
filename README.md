@@ -71,7 +71,7 @@ charging:
         preferred_window_start: "22:00"
         preferred_window_end: "06:30"
       - days: [saturday, sunday]
-        preferred_window_start: any     # no window constraint — pick cheapest slots from all available prices
+        preferred_window_start: any     # any start + any end = no window constraint
         preferred_window_end: any
     deliveries:
       - handler: chargeamps
@@ -111,8 +111,8 @@ ntfy:
 | `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
 | `charging.min_slot_minutes` | `30` | Minimum continuous block length. Must be a multiple of 15 |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
-| `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or omit/`any` for no constraint |
-| `charging.preferred_window_end` | `any` | End of preferred charging window (`HH:MM`). If earlier in the day than `preferred_window_start` the window wraps midnight. Equal start and end is an error. Use `23:45` for end of day — `23:59` excludes the last 15-minute slot. Omit or set to `any` for no constraint (both fields must be omitted or `any` together) |
+| `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or `any`. `any` start = use all slots from script run time. `any` + `HH:MM` end = charge anytime until departure time. Both `any` = no constraint. |
+| `charging.preferred_window_end` | `any` | End of preferred charging window (`HH:MM`), or `any`. If earlier than `preferred_window_start` the window wraps midnight. Use `23:45` for end of day. `HH:MM` start + `any` end = charge from that time until last available price. Both `any` = no constraint. |
 | `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and `preferred_window_start` / `preferred_window_end` (both `any` or omitted = no window constraint, picks cheapest from all available prices). Each entry names the target day — the day being planned. The script always reads tomorrow's schedule entry. The first matching entry for the target day is used; falls back to top-level window if none match |
 
 ### Preferred window behaviour

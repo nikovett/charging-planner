@@ -276,23 +276,17 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
             _validate_hhmm(entry, "preferred_window_end", errors)
             e_start_any = entry.get("preferred_window_start") is None or str(entry.get("preferred_window_start", "")).lower() == "any"
             e_end_any   = entry.get("preferred_window_end")   is None or str(entry.get("preferred_window_end",   "")).lower() == "any"
-            if e_start_any != e_end_any:
-                errors.append(
-                    f"charging.schedule[{i}]: preferred_window_start and preferred_window_end "
-                    "must both be omitted/'any' or both be HH:MM."
-                )
+            # Mixing any with HH:MM is allowed (see top-level comment above)
 
     pw_s = _validate_hhmm(ch, "preferred_window_start", errors)
     pw_e = _validate_hhmm(ch, "preferred_window_end", errors)
     # "any" returns None from _validate_hhmm without adding an error
     start_is_any = ch.get("preferred_window_start") is None or str(ch.get("preferred_window_start", "")).lower() == "any"
     end_is_any   = ch.get("preferred_window_end")   is None or str(ch.get("preferred_window_end",   "")).lower() == "any"
-    if start_is_any != end_is_any:
-        errors.append(
-            "preferred_window_start and preferred_window_end must both be omitted/'any' or both be HH:MM — "
-            "mixing 'any' with a time value is not allowed."
-        )
-    elif pw_s is not None and pw_e is not None:
+    # Mixing any with HH:MM is allowed:
+    #   any + HH:MM = all slots from now until HH:MM (departure time)
+    #   HH:MM + any = all slots from HH:MM until end of available prices
+    if pw_s is not None and pw_e is not None and not start_is_any and not end_is_any:
         s_min = pw_s[0] * 60 + pw_s[1]
         e_min = pw_e[0] * 60 + pw_e[1]
         if s_min == e_min:
@@ -378,9 +372,11 @@ class Config:
     continuous_only:        bool
     min_slot_minutes:       int
     max_price_eur:          Optional[float]   # None = no ceiling
-    preferred_window_start: str               # validated HH:MM (unused when preferred_window_any)
-    preferred_window_end:   str               # validated HH:MM (unused when preferred_window_any)
-    preferred_window_any:   bool              # True = no window constraint (preferred_window_start/end omitted or "any")
+    preferred_window_start: str               # validated HH:MM or "any"
+    preferred_window_end:   str               # validated HH:MM or "any"
+    preferred_window_any:   bool              # True = both start and end are "any" (no window constraint)
+    window_start_any:       bool              # True = start is "any" (use now as start)
+    window_end_any:         bool              # True = end is "any" (use last available price as end)
     schedule:               list              # day-specific window overrides (may be empty)
 
 
@@ -409,8 +405,14 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         preferred_window_start=ch.get("preferred_window_start", "00:00"),
         preferred_window_end=ch.get("preferred_window_end", "23:45"),
         preferred_window_any=(
-            ch.get("preferred_window_start") is None or
-            str(ch.get("preferred_window_start", "")).lower() == "any"
+            (ch.get("preferred_window_start") is None or str(ch.get("preferred_window_start", "")).lower() == "any") and
+            (ch.get("preferred_window_end")   is None or str(ch.get("preferred_window_end",   "")).lower() == "any")
+        ),
+        window_start_any=(
+            ch.get("preferred_window_start") is None or str(ch.get("preferred_window_start", "")).lower() == "any"
+        ),
+        window_end_any=(
+            ch.get("preferred_window_end") is None or str(ch.get("preferred_window_end", "")).lower() == "any"
         ),
         schedule=ch.get("schedule") or [],
     )
@@ -1769,18 +1771,17 @@ def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, s
     day_name = _DAY_NAMES[target_date.weekday()]
     for entry in cfg.schedule:
         if day_name in (entry.get("days") or []):
-            if entry.get("preferred_window_start") is None or str(entry.get("preferred_window_start", "")).lower() == "any":
-                log.info("Profile '%s': using schedule entry for %s (any)", cfg.name, day_name)
-                return "any", "any"
-            log.info(
-                "Profile '%s': using schedule entry for %s (%s–%s)",
-                cfg.name, day_name,
-                entry["preferred_window_start"], entry["preferred_window_end"],
-            )
-            return entry["preferred_window_start"], entry["preferred_window_end"]
+            s = entry.get("preferred_window_start")
+            e = entry.get("preferred_window_end")
+            s_str = "any" if (s is None or str(s).lower() == "any") else str(s)
+            e_str = "any" if (e is None or str(e).lower() == "any") else str(e)
+            log.info("Profile '%s': using schedule entry for %s (%s–%s)", cfg.name, day_name, s_str, e_str)
+            return s_str, e_str
     if cfg.preferred_window_any:
         return "any", "any"
-    return cfg.preferred_window_start, cfg.preferred_window_end
+    s_str = "any" if cfg.window_start_any else cfg.preferred_window_start
+    e_str = "any" if cfg.window_end_any   else cfg.preferred_window_end
+    return s_str, e_str
 
 
 # ---------------------------------------------------------------------------
@@ -1800,33 +1801,56 @@ def _plan_one_profile(
     # Resolve window using top-level defaults first to determine plan_date,
     # then re-resolve with day-specific schedule entry if one matches.
     # If top-level window is "any", plan_date = today (tomorrow will be the target).
+    def _resolve_any_window(start_str, end_str, anchor_date, tomorrow_date):
+        """Resolve window bounds supporting 'any' on either or both sides."""
+        s_any = str(start_str).lower() == "any"
+        e_any = str(end_str).lower() == "any"
+        now_utc = datetime.now(tz=timezone.utc)
+        if s_any and e_any:
+            return now_utc, max(s.end for s in all_prices) if all_prices else now_utc
+        elif s_any:
+            # any start = from now, fixed end
+            _, end_utc = _resolve_window_utc(
+                "00:00", end_str, tz.zone,
+                _anchor_date=tomorrow_date if not _is_overnight("00:00", end_str) else anchor_date,
+            )
+            return now_utc, end_utc
+        elif e_any:
+            # fixed start, any end = from start until last available price
+            start_utc, _ = _resolve_window_utc(
+                start_str, "23:45", tz.zone,
+                _anchor_date=anchor_date if _is_overnight(start_str, "23:45") else tomorrow_date,
+            )
+            return start_utc, max(s.end for s in all_prices) if all_prices else start_utc
+        else:
+            if _is_overnight(start_str, end_str):
+                return _resolve_window_utc(start_str, end_str, tz.zone, _anchor_date=anchor_date)
+            else:
+                return _resolve_window_utc(start_str, end_str, tz.zone, _anchor_date=tomorrow_date)
+
     if cfg.preferred_window_any:
-        # "any" at top level — plan_date = today, target = tomorrow via schedule block
         plan_date = datetime.now(tz=timezone.utc).astimezone(tz.zone).date()
         win_start_utc = datetime.now(tz=timezone.utc)
         win_end_utc   = max(s.end for s in all_prices) if all_prices else win_start_utc
         win_start_str, win_end_str = "any", "any"
     else:
         win_start_utc, win_end_utc = _resolve_window_utc(
-            cfg.preferred_window_start, cfg.preferred_window_end, tz.zone
+            cfg.preferred_window_start if not cfg.window_start_any else "00:00",
+            cfg.preferred_window_end   if not cfg.window_end_any   else "23:45",
+            tz.zone
         )
         plan_date = win_start_utc.astimezone(tz.zone).date()
 
-    if cfg.schedule or cfg.preferred_window_any:
-        # Always look up tomorrow's schedule entry — the schedule describes what
-        # to do for each target day, and we are always planning for tomorrow.
-        # Overnight windows (e.g. 22:00–06:30) anchor to today — they start
-        # tonight. Same-day windows (e.g. 00:00–23:45) anchor to tomorrow — they
-        # cover the full target day in local time.
-        # "any" means no window constraint — all available prices from now are eligible.
+    if cfg.schedule or cfg.preferred_window_any or cfg.window_start_any or cfg.window_end_any:
         tomorrow = plan_date + timedelta(days=1)
         win_start_str, win_end_str = _resolve_schedule_window(cfg, tomorrow)
-        if win_start_str == "any":
-            # "any" means no window constraint — use all available prices from now.
-            win_start_utc = datetime.now(tz=timezone.utc)
-            win_end_utc   = max(s.end for s in all_prices) if all_prices else win_start_utc
-            win_start_str, win_end_str = "any", "any"
-            log.info("Profile '%s': any window — all available slots: %s – %s",
+        s_any = str(win_start_str).lower() == "any"
+        e_any = str(win_end_str).lower() == "any"
+        if s_any or e_any:
+            win_start_utc, win_end_utc = _resolve_any_window(
+                win_start_str, win_end_str, plan_date, tomorrow
+            )
+            log.info("Profile '%s': partial/full any window — %s – %s",
                      cfg.name, win_start_utc.isoformat(), win_end_utc.isoformat())
         elif _is_overnight(win_start_str, win_end_str):
             win_start_utc, win_end_utc = _resolve_window_utc(
