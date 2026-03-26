@@ -1094,7 +1094,10 @@ function renderOptimalHistogram(plan) {
        + barsHTML
        + '</div>'
        + '<div class="timeline-ticks" style="position:relative;height:16px">' + tickHTML + '</div>'
-       + (optWindows.length ? '<div style="padding:12px 0 8px;display:flex;flex-direction:row;flex-wrap:wrap;gap:8px">' + optWindows.join("") + '</div>' + optNote : '')
+       + (optWindows.length ? '<div style="padding:12px 0 8px;display:flex;flex-direction:row;flex-wrap:wrap;gap:8px">'
+         + optWindows.join("")
+         + (optNote ? '<div class="window-row" style="color:var(--muted);border-color:var(--border)">outside visible range</div>' : '')
+         + '</div>' : '')
        + '</div>';
 }
 
