@@ -666,8 +666,8 @@ function renderTimeline(plan) {
     // Arrow: small downward-pointing SVG triangle centered on nowPct, sitting at bar top
     var arrowH = 6; // px height of arrow
     // Arrow sized to ~75% of bar width in px (bar width = histogram_width / n)
-    var arrowTop = 'calc(' + lineTopPct + '% - 2px)';
-    var lineH = 'calc(' + lineTopPct + '% - 4px)';
+    var arrowTop = 'calc(' + lineTopPct + '% - 7px)'; // arrow is 5px tall, sits fully above bar
+    var lineH = 'calc(' + lineTopPct + '% - 9px)'; // line ends 2px above arrow base
     midnightHTML = '<div style="position:absolute;left:' + nowPct + '%;top:2px;height:' + lineH + ';width:1px;background:var(--accent);opacity:0.9;z-index:2;pointer-events:none;transform:translateX(-50%)"></div>'
                  + '<svg style="position:absolute;left:' + nowPct + '%;top:' + arrowTop + ';transform:translateX(-50%);overflow:visible;z-index:3;pointer-events:none" width="' + Math.max(4, Math.round(600/n*0.75)) + 'px" height="5" viewBox="0 0 10 5" preserveAspectRatio="none"><polygon points="5,5 0,0 10,0" fill="var(--accent)" opacity="0.9"/></svg>'
                  + '<span style="position:absolute;left:' + nowPct + '%;top:3px;transform:translateX(-100%);padding-right:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;line-height:1">now</span>'
