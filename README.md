@@ -171,7 +171,7 @@ A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan
 
 Features:
 - One flip card per profile — front shows the plan, back shows profile configuration, optimal slots histogram, and weekly schedule
-- Price histogram with all available slots positioned by actual timestamp (so "now" line, tick labels, and bars always align). Charging windows highlighted in teal, min price labelled in teal, max in amber — labels rotated inside the bar, visible only when bars are wide enough
+- Price histogram with all available slots positioned by actual timestamp (so "now" line, tick labels, and bars always align). Charging windows highlighted in teal, min price labelled in teal, max in amber — labels inside the bar, visible only when bars are wide enough
 - Three optimal slot bar states: solid teal (charging + optimal), diagonal stripe (charging but not optimal), teal outline (optimal but not charged/missed)
 - Stats row: scheduled hours, avg price, vs market %, vs optimal % (overlap between scheduled and globally cheapest slots)
 - "Outside visible range" amber pill when optimal slots fall outside the 24h histogram window
