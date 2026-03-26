@@ -153,15 +153,17 @@ See [`delivery/README.md`](delivery/README.md) for full handler configuration re
 
 ---
 
-## Fallback price source
+## Fallback price sources
 
-When ENTSO-E is unavailable (maintenance, 503/404 errors), the planner automatically falls back to the [nordpool-predict-fi](https://github.com/vividfog/nordpool-predict-fi) forecast published at `https://raw.githubusercontent.com/vividfog/nordpool-predict-fi/main/deploy/prediction.json`.
+When ENTSO-E is unavailable (scheduled maintenance, 503/404 errors), the planner automatically tries two fallback sources before giving up:
 
-The fallback is only available for area `FI`. For other areas, the planner exits gracefully with an ntfy notification.
+1. **Sähkötin** (`sahkotin.fi/api`) — actual realized Nord Pool 15-min prices, same data range as ENTSO-E, Finland only. No API key needed. Used transparently — `price_source: "Sähkötin"` in the plan JSON, no dashboard warning.
 
-The prediction.json blends realized Nord Pool prices (for past and present hours) with ML-predicted prices for future hours. By ~14:00–16:00 Helsinki time — shortly after Nord Pool publishes tomorrow's day-ahead prices — the forecast transitions to actual market prices, making it as reliable as ENTSO-E for planning purposes.
+2. **nordpool-predict-fi** (`raw.githubusercontent.com/vividfog/nordpool-predict-fi`) — ML forecast blended with realized Sähkötin prices. Hourly data expanded to 15-min slots. By ~14:00–16:00 Helsinki time the forecast transitions to actual market prices, making it nearly as reliable as ENTSO-E once Nord Pool has published. Plans from this source are tagged `price_source: "forecast"` and display a warning banner on the dashboard.
 
-Plans generated from forecast data are tagged `"price_source": "forecast"` in the plan JSON and display a `FORECAST` warning on the dashboard.
+Both fallbacks are only available for area `FI`. For other areas, the planner exits gracefully with an ntfy notification.
+
+If all three sources fail, an ntfy notification is sent and the script exits with a non-zero code so the GHA run is marked as failed.
 
 ## Dashboard
 
@@ -169,8 +171,12 @@ A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan
 
 Features:
 - One flip card per profile — front shows the plan, back shows profile configuration, optimal slots histogram, and weekly schedule
-- Price histogram with all available slots, charging windows highlighted in green, min/max price labelled
-- Stats row: scheduled hours, avg price, vs market percentage, vs optimal percentage (overlap between scheduled and theoretically optimal slots)
+- Price histogram with all available slots positioned by actual timestamp (so "now" line, tick labels, and bars always align). Charging windows highlighted in teal, min price labelled in teal, max in amber — labels rotated inside the bar, visible only when bars are wide enough
+- Three optimal slot bar states: solid teal (charging + optimal), diagonal stripe (charging but not optimal), teal outline (optimal but not charged/missed)
+- Stats row: scheduled hours, avg price, vs market %, vs optimal % (overlap between scheduled and globally cheapest slots)
+- "Outside visible range" amber pill when optimal slots fall outside the 24h histogram window
+- Forecast warning banner when `price_source` is `"forecast"`
+- Staleness warning when plan is more than a day old
 - Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")
 - Weekly schedule grid per profile showing configured windows for each day
 
@@ -241,7 +247,7 @@ Never commit secrets to the repository. All sensitive values are injected at run
 
 The workflow runs daily at 12:30 UTC — 14:30 Helsinki time in winter (EET, UTC+2) and 15:30 in summer (EEST, UTC+3). A single cron covers both DST states because 12:30 UTC always lands after ENTSO-E's ~12:00 UTC publication time.
 
-Day-ahead prices are published at approximately 12:00 UTC each day. If the script runs before publication, or ENTSO-E is delayed, the script detects this and exits cleanly — a push notification is sent to the configured ntfy topic so you know no plan was scheduled. Once prices are available the next scheduled run will succeed.
+Day-ahead prices are published at approximately 12:00 UTC each day. If ENTSO-E is unavailable or prices aren't published yet, the planner automatically tries Sähkötin, then the nordpool-predict-fi forecast. If all sources fail, a push notification is sent and the run exits with a non-zero code. Once prices are available the next scheduled run will succeed.
 
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 
@@ -308,6 +314,8 @@ One `plan-{name}.json` file is written per profile:
   }
 }
 ```
+
+`price_source` is `"ENTSO-E"`, `"Sähkötin"`, or `"forecast"` depending on which source provided the prices for this plan.
 
 `window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems.
 
