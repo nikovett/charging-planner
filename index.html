@@ -963,14 +963,43 @@ function renderOptimalHistogram(plan) {
     tickHTML += '<span class="tick" style="position:absolute;left:' + pct + '%">' + String(hh).padStart(2,"0") + ':00</span>';
   }
 
+  // Build windows list from optimal slots
+  var optWindows = [];
+  var inOpt = false, winStart = null, winPrice = [], winMins = 0;
+  visible.forEach(function(s, i) {
+    if (s.optimal) {
+      if (!inOpt) { inOpt = true; winStart = s; winPrice = []; winMins = 0; }
+      winPrice.push(s.price_cents_kwh);
+      winMins += 15;
+    } else {
+      if (inOpt) {
+        var startLocal = new Date(new Date(winStart.start_utc).getTime() + utcOffset*60000);
+        var endLocal   = new Date(new Date(s.start_utc).getTime() + utcOffset*60000);
+        var fmt = function(d) { return String(d.getUTCHours()).padStart(2,"0") + ":" + String(d.getUTCMinutes()).padStart(2,"0"); };
+        var avg = (winPrice.reduce(function(a,b){return a+b;},0)/winPrice.length).toFixed(2);
+        var dur = winMins >= 60 ? Math.floor(winMins/60)+"h"+(winMins%60?String(winMins%60).padStart(2,"0")+"m":"") : winMins+"m";
+        optWindows.push('<div class="window-row"><span class="window-time">' + fmt(startLocal) + "–" + fmt(endLocal) + '</span><span class="window-price">' + avg + ' c€/kWh</span><span class="window-dur">' + dur + '</span></div>');
+        inOpt = false;
+      }
+    }
+  });
+  if (inOpt && winStart) {
+    var last = visible[visible.length-1];
+    var endLocal2 = new Date(new Date(last.start_utc).getTime() + utcOffset*60000 + 15*60000);
+    var startLocal2 = new Date(new Date(winStart.start_utc).getTime() + utcOffset*60000);
+    var fmt2 = function(d) { return String(d.getUTCHours()).padStart(2,"0") + ":" + String(d.getUTCMinutes()).padStart(2,"0"); };
+    var avg2 = (winPrice.reduce(function(a,b){return a+b;},0)/winPrice.length).toFixed(2);
+    var dur2 = winMins >= 60 ? Math.floor(winMins/60)+"h"+(winMins%60?String(winMins%60).padStart(2,"0")+"m":"") : winMins+"m";
+    optWindows.push('<div class="window-row"><span class="window-time">' + fmt2(startLocal2) + "–" + fmt2(endLocal2) + '</span><span class="window-price">' + avg2 + ' c€/kWh</span><span class="window-dur">' + dur2 + '</span></div>');
+  }
+
   return '<div style="margin-top:16px">'
-       + '<div style="font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">optimal slots'
-       + (optAvg ? '<span style="float:right;color:var(--text);font-size:11px;text-transform:none;letter-spacing:0">' + optAvg + ' c\u20ac/kWh</span>' : '')
-       + '</div>'
+       + '<div style="font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">optimal slots</div>'
        + '<div style="position:relative;width:100%;height:90px;background:var(--bg3);border:1px solid var(--border);border-radius:2px;overflow:visible;box-sizing:border-box;display:flex;align-items:flex-end">'
        + barsHTML
        + '</div>'
        + '<div class="timeline-ticks" style="position:relative;height:16px">' + tickHTML + '</div>'
+       + (optWindows.length ? '<div class="windows-list">' + optWindows.join("") + '</div>' : '')
        + '</div>';
 }
 
