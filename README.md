@@ -109,7 +109,7 @@ ntfy:
 | `charging.name` | `"default"` | Profile name — used in the output filename (`plan-{name}.json`) |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
 | `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
-| `charging.min_slot_minutes` | `30` | Minimum continuous block length. Must be a multiple of 15 |
+| `charging.min_slot_minutes` | `30` | Minimum continuous block length, and minimum gap between blocks. Both constraints use the same value — the charger should not run (or be idle between charging sessions) for less than this duration. Must be a multiple of 15 |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or `any`. `any` start = use all slots from script run time. `any` + `HH:MM` end = charge anytime until departure time. Both `any` = no constraint. |
 | `charging.preferred_window_end` | `any` | End of preferred charging window (`HH:MM`), or `any`. If earlier than `preferred_window_start` the window wraps midnight. Use `23:45` for end of day. `HH:MM` start + `any` end = charge from that time until last available price. Both `any` = no constraint. |
@@ -131,8 +131,6 @@ A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — i
 Days not listed in `schedule` use the top-level preferred window.
 
 **Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`. When no window is configured (`any`), all available prices are eligible and no spillover logic is needed.
-
-**Gap merging** — when two selected blocks are separated by a gap shorter than `min_slot_minutes`, they are bridged into one continuous window automatically. Slots are then trimmed from the merged block to bring the total back to `required_hours`.
 
 **Guaranteed charge until departure time** — setting `required_hours` longer than the window with `continuous_only: true` ensures the block always ends exactly at `preferred_window_end`. Not applicable when using `any`.
 

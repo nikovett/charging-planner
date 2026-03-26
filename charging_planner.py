@@ -980,14 +980,14 @@ def _select_with_min_block(
     min_slots_per_block: int,
 ) -> list[Slot]:
     """Select n_slots from candidates such that every contiguous block of selected
-    slots is at least min_slots_per_block long, minimising total price.
+    slots is at least min_slots_per_block long AND every gap between blocks is also
+    at least min_slots_per_block long, minimising total price.
 
-    Strategy: enumerate all valid consecutive blocks (runs of ≥ min_slots_per_block
-    consecutive slots), then greedily pick the cheapest individual slots that belong
-    to at least one valid block, using a block-aware repair loop to ensure no
-    orphaned short blocks remain.
+    Both constraints mirror the same physical requirement: the charger should not
+    run (or be off) for less than min_slot_minutes at a time.
     """
     slot_dur = candidates[0].duration_minutes if candidates else 15
+    min_gap  = timedelta(minutes=min_slots_per_block * slot_dur)
 
     # Build a time-ordered list and a lookup by start time
     ordered = sorted(candidates, key=lambda x: x.start)
@@ -1005,7 +1005,6 @@ def _select_with_min_block(
         runs.append(current_run)
 
     # From each run, enumerate all sub-blocks of size >= min_slots_per_block
-    # ranked by average price — these are the valid atomic units we can pick
     valid_blocks: list[list[Slot]] = []
     for run in runs:
         for size in range(min_slots_per_block, len(run) + 1):
@@ -1013,30 +1012,50 @@ def _select_with_min_block(
                 valid_blocks.append(run[start_i:start_i + size])
 
     # Sort blocks by average price ascending, then by start time descending
-    # (prefer later blocks as tiebreaker — consistent with single-slot behaviour)
     valid_blocks.sort(key=lambda b: (sum(s.price_eur_kwh for s in b) / len(b), -b[0].start.timestamp(), -len(b)))
 
-    # Greedy block selection: pick cheapest blocks until quota met, no overlap
+    # Greedy block selection: pick cheapest blocks until quota met,
+    # respecting both overlap and minimum gap constraints.
     selected_set: set = set()
+    selected_blocks: list[tuple] = []  # list of (block_start, block_end) for gap checks
+
+    def _violates_min_gap(block: list[Slot]) -> bool:
+        """Return True if this block would create a gap smaller than min_gap
+        with any already-selected block."""
+        b_start = block[0].start
+        b_end   = block[-1].end
+        for sel_start, sel_end in selected_blocks:
+            # Gap between candidate and selected block — check both directions
+            if b_end <= sel_start:
+                gap = sel_start - b_end
+            elif sel_end <= b_start:
+                gap = b_start - sel_end
+            else:
+                gap = timedelta(0)  # overlap — handled separately
+            if timedelta(0) < gap < min_gap:
+                return True
+        return False
+
     for block in valid_blocks:
         if len(selected_set) >= n_slots:
             break
-        # Skip if any slot in this block is already selected (overlap)
         if any(s.start in selected_set for s in block):
             continue
-        # Only add as many slots as we still need
+        if _violates_min_gap(block):
+            continue
         remaining = n_slots - len(selected_set)
         if len(block) <= remaining:
             for s in block:
                 selected_set.add(s.start)
+            selected_blocks.append((block[0].start, block[-1].end))
         else:
-            # Block is larger than remaining quota — take the latest consecutive
-            # sub-block of the required size (consistent with latest-preferred tiebreaker)
             sub_size = remaining
             if sub_size >= min_slots_per_block:
-                sub = block[-sub_size:]  # take latest slots from the block
-                for s in sub:
-                    selected_set.add(s.start)
+                sub = block[-sub_size:]
+                if not _violates_min_gap(sub):
+                    for s in sub:
+                        selected_set.add(s.start)
+                    selected_blocks.append((sub[0].start, sub[-1].end))
 
     result = sorted([slot_by_start[k] for k in selected_set], key=lambda x: x.start)
     final_blocks  = _group_continuous(result)
@@ -1048,6 +1067,12 @@ def _select_with_min_block(
     else:
         log.info("All %d block(s) meet the minimum block length of %d min.",
                  len(final_blocks), min_block_min)
+    # Validate gaps
+    for i in range(len(final_blocks) - 1):
+        gap_min = int((final_blocks[i+1][0].start - final_blocks[i][-1].end).total_seconds() / 60)
+        if gap_min < min_block_min:
+            log.warning("Gap of %d min between blocks is shorter than min_slot_minutes=%d min.",
+                        gap_min, min_block_min)
     return result
 
 
@@ -1287,109 +1312,6 @@ def _group_continuous(slots: list[Slot]) -> list[list[Slot]]:
     groups.append(block)
     return groups
 
-
-def close_gap_merge(
-    selected: list[Slot],
-    all_prices: list[Slot],
-    min_slot_minutes: int,
-    required_minutes: int,
-) -> tuple[list[Slot], set]:
-    """
-    If two selected blocks are separated by a gap smaller than min_slot_minutes,
-    bridge the gap by including those intervening slots, then trim endpoint slots
-    from the merged block until total selected minutes equals required_minutes again.
-
-    Trim rule — on each iteration compare the front (earliest) and back (latest)
-    slots of the merged block:
-      - Drop the back slot if it is strictly more expensive than the front.
-      - Otherwise drop the front slot (cheaper or equal price).
-    Tiebreaking by dropping the front pushes the charging window as late as
-    possible, closest to the departure time.
-
-    Returns (slots, merged_starts) where merged_starts is a set of UTC start
-    datetimes for windows that were produced by a gap merge.
-    """
-    if not selected:
-        return selected, set()
-
-    slots = sorted(selected, key=lambda x: x.start)
-    price_map = {s.start: s for s in all_prices}
-    merged_starts: set = set()
-
-    changed = True
-    while changed:
-        changed = False
-        groups = _group_continuous(slots)
-        for i in range(len(groups) - 1):
-            gap_start = groups[i][-1].end
-            gap_end   = groups[i + 1][0].start
-            gap_min   = int((gap_end - gap_start).total_seconds() / 60)
-            if 0 < gap_min < min_slot_minutes:
-                # Collect gap slots from all_prices
-                gap_slots = [
-                    price_map[s.start]
-                    for s in all_prices
-                    if gap_start <= s.start < gap_end and s.start in price_map
-                ]
-                if not gap_slots:
-                    continue
-                # Merge the two blocks + gap into one
-                merged_block = sorted(
-                    groups[i] + gap_slots + groups[i + 1],
-                    key=lambda x: x.start,
-                )
-                # Trim endpoint slots until total selected equals required_minutes.
-                # extra_minutes = how much over required we are after bridging the gap.
-                # merged_block already contains all slots including the gap, so summing
-                # it gives the exact post-bridge total without double-counting.
-                other_total   = sum(
-                    s.duration_minutes
-                    for g in (groups[:i] + groups[i + 2:])
-                    for s in g
-                )
-                current_total = sum(s.duration_minutes for s in merged_block)
-                extra_minutes = (current_total + other_total) - required_minutes
-                log.info(
-                    "Gap of %d min between %s and %s is below min_slot_minutes=%d — merging blocks.",
-                    gap_min,
-                    gap_start.isoformat(), gap_end.isoformat(),
-                    min_slot_minutes,
-                )
-                # Trim one slot per iteration from whichever endpoint is more expensive.
-                # On a price tie always drop the front (earlier) slot — this pushes
-                # the charging window as late as possible, closest to departure time.
-                while extra_minutes > 0 and len(merged_block) > 1:
-                    front = merged_block[0]
-                    back  = merged_block[-1]
-                    # Drop back only if it is strictly more expensive than front.
-                    if back.price_eur_kwh > front.price_eur_kwh:
-                        log.info(
-                            "Trimming trailing slot %s (%.4f €/kWh) — more expensive than front (%.4f)",
-                            back.start.isoformat(), back.price_eur_kwh, front.price_eur_kwh,
-                        )
-                        merged_block   = merged_block[:-1]
-                        extra_minutes -= back.duration_minutes
-                    else:
-                        log.info(
-                            "Trimming leading slot %s (%.4f €/kWh)%s",
-                            front.start.isoformat(), front.price_eur_kwh,
-                            " — tiebreak" if back.price_eur_kwh == front.price_eur_kwh else "",
-                        )
-                        merged_block   = merged_block[1:]
-                        extra_minutes -= front.duration_minutes
-
-                merged_starts.add(merged_block[0].start)
-
-                # Rebuild slots list with the merged block in place
-                other_groups = groups[:i] + [merged_block] + groups[i + 2:]
-                slots = sorted(
-                    [s for g in other_groups for s in g],
-                    key=lambda x: x.start,
-                )
-                changed = True
-                break  # restart loop with updated groups
-
-    return slots, merged_starts
 
 def merge_continuous_slots(slots: list[Slot]) -> list[tuple[datetime, datetime]]:
     if not slots:
@@ -1901,11 +1823,6 @@ def _select_slots(
             all_prices=candidate_prices,
         )
         selected = sorted(selected + spillover, key=lambda x: x.start)
-
-    if not cfg.continuous_only:
-        selected, _ = close_gap_merge(
-            selected, candidate_prices, cfg.min_slot_minutes, cfg.required_minutes
-        )
 
     if not selected:
         log.error("Profile '%s': no slots selected — check preferred window and price ceiling.",

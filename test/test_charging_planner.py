@@ -8,7 +8,7 @@ Organised by feature area:
   3. Window filtering — filter_preferred_window (same-day and overnight)
   4. Slot selection — select_charging_windows, _best_continuous_window
   5. Spillover — _select_spillover
-  6. Gap merging — close_gap_merge
+  6. Plan building
   7. Plan building — build_plan, PlanParams
   8. OCPP profile — build_ocpp_charging_profile, schema validation
   9. XML parsing — _parse_entsoe_xml with realistic XML
@@ -41,7 +41,6 @@ from charging_planner import (
     _select_spillover,
     build_ocpp_charging_profile,
     build_plan,
-    close_gap_merge,
     filter_preferred_window,
     merge_continuous_slots,
     parse_configs,
@@ -688,83 +687,6 @@ class TestSelectSpillover(unittest.TestCase):
 
 
 # ===========================================================================
-# 6. Gap merging
-# ===========================================================================
-
-class TestCloseGapMerge(unittest.TestCase):
-
-    def _run(self, selected, all_prices, min_slot=30, required=120):
-        return close_gap_merge(selected, all_prices, min_slot, required)
-
-    def test_no_merge_when_gap_too_large(self):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        block1 = slots_from(base,                  4)   # 4 × 15min
-        block2 = slots_from(base + timedelta(hours=2), 4)  # 2h gap
-        all_prices = block1 + block2
-        result, merged = self._run(block1 + block2, all_prices)
-        self.assertEqual(len(merged), 0)
-
-    def test_merge_when_gap_smaller_than_min_slot(self):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        block1 = slots_from(base,                            4)  # 1h
-        gap    = slots_from(base + timedelta(minutes=60),    1)  # 15min gap
-        block2 = slots_from(base + timedelta(minutes=75),    4)  # 1h
-        selected = block1 + block2
-        all_prices = block1 + gap + block2
-        result, merged = self._run(selected, all_prices, min_slot=30, required=120)
-        # Total still 120 min, gap bridged
-        total = sum(s.duration_minutes for s in result)
-        self.assertEqual(total, 120)
-
-    def test_total_minutes_preserved_after_merge(self):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        block1     = slots_from(base,                         4, price_cents=3.0)
-        gap_slot   = slots_from(base + timedelta(minutes=60), 1, price_cents=10.0)  # expensive
-        block2     = slots_from(base + timedelta(minutes=75), 4, price_cents=3.0)
-        selected   = block1 + block2
-        all_prices = block1 + gap_slot + block2
-        result, _ = self._run(selected, all_prices, min_slot=30, required=120)
-        total = sum(s.duration_minutes for s in result)
-        self.assertEqual(total, 120)
-
-    def test_expensive_slot_trimmed_first(self):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        # block1 has an expensive front slot
-        expensive  = [make_slot(base, price_cents=20.0)]
-        block1_rest = slots_from(base + timedelta(minutes=15), 3, price_cents=2.0)
-        gap        = slots_from(base + timedelta(minutes=60),  1, price_cents=5.0)
-        block2     = slots_from(base + timedelta(minutes=75),  4, price_cents=2.0)
-        selected   = expensive + block1_rest + block2
-        all_prices = expensive + block1_rest + gap + block2
-        result, _ = self._run(selected, all_prices, min_slot=30, required=120)
-        # The expensive slot at base should have been trimmed
-        result_starts = {s.start for s in result}
-        self.assertNotIn(base, result_starts)
-
-    def test_result_is_continuous_after_merge(self):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        block1 = slots_from(base,                         4)
-        gap    = slots_from(base + timedelta(minutes=60), 1, price_cents=5.0)
-        block2 = slots_from(base + timedelta(minutes=75), 4)
-        selected   = block1 + block2
-        all_prices = block1 + gap + block2
-        result, _ = self._run(selected, all_prices, min_slot=30, required=120)
-        srt = sorted(result, key=lambda s: s.start)
-        for i in range(len(srt) - 1):
-            self.assertEqual(srt[i].end, srt[i + 1].start)
-
-    def test_merged_starts_recorded(self):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        block1 = slots_from(base,                         4)
-        gap    = slots_from(base + timedelta(minutes=60), 1, price_cents=5.0)
-        block2 = slots_from(base + timedelta(minutes=75), 4)
-        selected   = block1 + block2
-        all_prices = block1 + gap + block2
-        _, merged = self._run(selected, all_prices, min_slot=30, required=120)
-        self.assertGreater(len(merged), 0)
-
-
-# ===========================================================================
 # 7. Plan building
 # ===========================================================================
 
@@ -1137,8 +1059,37 @@ class TestSelectWithMinBlock(unittest.TestCase):
             self.assertGreaterEqual(duration, 30,
                 f"Block of {duration} min is shorter than min_slot_minutes=30")
 
+    def test_gap_between_blocks_respects_min_slot(self):
+        # Two cheap clusters separated by a 15-min gap — with min_slot_minutes=30
+        # the algorithm must not select both clusters since the gap would be < 30 min.
+        # It should instead pick the cheaper cluster only (or extend one of them).
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        # cheap block A: 30 min
+        block_a = slots_from(base, 2, price_cents=1.0)
+        # 15-min gap (expensive)
+        gap     = slots_from(base + timedelta(minutes=30), 1, price_cents=9.0)
+        # cheap block B: 30 min
+        block_b = slots_from(base + timedelta(minutes=45), 2, price_cents=1.0)
+        # padding
+        rest    = slots_from(base + timedelta(minutes=75), 8, price_cents=5.0)
+        all_slots = block_a + gap + block_b + rest
 
-class TestWindowCoverageCheck(unittest.TestCase):
+        selected = select_charging_windows(
+            all_slots, required_minutes=60, min_slot_minutes=30
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        # Check every gap between groups is >= 30 min
+        for i in range(len(groups) - 1):
+            gap_min = int(
+                (groups[i+1][0].start - groups[i][-1].end).total_seconds() / 60
+            )
+            self.assertGreaterEqual(
+                gap_min, 30,
+                f"Gap of {gap_min} min between blocks violates min_slot_minutes=30"
+            )
+
+
+
     """_check_window_coverage exits cleanly when prices are not yet published."""
 
     def _window(self):
