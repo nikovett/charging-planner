@@ -608,15 +608,15 @@ function renderTimeline(plan) {
     var annotation = "";
     if (isMin) {
       var minColor = isCharging ? "var(--muted)" : "var(--accent)";
-      annotation = '<div style="position:absolute;bottom:2px;left:50%;transform:translateX(-50%) rotate(-90deg);transform-origin:center bottom;font-family:var(--mono);font-size:7px;color:' + minColor + ';white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
+      annotation = '<div style="position:absolute;top:0;left:50%;transform:translateX(-50%) rotate(90deg) translateY(4px);transform-origin:center center;font-family:var(--mono);font-size:7px;color:' + minColor + ';white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
     }
     if (isMax) {
-      annotation = '<div style="position:absolute;bottom:2px;left:50%;transform:translateX(-50%) rotate(-90deg);transform-origin:center bottom;font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
+      annotation = '<div style="position:absolute;top:0;left:50%;transform:translateX(-50%) rotate(90deg) translateY(4px);transform-origin:center center;font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
     }
     // Now price inside bar — skip if this bar already has min/max label
     if (isNow && !isMin && !isMax) {
       var nowLabelColor = isCharging ? "var(--muted)" : "var(--accent)";
-      annotation = '<div style="position:absolute;bottom:2px;left:50%;transform:translateX(-50%) rotate(-90deg);transform-origin:center bottom;font-family:var(--mono);font-size:7px;color:' + nowLabelColor + ';white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
+      annotation = '<div style="position:absolute;top:0;left:50%;transform:translateX(-50%) rotate(90deg) translateY(4px);transform-origin:center center;font-family:var(--mono);font-size:7px;color:' + nowLabelColor + ';white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
     }
 
     return '<div title="' + tip + '" style="position:absolute;left:' + leftPct + '%;bottom:0;width:calc(' + slotWidthPct + '% - ' + gapPx + 'px);height:' + h + '%;background:' + bg + ';' + border + 'box-sizing:border-box;border-radius:2px 2px 0 0;overflow:hidden">' + annotation + '</div>';
