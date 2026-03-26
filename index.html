@@ -801,7 +801,12 @@ function renderProfile(plan) {
        + '<div class="flip-card-inner">'
        + '<div class="flip-card-front">'
        + '<div class="card-header"><span class="profile-name">' + plan.profile + modeLabel + '</span>'
-       + '<span class="profile-date">charges ' + chargePeriod + '</span></div>'
+       + (function() {
+           var allPast = plan.window_ends_utc && plan.window_ends_utc.length &&
+             plan.window_ends_utc.every(function(e) { return new Date(e) < new Date(); });
+           var style = allPast ? 'color:var(--warn)' : '';
+           return '<span class="profile-date"' + (style ? ' style="' + style + '"' : '') + '>charges ' + chargePeriod + '</span></div>';
+         })()
        + '<div class="stats-row">'
        + '<div class="stat"><div class="stat-label">scheduled</div><div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
        + '<div class="stat"><div class="stat-label">@ avg price</div><div class="stat-value">' + plan.avg_price_cents_kwh.toFixed(2) + '<span class="stat-unit">c€/kWh</span></div></div>'
@@ -1135,7 +1140,11 @@ function loadFromRepo() {
       if (plans.length) {
         plans.forEach(function(p) { PLAN_DATA[p.profile] = p; });
         var latest = plans.reduce(function(a, b) { return a.date > b.date ? a : b; });
-        document.getElementById("run-time").textContent = "created " + latest.date;
+        var planDateObj = new Date(latest.date + 'T00:00:00Z');
+        var todayObj = new Date(); todayObj.setUTCHours(0,0,0,0);
+        var runTimeEl = document.getElementById('run-time');
+        runTimeEl.textContent = 'created ' + latest.date;
+        if (planDateObj < todayObj) runTimeEl.style.color = 'var(--warn)';
       // Show staleness warning if plan is more than 1 day old
       var planDate = new Date(latest.date + "T00:00:00Z");
       var today    = new Date();
