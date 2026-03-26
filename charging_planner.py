@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import sys
-import time
+import time as time_module
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Optional
@@ -189,7 +189,7 @@ def _http_request_with_retry(
         if attempt < retries:
             wait = backoff ** (attempt - 1)
             log.info("Retrying in %.0f s…", wait)
-            time.sleep(wait)
+            time_module.sleep(wait)
 
     raise last_exc
 
