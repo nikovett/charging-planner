@@ -1663,16 +1663,9 @@ def write_gha_summary(plans: "list[dict]",
 # ---------------------------------------------------------------------------
 
 def _fetch_prices(cfg: Config) -> tuple[list[Slot], str]:
-    """Fetch all available ENTSO-E prices.  Exits the process on failure."""
-    try:
-        prices = fetch_entsoe_prices(cfg.api_key, cfg.area)
-        return prices, "ENTSO-E"
-    except PricesNotYetAvailable as exc:
-        log.error("No prices available: %s", exc)
-        sys.exit(1)
-    except Exception as exc:
-        log.error("ENTSO-E fetch failed: %s", exc)
-        sys.exit(1)
+    """Fetch all available ENTSO-E prices. Raises on failure."""
+    prices = fetch_entsoe_prices(cfg.api_key, cfg.area)
+    return prices, "ENTSO-E"
 
 
 def _check_window_coverage(
@@ -1981,7 +1974,16 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     log.info("Timezone: %s (UTC%+d)", tz.name,
              int(datetime.now(tz=tz.zone).utcoffset().total_seconds() / 3600))
 
-    all_prices, price_source = _fetch_prices(cfg0)
+    try:
+        all_prices, price_source = _fetch_prices(cfg0)
+    except PricesNotYetAvailable as exc:
+        log.warning("%s", exc)
+        _notify_prices_unavailable(raw_config.get("ntfy", {}))
+        sys.exit(0)
+    except Exception as exc:
+        log.error("ENTSO-E fetch failed: %s", exc)
+        _notify_prices_unavailable(raw_config.get("ntfy", {}))
+        sys.exit(1)
 
     plans = []
     skipped = []
