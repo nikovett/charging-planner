@@ -92,12 +92,6 @@ charging:
         max_charging_rate: 16.0
         restore_mode: true
 
-  - name: optimal
-    required_hours: 4.5
-    continuous_only: true
-    preferred_window_start: any     # no window constraint
-    preferred_window_end: any
-
 ntfy:
   enabled: true
   topic: ""
@@ -164,9 +158,9 @@ See [`delivery/README.md`](delivery/README.md) for full handler configuration re
 A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan JSONs from `data/` and `config.yaml` directly from the repository — no token or backend needed.
 
 Features:
-- One flip card per profile — front shows the plan, back shows profile configuration and weekly schedule
+- One flip card per profile — front shows the plan, back shows profile configuration, optimal slots histogram, and weekly schedule
 - Price histogram with all available slots, charging windows highlighted in green, min/max price labelled
-- Stats row: scheduled hours, avg price, market avg, vs market percentage
+- Stats row: scheduled hours, avg price, vs market percentage, vs optimal percentage (overlap between scheduled and theoretically optimal slots)
 - Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")
 - Weekly schedule grid per profile showing configured windows for each day
 
@@ -268,6 +262,7 @@ One `plan-{name}.json` file is written per profile:
   "required_minutes": 360,
   "total_minutes": 360,
   "avg_price_cents_kwh": 0.91,
+  "avg_optimal_price_cents_kwh": 0.91,
   "preferred_window_start": "22:00",
   "preferred_window_end": "06:30",
   "windows": [
@@ -281,8 +276,8 @@ One `plan-{name}.json` file is written per profile:
   "window_starts_utc": ["2026-03-14T22:00:00+00:00"],
   "window_ends_utc":   ["2026-03-15T04:00:00+00:00"],
   "price_slots": [
-    { "start_utc": "2026-03-14T20:00:00+00:00", "price_cents_kwh": 0.82, "charging": false },
-    { "start_utc": "2026-03-14T22:00:00+00:00", "price_cents_kwh": 0.91, "charging": true },
+    { "start_utc": "2026-03-14T20:00:00+00:00", "price_cents_kwh": 0.82, "charging": false, "optimal": false },
+    { "start_utc": "2026-03-14T22:00:00+00:00", "price_cents_kwh": 0.91, "charging": true, "optimal": true },
     ...
   ],
   "ocpp_charging_profile": {
@@ -306,7 +301,7 @@ One `plan-{name}.json` file is written per profile:
 
 `window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems.
 
-`price_slots` contains all available price slots from the script run onwards, each with `start_utc`, `price_cents_kwh`, and `charging: true/false`. Used by the dashboard to render the price histogram with charging windows highlighted.
+`price_slots` contains all available price slots from the script run onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `continuous_only` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. Used by the dashboard to show the "vs optimal" comparison and render the optimal slots histogram on the back card.
 
 ### OCPP smart charging
 
