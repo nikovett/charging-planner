@@ -665,10 +665,12 @@ function renderTimeline(plan) {
     var lineTopPct = (100 - nowBarH).toFixed(1); // top:X% means line starts from X% down
     // Arrow: small downward-pointing SVG triangle centered on nowPct, sitting at bar top
     var arrowH = 6; // px height of arrow
+    // Line stops 7px above bar top to leave room for arrow tip
+    var arrowTop = 'calc(' + lineTopPct + '% - 7px)';
     midnightHTML = '<div style="position:absolute;left:' + nowPct + '%;top:0;height:' + lineTopPct + '%;width:1px;background:var(--accent);opacity:0.9;z-index:2;pointer-events:none;transform:translateX(-50%)"></div>'
-                 + '<svg style="position:absolute;left:' + nowPct + '%;top:calc(' + lineTopPct + '% - 1px);transform:translateX(-50%);overflow:visible;z-index:3;pointer-events:none" width="9" height="7" viewBox="0 0 9 7"><polygon points="4.5,7 0,0 9,0" fill="var(--accent)" opacity="0.9"/></svg>'
-                 + '<span style="position:absolute;left:' + nowPct + '%;top:3px;transform:translateX(-100%);padding-right:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;text-align:right;line-height:1.4">now</span>'
-                 + (nowPrice ? '<span style="position:absolute;left:' + nowPct + '%;top:3px;padding-left:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3">' + nowPrice + '</span>' : '');
+                 + '<svg style="position:absolute;left:' + nowPct + '%;top:' + arrowTop + ';transform:translateX(-50%);overflow:visible;z-index:3;pointer-events:none" width="9" height="7" viewBox="0 0 9 7"><polygon points="4.5,7 0,0 9,0" fill="var(--accent)" opacity="0.9"/></svg>'
+                 + '<span style="position:absolute;left:' + nowPct + '%;top:3px;transform:translateX(-100%);padding-right:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;line-height:1">now</span>'
+                 + (nowPrice ? '<span style="position:absolute;left:' + nowPct + '%;top:3px;padding-left:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;line-height:1">' + nowPrice + '</span>' : '');
   }
 
   // Market average horizontal dashed line
