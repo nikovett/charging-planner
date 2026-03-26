@@ -268,7 +268,7 @@
   .tick {
     font-family: var(--mono);
     font-size: 9px;
-    color: var(--accent);
+    color: var(--muted);
   }
 
   /* ── Windows list ── */
@@ -955,11 +955,11 @@ function renderOptimalHistogram(plan) {
     var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 63)).toFixed(1);
     var bg, border;
     if (s.charging && s.optimal) {
-      bg = "var(--accent)"; border = "border:1px solid var(--accent2);border-bottom:none;";
+      bg = "var(--accent)"; border = "border-top:1px solid var(--accent2);";
     } else if (s.charging && !s.optimal) {
-      bg = "radial-gradient(circle, var(--accent) 1.2px, transparent 1.2px)"; border = "background-size:4px 4px;background-position:2px 2px;border:1px solid var(--accent);border-bottom:none;";
+      bg = "radial-gradient(circle, var(--accent) 1.2px, transparent 1.2px)"; border = "background-size:4px 4px;background-position:2px 2px;border-top:1px solid var(--accent);border-left:1px solid var(--accent);border-right:1px solid var(--accent);";
     } else if (!s.charging && s.optimal) {
-      bg = "transparent"; border = "border:1px solid var(--accent);border-bottom:none;";
+      bg = "transparent"; border = "border-top:1px solid var(--accent);border-left:1px solid var(--accent);border-right:1px solid var(--accent);";
     } else {
       bg = "var(--dim)"; border = "border-top:1px solid var(--border2);";
     }
