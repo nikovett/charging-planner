@@ -1960,9 +1960,11 @@ def _plan_one_profile(
     # plan_date: the local calendar date the window starts on
     plan_date = win_start_utc.astimezone(tz.zone).date()
 
-    # display_prices: all usable slots from the script run onwards.
-    # This is the full market the user could have chosen from at the time of planning.
-    display_prices = all_prices
+    # display_prices: all usable slots within a 48-hour horizon from now.
+    # This matches the typical ENTSO-E data range and ensures optimal selection
+    # compares against the same window of prices regardless of price source.
+    horizon_utc = datetime.now(tz=timezone.utc) + timedelta(hours=48)
+    display_prices = [s for s in all_prices if s.start < horizon_utc]
 
     earliest_useful  = win_start_utc - timedelta(minutes=cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
