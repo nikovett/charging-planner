@@ -130,7 +130,9 @@ A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — i
 
 Days not listed in `schedule` use the top-level preferred window.
 
-**Slot selection** — the planner fills as many slots as possible from within the preferred window first, then spills leftward outside it only if needed to meet `required_hours`. Spillover never goes after `preferred_window_end`. When no window is configured (`any`), all available prices are eligible and no spillover logic is needed.
+**Slot selection** — for `continuous_only: true`, the planner evaluates all possible contiguous blocks of `required_hours` length and picks the cheapest. For `continuous_only: false`, it finds the globally cheapest combination of blocks that together cover exactly `required_hours`, where every block and every gap between blocks is ≥ `min_slot_minutes`. Adjacent selected blocks are merged into a single charging window automatically.
+
+**Preferred window and spillover** — slots within the configured preferred window are the primary candidates. If the window doesn't contain enough slots to satisfy `required_hours` (too few slots, or all above `max_price_cents_kwh`), the planner adds the cheapest available slots from outside the window to cover the deficit — but never past `preferred_window_end`. When no window is configured (`any`), all available slots are candidates from the start.
 
 **Guaranteed charge until departure time** — setting `required_hours` longer than the window with `continuous_only: true` ensures the block always ends exactly at `preferred_window_end`. Not applicable when using `any`.
 
