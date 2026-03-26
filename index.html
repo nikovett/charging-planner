@@ -825,8 +825,7 @@ function renderProfile(plan) {
            var allPast = plan.window_ends_utc && plan.window_ends_utc.length &&
              plan.window_ends_utc.every(function(e) { return new Date(e) < new Date(); });
            var style = allPast ? 'color:var(--warn)' : '';
-           return (plan.price_source === 'forecast' ? '<span style="font-family:var(--mono);font-size:9px;color:var(--warn);letter-spacing:0.06em;margin-right:8px">FORECAST</span>' : '')
-                  + '<span class="profile-date"' + (style ? ' style="' + style + '"' : '') + '>charges ' + chargePeriod + '</span></div>';
+           return '<span class="profile-date"' + (style ? ' style="' + style + '"' : '') + '>charges ' + chargePeriod + '</span></div>';
          })()
        + '<div class="stats-row">'
        + '<div class="stat"><div class="stat-label">scheduled</div><div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
@@ -1004,7 +1003,7 @@ function renderOptimalHistogram(plan) {
     tickHTML += '<span class="tick" style="position:absolute;left:' + pct + '%">' + String(hh).padStart(2,"0") + ':00</span>';
   }
 
-  // Build windows list from optimal slots
+  // Build windows list from optimal slots in visible range
   var optWindows = [];
   var inOpt = false, winStart = null, winPrice = [], winMins = 0;
   visible.forEach(function(s, i) {
@@ -1034,6 +1033,54 @@ function renderOptimalHistogram(plan) {
     optWindows.push('<div class="window-row"><span class="window-time">' + fmt2(startLocal2) + "–" + fmt2(endLocal2) + '</span><span class="window-price">' + avg2 + ' c€/kWh</span><span class="window-dur">' + dur2 + '</span></div>');
   }
 
+  // If no optimal slots in visible range, build pills from full slots and add note
+  var optNote = '';
+  if (!optWindows.length) {
+    var allOptWindows = [];
+    var inOpt2 = false, winStart2 = null, winPrice2 = [], winMins2 = 0;
+    slots.filter(function(s) { return s.optimal; }).forEach(function(s) {
+      if (!inOpt2) { inOpt2 = true; winStart2 = s; winPrice2 = []; winMins2 = 0; }
+      winPrice2.push(s.price_cents_kwh);
+      winMins2 += 15;
+    });
+    if (inOpt2 && winStart2) {
+      // Find end of last optimal slot
+      var optSlots = slots.filter(function(s) { return s.optimal; });
+      var lastOpt = optSlots[optSlots.length-1];
+      // Group into windows
+      var prevEnd = null;
+      var curWinStart = null, curWinPrices = [], curWinMins = 0;
+      var fmtOpt = function(d) { return String(d.getUTCHours()).padStart(2,"0") + ":" + String(d.getUTCMinutes()).padStart(2,"0"); };
+      optSlots.forEach(function(s) {
+        var t = new Date(s.start_utc).getTime();
+        if (!curWinStart || (prevEnd !== null && t > prevEnd)) {
+          if (curWinStart) {
+            var sl = new Date(curWinStart + utcOffset*60000);
+            var el = new Date(prevEnd + utcOffset*60000);
+            var avg3 = (curWinPrices.reduce(function(a,b){return a+b;},0)/curWinPrices.length).toFixed(2);
+            var dur3 = curWinMins >= 60 ? Math.floor(curWinMins/60)+"h"+(curWinMins%60?String(curWinMins%60).padStart(2,"0")+"m":"") : curWinMins+"m";
+            allOptWindows.push('<div class="window-row"><span class="window-time">' + fmtOpt(sl) + "–" + fmtOpt(el) + '</span><span class="window-price">' + avg3 + ' c€/kWh</span><span class="window-dur">' + dur3 + '</span></div>');
+          }
+          curWinStart = t; curWinPrices = []; curWinMins = 0;
+        }
+        curWinPrices.push(s.price_cents_kwh);
+        curWinMins += 15;
+        prevEnd = t + 15*60000;
+      });
+      if (curWinStart) {
+        var sl2 = new Date(curWinStart + utcOffset*60000);
+        var el2 = new Date(prevEnd + utcOffset*60000);
+        var avg4 = (curWinPrices.reduce(function(a,b){return a+b;},0)/curWinPrices.length).toFixed(2);
+        var dur4 = curWinMins >= 60 ? Math.floor(curWinMins/60)+"h"+(curWinMins%60?String(curWinMins%60).padStart(2,"0")+"m":"") : curWinMins+"m";
+        allOptWindows.push('<div class="window-row"><span class="window-time">' + fmtOpt(sl2) + "–" + fmtOpt(el2) + '</span><span class="window-price">' + avg4 + ' c€/kWh</span><span class="window-dur">' + dur4 + '</span></div>');
+      }
+      if (allOptWindows.length) {
+        optWindows = allOptWindows;
+        optNote = '<div style="font-family:var(--mono);font-size:9px;color:var(--muted);padding:4px 0 0;letter-spacing:0.04em">outside visible range</div>';
+      }
+    }
+  }
+
   return '<div style="margin-top:16px">'
        + '<div style="display:flex;align-items:center;margin-bottom:4px">'
        + '<span style="font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted)">optimal slots</span>'
@@ -1047,7 +1094,7 @@ function renderOptimalHistogram(plan) {
        + barsHTML
        + '</div>'
        + '<div class="timeline-ticks" style="position:relative;height:16px">' + tickHTML + '</div>'
-       + (optWindows.length ? '<div style="padding:12px 0 8px;display:flex;flex-direction:row;flex-wrap:wrap;gap:8px">' + optWindows.join("") + '</div>' : '')
+       + (optWindows.length ? '<div style="padding:12px 0 8px;display:flex;flex-direction:row;flex-wrap:wrap;gap:8px">' + optWindows.join("") + '</div>' + optNote : '')
        + '</div>';
 }
 
