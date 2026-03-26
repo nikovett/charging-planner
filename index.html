@@ -593,14 +593,17 @@ function renderTimeline(plan) {
 
   // 24h window centered on charging midpoint
   var rangeStart, rangeEnd;
+  var firstSlotMins = new Date(slots[0].start_utc).getTime() / 60000 + utcOffset;
   if (plan.window_starts_utc && plan.window_starts_utc.length) {
     var wsUtc = new Date(plan.window_starts_utc[0]).getTime() + utcOffset * 60000;
     var weUtc = new Date(plan.window_ends_utc[plan.window_ends_utc.length-1]).getTime() + utcOffset * 60000;
     var midMs = (wsUtc + weUtc) / 2;
     rangeStart = Math.round(midMs / 60000) - 12 * 60;
     rangeEnd   = rangeStart + 24 * 60;
+    // Clamp rangeStart to first available slot so bars don't float with empty space on left
+    rangeStart = Math.max(rangeStart, firstSlotMins);
   } else {
-    rangeStart = new Date(slots[0].start_utc).getTime() / 60000 + utcOffset;
+    rangeStart = firstSlotMins;
     rangeEnd   = rangeStart + 24 * 60;
   }
   var totalMins = rangeEnd - rangeStart;
@@ -950,14 +953,16 @@ function renderOptimalHistogram(plan) {
   var rangeP = maxP - minP || 1;
 
   var rangeStart, rangeEnd;
+  var firstSlotMins2 = new Date(slots[0].start_utc).getTime() / 60000 + utcOffset;
   if (plan.window_starts_utc && plan.window_starts_utc.length) {
     var wsUtc = new Date(plan.window_starts_utc[0]).getTime() + utcOffset * 60000;
     var weUtc = new Date(plan.window_ends_utc[plan.window_ends_utc.length-1]).getTime() + utcOffset * 60000;
     var midMs = (wsUtc + weUtc) / 2;
     rangeStart = Math.round(midMs / 60000) - 12 * 60;
     rangeEnd   = rangeStart + 24 * 60;
+    rangeStart = Math.max(rangeStart, firstSlotMins2);
   } else {
-    rangeStart = new Date(slots[0].start_utc).getTime() / 60000 + utcOffset;
+    rangeStart = firstSlotMins2;
     rangeEnd   = rangeStart + 24 * 60;
   }
   var totalMins = rangeEnd - rangeStart;
