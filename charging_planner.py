@@ -562,8 +562,9 @@ def fetch_forecast_prices(area: str = "FI") -> list[Slot]:
     for any other area since no equivalent public forecast exists.
 
     The JSON is a list of [unix_ms_utc, price_c_kwh_with_VAT] pairs at hourly
-    resolution. Each hour is expanded into four 15-minute Slot objects at the
-    same ex-VAT price so the rest of the pipeline works unchanged.
+    resolution. Each hourly price is expanded into four consecutive 15-minute
+    Slot objects at the same ex-VAT price, producing the same structure as
+    fetch_entsoe_prices so the rest of the pipeline requires no changes.
 
     Raises PricesNotYetAvailable if the fetch fails or returns no usable data.
     """
@@ -589,28 +590,36 @@ def fetch_forecast_prices(area: str = "FI") -> list[Slot]:
 
     now_utc = datetime.now(tz=timezone.utc)
     slots: list[Slot] = []
-    for i, (ts_ms, price_vat) in enumerate(data):
+    for ts_ms, price_vat in data:
         hour_start = datetime.fromtimestamp(float(ts_ms) / 1000, tz=timezone.utc)
-        if hour_start < now_utc - timedelta(hours=1):
+        # Skip hours entirely in the past
+        if hour_start + timedelta(hours=1) <= now_utc:
             continue
-        price_ex_vat = price_vat / 100 / FINLAND_VAT  # c€/kWh incl. VAT → €/kWh ex-VAT
+        # Strip Finnish VAT: c€/kWh incl. VAT → €/kWh ex-VAT
+        price_ex_vat = price_vat / 100 / FINLAND_VAT
+        # Expand each hour into 4 × 15-min slots — identical price, aligned starts
         for q in range(4):
             slot_start = hour_start + timedelta(minutes=15 * q)
             slot_end   = slot_start + timedelta(minutes=15)
-            if slot_start >= now_utc:
-                slots.append(Slot(
-                    start=slot_start,
-                    end=slot_end,
-                    duration_minutes=15,
-                    price_eur_kwh=price_ex_vat,
-                    slot=len(slots),
-                ))
+            slots.append(Slot(
+                start=slot_start,
+                end=slot_end,
+                duration_minutes=15,
+                price_eur_kwh=price_ex_vat,
+                slot=len(slots),
+            ))
 
     if not slots:
         raise PricesNotYetAvailable("Forecast fallback returned no usable future slots.")
 
-    log.info("Forecast fallback: %d slots fetched (hourly → 15-min, ex-VAT)", len(slots))
-    return slots
+    # Return only non-past slots, renumbered — identical to fetch_entsoe_prices output
+    usable = [s for s in slots if s.end > now_utc]
+    result = [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
+                   price_eur_kwh=s.price_eur_kwh, slot=i)
+              for i, s in enumerate(usable)]
+    log.info("Forecast fallback: %d usable 15-min slots (from %d hours, ex-VAT)",
+             len(result), len(result) // 4)
+    return result
 
 
 def _xml_parse_root(xml_text: str):
