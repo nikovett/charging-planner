@@ -677,7 +677,8 @@ function renderTimeline(plan) {
   if (avgP !== null) {
     var avgBarH = 25 + ((avgP - minP) / rangeP * 63);
     var avgLinePct = (100 - avgBarH).toFixed(1);
-    marketLineHTML = '<div style="position:absolute;left:0;right:0;top:' + avgLinePct + '%;height:1px;border-top:1px dashed var(--border2);z-index:1;pointer-events:none;opacity:0.6"></div>';
+    marketLineHTML = '<div style="position:absolute;left:0;right:0;top:' + avgLinePct + '%;height:1px;border-top:1px dashed var(--muted);z-index:1;pointer-events:none;opacity:0.5"></div>'
+                   + '<span style="position:absolute;right:3px;top:calc(' + avgLinePct + '% - 9px);font-family:var(--mono);font-size:7px;color:var(--muted);z-index:2;pointer-events:none;opacity:0.8">avg</span>';
   }
 
 
