@@ -605,18 +605,23 @@ function renderTimeline(plan) {
     var tip = String(hh).padStart(2,"0") + ":" + String(mm).padStart(2,"0") + "  " + s.price_cents_kwh.toFixed(2) + " c\u20ac/kWh" + (isCharging ? "  \u26a1" : "");
 
     // Min label: teal on grey bar, grey on teal bar; rotated inside bar at top
+    // Only show if bar is wide enough — skip on narrow mobile viewports
     var annotation = "";
-    if (isMin) {
-      var minColor = isCharging ? "var(--muted)" : "var(--accent)";
-      annotation = '<div style="position:absolute;top:2px;left:0;right:0;display:flex;align-items:center;justify-content:flex-start;writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);font-family:var(--mono);font-size:7px;color:' + minColor + ';white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
-    }
-    if (isMax) {
-      annotation = '<div style="position:absolute;top:2px;left:0;right:0;display:flex;align-items:center;justify-content:flex-start;writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
-    }
-    // Now price inside bar — skip if this bar already has min/max label
-    if (isNow && !isMin && !isMax) {
-      var nowLabelColor = isCharging ? "var(--muted)" : "var(--accent)";
-      annotation = '<div style="position:absolute;top:2px;left:0;right:0;display:flex;align-items:center;justify-content:flex-start;writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);font-family:var(--mono);font-size:7px;color:' + nowLabelColor + ';white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
+    var barWidthPx = parseFloat(slotWidthPct) / 100 * (window.innerWidth || 800);
+    var showLabel = barWidthPx >= 8;
+    if (showLabel) {
+      if (isMin) {
+        var minColor = isCharging ? "var(--muted)" : "var(--accent)";
+        annotation = '<div style="position:absolute;top:2px;left:0;right:0;display:flex;align-items:center;justify-content:flex-start;writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);font-family:var(--mono);font-size:7px;color:' + minColor + ';white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
+      }
+      if (isMax) {
+        annotation = '<div style="position:absolute;top:2px;left:0;right:0;display:flex;align-items:center;justify-content:flex-start;writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
+      }
+      // Now price inside bar — skip if this bar already has min/max label
+      if (isNow && !isMin && !isMax) {
+        var nowLabelColor = isCharging ? "var(--muted)" : "var(--accent)";
+        annotation = '<div style="position:absolute;top:2px;left:0;right:0;display:flex;align-items:center;justify-content:flex-start;writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);font-family:var(--mono);font-size:7px;color:' + nowLabelColor + ';white-space:nowrap;line-height:1;pointer-events:none">' + s.price_cents_kwh.toFixed(2) + '</div>';
+      }
     }
 
     return '<div title="' + tip + '" style="position:absolute;left:' + leftPct + '%;bottom:0;width:calc(' + slotWidthPct + '% - ' + gapPx + 'px);height:' + h + '%;background:' + bg + ';' + border + 'box-sizing:border-box;border-radius:2px 2px 0 0;overflow:hidden">' + annotation + '</div>';
