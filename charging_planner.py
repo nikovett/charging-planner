@@ -515,7 +515,7 @@ def fetch_entsoe_prices(
     log.info("Fetching ENTSO-E prices: area=%s", area)
     req = urllib.request.Request(url, headers={"Accept": "application/xml"})
     try:
-        raw = _http_request_with_retry(req, timeout=20, retries=3, label="ENTSO-E")
+        raw = _http_request_with_retry(req, timeout=30, retries=5, backoff=5.0, label="ENTSO-E")
     except Exception as e:
         log.error("ENTSO-E request failed after retries: %s", e)
         raise
