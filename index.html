@@ -665,13 +665,11 @@ function renderTimeline(plan) {
     var lineTopPct = (100 - nowBarH).toFixed(1); // top:X% means line starts from X% down
     // Arrow: small downward-pointing SVG triangle centered on nowPct, sitting at bar top
     var arrowH = 6; // px height of arrow
-    // Arrow is 75% of bar width, line ends 3px above arrow base
-    var barPxW = (100 / n).toFixed(2); // bar width as % of histogram
-    var arrowW = Math.max(6, (100 / n * 0.75)).toFixed(2); // 75% of bar width in %
-    var arrowTop = 'calc(' + lineTopPct + '% - 3px)';
-    var lineH = 'calc(' + lineTopPct + '% - 6px)';
-    midnightHTML = '<div style="position:absolute;left:' + nowPct + '%;top:6px;height:' + lineH + ';width:1px;background:var(--accent);opacity:0.9;z-index:2;pointer-events:none;transform:translateX(-50%)"></div>'
-                 + '<svg style="position:absolute;left:' + nowPct + '%;top:' + arrowTop + ';transform:translateX(-50%);overflow:visible;z-index:3;pointer-events:none" width="' + arrowW + '%" height="6" viewBox="0 0 10 6" preserveAspectRatio="none"><polygon points="5,6 0,0 10,0" fill="var(--accent)" opacity="0.9"/></svg>'
+    // Arrow sized to ~75% of bar width in px (bar width = histogram_width / n)
+    var arrowTop = 'calc(' + lineTopPct + '% - 2px)';
+    var lineH = 'calc(' + lineTopPct + '% - 4px)';
+    midnightHTML = '<div style="position:absolute;left:' + nowPct + '%;top:2px;height:' + lineH + ';width:1px;background:var(--accent);opacity:0.9;z-index:2;pointer-events:none;transform:translateX(-50%)"></div>'
+                 + '<svg style="position:absolute;left:' + nowPct + '%;top:' + arrowTop + ';transform:translateX(-50%);overflow:visible;z-index:3;pointer-events:none" width="' + Math.max(4, Math.round(600/n*0.75)) + 'px" height="5" viewBox="0 0 10 5" preserveAspectRatio="none"><polygon points="5,5 0,0 10,0" fill="var(--accent)" opacity="0.9"/></svg>'
                  + '<span style="position:absolute;left:' + nowPct + '%;top:3px;transform:translateX(-100%);padding-right:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;line-height:1">now</span>'
                  + (nowPrice ? '<span style="position:absolute;left:' + nowPct + '%;top:3px;padding-left:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;line-height:1">' + nowPrice + '</span>' : '');
   }
@@ -1040,9 +1038,9 @@ function renderOptimalHistogram(plan) {
        + '<span style="font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted)">optimal slots</span>'
        + '<span style="flex:1"></span>'
        + '<span style="display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);font-size:9px;color:var(--muted)">'
-       + '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:20px;height:10px;background:var(--accent);border:1px solid var(--accent2);border-radius:1px"></span>charging — optimal</span>'
-       + '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:20px;height:10px;background:transparent;border:1px solid var(--accent);border-radius:1px"></span>optimal only</span>'
-       + '<span style="display:inline-flex;align-items:center;gap:4px"><svg width="20" height="10" style="flex-shrink:0;vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="9" rx="1" fill="none" stroke="var(--accent)" stroke-width="1"/><circle cx="4"  cy="3" r="1" fill="var(--accent)"/><circle cx="8"  cy="3" r="1" fill="var(--accent)"/><circle cx="12" cy="3" r="1" fill="var(--accent)"/><circle cx="16" cy="3" r="1" fill="var(--accent)"/><circle cx="6"  cy="7" r="1" fill="var(--accent)"/><circle cx="10" cy="7" r="1" fill="var(--accent)"/><circle cx="14" cy="7" r="1" fill="var(--accent)"/></svg>charging only</span>'
+       + '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:20px;height:10px;background:var(--accent);border:1px solid var(--accent2);border-radius:1px"></span>optimal</span>'
+       + '<span style="display:inline-flex;align-items:center;gap:4px"><span style="display:inline-block;width:20px;height:10px;background:transparent;border:1px solid var(--accent);border-radius:1px"></span>missed</span>'
+       + '<span style="display:inline-flex;align-items:center;gap:4px"><svg width="20" height="10" style="flex-shrink:0;vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="9" rx="1" fill="none" stroke="var(--accent)" stroke-width="1"/><circle cx="4"  cy="3" r="1" fill="var(--accent)"/><circle cx="8"  cy="3" r="1" fill="var(--accent)"/><circle cx="12" cy="3" r="1" fill="var(--accent)"/><circle cx="16" cy="3" r="1" fill="var(--accent)"/><circle cx="6"  cy="7" r="1" fill="var(--accent)"/><circle cx="10" cy="7" r="1" fill="var(--accent)"/><circle cx="14" cy="7" r="1" fill="var(--accent)"/></svg>suboptimal</span>'
        + '</span></div>'
        + '<div style="position:relative;width:100%;height:90px;background:var(--bg3);border:1px solid var(--border);border-radius:2px;overflow:visible;box-sizing:border-box;display:flex;align-items:flex-end">'
        + barsHTML
