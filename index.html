@@ -273,9 +273,10 @@
 
   /* ── Windows list ── */
   .windows-list {
-    padding: 12px 20px 8px;
+    padding: 12px 20px 12px;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    flex-wrap: wrap;
     gap: 8px;
   }
   .window-row {
@@ -1003,7 +1004,7 @@ function renderOptimalHistogram(plan) {
        + barsHTML
        + '</div>'
        + '<div class="timeline-ticks" style="position:relative;height:16px">' + tickHTML + '</div>'
-       + (optWindows.length ? '<div style="padding:12px 0 4px;display:flex;flex-direction:column;gap:8px">' + optWindows.join("") + '</div>' : '')
+       + (optWindows.length ? '<div style="padding:12px 0 8px;display:flex;flex-direction:row;flex-wrap:wrap;gap:8px">' + optWindows.join("") + '</div>' : '')
        + '</div>';
 }
 
