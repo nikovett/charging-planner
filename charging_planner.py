@@ -546,6 +546,64 @@ def fetch_entsoe_prices(
             for i, s in enumerate(sorted(usable, key=lambda x: x.start))]
 
 
+FORECAST_URL = (
+    "https://raw.githubusercontent.com/vividfog/nordpool-predict-fi"
+    "/main/deploy/prediction.json"
+)
+FINLAND_VAT = 1.255  # 25.5% VAT — forecast prices include VAT, ENTSO-E does not
+
+
+def fetch_forecast_prices() -> list[Slot]:
+    """Fetch hourly price forecast from nordpool-predict-fi as a fallback.
+
+    The JSON is a list of [unix_ms_utc, price_c_kwh_with_VAT] pairs at hourly
+    resolution. Each hour is expanded into four 15-minute Slot objects at the
+    same ex-VAT price so the rest of the pipeline works unchanged.
+
+    Raises PricesNotYetAvailable if the fetch fails or returns no usable data.
+    """
+    log.info("Fetching forecast prices from nordpool-predict-fi (fallback)")
+    req = urllib.request.Request(FORECAST_URL, headers={"Accept": "application/json"})
+    try:
+        raw = _http_request_with_retry(req, timeout=15, retries=3, backoff=3.0,
+                                       label="nordpool-predict-fi")
+    except Exception as e:
+        raise PricesNotYetAvailable(f"Forecast fallback fetch failed: {e}")
+
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        raise PricesNotYetAvailable(f"Forecast fallback JSON parse failed: {e}")
+
+    if not data:
+        raise PricesNotYetAvailable("Forecast fallback returned empty data.")
+
+    now_utc = datetime.now(tz=timezone.utc)
+    slots: list[Slot] = []
+    for i, (ts_ms, price_vat) in enumerate(data):
+        hour_start = datetime.fromtimestamp(float(ts_ms) / 1000, tz=timezone.utc)
+        if hour_start < now_utc - timedelta(hours=1):
+            continue
+        price_ex_vat = price_vat / 100 / FINLAND_VAT  # c€/kWh incl. VAT → €/kWh ex-VAT
+        for q in range(4):
+            slot_start = hour_start + timedelta(minutes=15 * q)
+            slot_end   = slot_start + timedelta(minutes=15)
+            if slot_start >= now_utc:
+                slots.append(Slot(
+                    start=slot_start,
+                    end=slot_end,
+                    duration_minutes=15,
+                    price_eur_kwh=price_ex_vat,
+                    slot=len(slots),
+                ))
+
+    if not slots:
+        raise PricesNotYetAvailable("Forecast fallback returned no usable future slots.")
+
+    log.info("Forecast fallback: %d slots fetched (hourly → 15-min, ex-VAT)", len(slots))
+    return slots
+
+
 def _xml_parse_root(xml_text: str):
     """Parse XML text and return (root, ns_uri). Raises on parse error or API error response."""
     try:
@@ -1977,13 +2035,25 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     try:
         all_prices, price_source = _fetch_prices(cfg0)
     except PricesNotYetAvailable as exc:
-        log.warning("%s", exc)
-        _notify_prices_unavailable(raw_config.get("ntfy", {}))
-        sys.exit(0)
+        log.warning("%s — trying forecast fallback.", exc)
+        try:
+            all_prices = fetch_forecast_prices()
+            price_source = "forecast"
+            log.info("Using forecast prices as fallback.")
+        except PricesNotYetAvailable as exc2:
+            log.warning("%s", exc2)
+            _notify_prices_unavailable(raw_config.get("ntfy", {}))
+            sys.exit(0)
     except Exception as exc:
-        log.error("ENTSO-E fetch failed: %s", exc)
-        _notify_prices_unavailable(raw_config.get("ntfy", {}))
-        sys.exit(1)
+        log.error("ENTSO-E fetch failed: %s — trying forecast fallback.", exc)
+        try:
+            all_prices = fetch_forecast_prices()
+            price_source = "forecast"
+            log.info("Using forecast prices as fallback.")
+        except PricesNotYetAvailable as exc2:
+            log.warning("%s", exc2)
+            _notify_prices_unavailable(raw_config.get("ntfy", {}))
+            sys.exit(1)
 
     plans = []
     skipped = []

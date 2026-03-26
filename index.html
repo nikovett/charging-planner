@@ -825,7 +825,8 @@ function renderProfile(plan) {
            var allPast = plan.window_ends_utc && plan.window_ends_utc.length &&
              plan.window_ends_utc.every(function(e) { return new Date(e) < new Date(); });
            var style = allPast ? 'color:var(--warn)' : '';
-           return '<span class="profile-date"' + (style ? ' style="' + style + '"' : '') + '>charges ' + chargePeriod + '</span></div>';
+           return (plan.price_source === 'forecast' ? '<span style="font-family:var(--mono);font-size:9px;color:var(--warn);letter-spacing:0.06em;margin-right:8px">FORECAST</span>' : '')
+                  + '<span class="profile-date"' + (style ? ' style="' + style + '"' : '') + '>charges ' + chargePeriod + '</span></div>';
          })()
        + '<div class="stats-row">'
        + '<div class="stat"><div class="stat-label">scheduled</div><div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
@@ -1175,6 +1176,12 @@ function loadFromRepo() {
         warn.style.cssText = "font-family:var(--mono);font-size:11px;color:var(--warn);text-align:center;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:8px;letter-spacing:0.04em";
         warn.textContent = "\u26a0 plan data is " + ageDays + " days old — prices may not have been available yet";
         document.querySelector(".shell").insertBefore(warn, document.getElementById("profiles"));
+      }
+      if (plans.some(function(p) { return p.price_source === "forecast"; })) {
+        var fwarn = document.createElement("div");
+        fwarn.style.cssText = "font-family:var(--mono);font-size:11px;color:var(--warn);text-align:center;padding:8px 0;border-bottom:1px solid var(--border);margin-bottom:8px;letter-spacing:0.04em";
+        fwarn.textContent = "\u26a0 using forecast prices — ENTSO-E was unavailable when this plan was generated";
+        document.querySelector(".shell").insertBefore(fwarn, document.getElementById("profiles"));
       }
         renderProfiles(plans);
         if (configText) {
