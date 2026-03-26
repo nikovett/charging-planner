@@ -2034,10 +2034,12 @@ def _plan_one_profile(
     # plan_date: the local calendar date the window starts on
     plan_date = win_start_utc.astimezone(tz.zone).date()
 
-    # display_prices: all usable slots within a 48-hour horizon from now.
-    # This matches the typical ENTSO-E data range and ensures optimal selection
-    # compares against the same window of prices regardless of price source.
-    horizon_utc = datetime.now(tz=timezone.utc) + timedelta(hours=48)
+    # display_prices: slots up to (today+1) 23:00 UTC — the same end boundary as
+    # the ENTSO-E request, so optimal selection always compares against the same
+    # pool of prices regardless of whether the source is ENTSO-E or a fallback.
+    today_utc   = datetime.now(tz=timezone.utc).date()
+    horizon_utc = datetime(today_utc.year, today_utc.month, today_utc.day,
+                           23, 0, tzinfo=timezone.utc) + timedelta(days=1)
     display_prices = [s for s in all_prices if s.start < horizon_utc]
 
     earliest_useful  = win_start_utc - timedelta(minutes=cfg.required_minutes)
