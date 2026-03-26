@@ -606,14 +606,18 @@ def fetch_sahkotin_prices(area: str = "FI") -> list[Slot]:
     if not slots:
         raise PricesNotYetAvailable("Sähkötin returned no parseable slots.")
 
-    usable = [s for s in slots if s.end > now_utc]
-    if not usable:
+    # Check there are future slots available for scheduling
+    if not any(s.end > now_utc for s in slots):
         raise PricesNotYetAvailable("Sähkötin returned no usable future slots.")
 
+    # Return all slots (including historical) renumbered — same as fetch_entsoe_prices.
+    # Past slots are used by the dashboard histogram; the scheduler ignores them
+    # because it filters by window start which is always in the future.
     result = [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
                    price_eur_kwh=s.price_eur_kwh, slot=i)
-              for i, s in enumerate(sorted(usable, key=lambda x: x.start))]
-    log.info("Sähkötin: %d usable 15-min slots fetched", len(result))
+              for i, s in enumerate(sorted(slots, key=lambda x: x.start))]
+    log.info("Sähkötin: %d slots fetched (%d future)",
+             len(result), sum(1 for s in result if s.end > now_utc))
     return result
 
 
