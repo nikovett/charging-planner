@@ -627,7 +627,7 @@ function renderTimeline(plan) {
   var minMaxHTML = ""; // labels are rendered inline above each bar
 
   var barsHTML = visible.map(function(s, i) {
-    var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 70)).toFixed(1);
+    var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 63)).toFixed(1);
     var isMin = i === minIdx, isMax = i === maxIdx;
     var bg = s.charging ? "var(--accent)" : "var(--dim)";
     var border = s.charging ? "border-top:1px solid var(--accent2);" : "border-top:1px solid var(--border2);";
@@ -656,7 +656,8 @@ function renderTimeline(plan) {
     }
     var nowPrice = nowSlot ? nowSlot.price_cents_kwh.toFixed(2) : "";
     midnightHTML = '<div style="position:absolute;left:' + nowPct + '%;top:0;bottom:0;width:1px;background:var(--accent);opacity:0.8;z-index:2;pointer-events:none"></div>'
-                 + '<span style="position:absolute;left:' + nowPct + '%;top:3px;padding-left:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;line-height:1.4">now<br>' + nowPrice + '</span>';
+                 + '<span style="position:absolute;left:' + nowPct + '%;top:3px;transform:translateX(-100%);padding-right:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;text-align:right;line-height:1.4">now</span>'
+                 + (nowPrice ? '<span style="position:absolute;left:' + nowPct + '%;top:3px;padding-left:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3">' + nowPrice + '</span>' : '');
   }
 
 
@@ -799,6 +800,7 @@ function renderProfile(plan) {
        + '<div class="stats-row">'
        + '<div class="stat"><div class="stat-label">scheduled</div><div class="stat-value' + (incomplete ? ' warn' : '') + '">' + fmtDuration(plan.total_minutes) + '<span class="stat-unit">of ' + fmtDuration(plan.required_minutes) + '</span></div></div>'
        + '<div class="stat"><div class="stat-label">@ avg price</div><div class="stat-value">' + plan.avg_price_cents_kwh.toFixed(2) + '<span class="stat-unit">c€/kWh</span></div></div>'
+       + '<div class="stat"><div class="stat-label">vs market</div><div class="stat-value ' + savClass + '">' + savStr + '</div></div>'
        + (plan.avg_optimal_price_cents_kwh !== undefined && plan.price_slots
           ? (function() {
               var chargingSlots = plan.price_slots.filter(function(s) { return s.charging; });
@@ -807,8 +809,7 @@ function renderProfile(plan) {
               var cls = overlapPct === 100 ? 'good' : overlapPct >= 75 ? '' : 'warn';
               return '<div class="stat"><div class="stat-label">vs optimal</div><div class="stat-value ' + cls + '">' + overlapPct + '%</div></div>';
             })()
-          : '<div class="stat"><div class="stat-label">market avg</div><div class="stat-value">' + plan.price_stats.avg_cents_kwh.toFixed(2) + '<span class="stat-unit">c\u20ac/kWh</span></div></div>')
-       + '<div class="stat"><div class="stat-label">vs market</div><div class="stat-value ' + savClass + '">' + savStr + '</div></div>'
+          : '')
        + '</div>'
        + renderTimeline(plan)
        + '<div class="windows-list">' + windowsHTML + '</div>'
@@ -917,26 +918,60 @@ function parseConfigYaml(yaml) {
 function renderOptimalHistogram(plan) {
   var slots = plan.price_slots;
   if (!slots || !slots.length) return "";
+  var utcOffset = (plan.utc_offset_hours || 0) * 60;
   var minP = plan.price_stats ? plan.price_stats.min_cents_kwh : 0;
   var maxP = plan.price_stats ? plan.price_stats.max_cents_kwh : 1;
   var rangeP = maxP - minP || 1;
-  var n = slots.length;
+
+  var rangeStart, rangeEnd;
+  if (plan.window_starts_utc && plan.window_starts_utc.length) {
+    var wsUtc = new Date(plan.window_starts_utc[0]).getTime() + utcOffset * 60000;
+    var weUtc = new Date(plan.window_ends_utc[plan.window_ends_utc.length-1]).getTime() + utcOffset * 60000;
+    var midMs = (wsUtc + weUtc) / 2;
+    rangeStart = Math.round(midMs / 60000) - 12 * 60;
+    rangeEnd   = rangeStart + 24 * 60;
+  } else {
+    rangeStart = new Date(slots[0].start_utc).getTime() / 60000 + utcOffset;
+    rangeEnd   = rangeStart + 24 * 60;
+  }
+  var totalMins = rangeEnd - rangeStart;
+
+  var visible = slots.filter(function(s) {
+    var lm = new Date(s.start_utc).getTime() / 60000 + utcOffset;
+    return lm >= rangeStart && lm < rangeEnd;
+  });
+  if (!visible.length) visible = slots;
+
+  var n = visible.length;
   var barW = "calc(" + (100/n).toFixed(4) + "% - 1px)";
-  var barsHTML = slots.map(function(s) {
-    var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 70)).toFixed(1);
+  var barsHTML = visible.map(function(s) {
+    var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 63)).toFixed(1);
     var bg = s.optimal ? "var(--accent)" : "var(--dim)";
     var border = s.optimal ? "border-top:1px solid var(--accent2);" : "border-top:1px solid var(--border2);";
     return '<div style="display:inline-block;width:' + barW + ';height:' + h + '%;background:' + bg + ';' + border + 'margin-right:1px;vertical-align:bottom;box-sizing:border-box;border-radius:2px 2px 0 0"></div>';
   }).join("");
-  var optSlots = slots.filter(function(s) { return s.optimal; });
+
+  var optSlots = visible.filter(function(s) { return s.optimal; });
   var optAvg = optSlots.length ? (optSlots.reduce(function(a,b){return a+b.price_cents_kwh;},0)/optSlots.length).toFixed(2) : null;
+
+  var tickHTML = "";
+  var tickStep = 360;
+  var tickStart = Math.ceil(rangeStart / tickStep) * tickStep;
+  for (var t = tickStart; t <= rangeEnd; t += tickStep) {
+    var pct = ((t - rangeStart) / totalMins * 100).toFixed(1);
+    var hh = Math.floor(((t % (24*60)) + 24*60) % (24*60) / 60);
+    tickHTML += '<span class="tick" style="position:absolute;left:' + pct + '%">' + String(hh).padStart(2,"0") + ':00</span>';
+  }
+
   return '<div style="margin-top:16px">'
-       + '<div style="font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">optimal slots'
+       + '<div style="font-family:var(--mono);font-size:10px;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:4px">optimal slots'
        + (optAvg ? '<span style="float:right;color:var(--text);font-size:11px;text-transform:none;letter-spacing:0">' + optAvg + ' c\u20ac/kWh</span>' : '')
        + '</div>'
-       + '<div style="position:relative;width:100%;height:50px;background:var(--bg3);border:1px solid var(--border);border-radius:2px;overflow:visible;box-sizing:border-box;display:flex;align-items:flex-end">'
+       + '<div style="position:relative;width:100%;height:90px;background:var(--bg3);border:1px solid var(--border);border-radius:2px;overflow:visible;box-sizing:border-box;display:flex;align-items:flex-end">'
        + barsHTML
-       + '</div></div>';
+       + '</div>'
+       + '<div class="timeline-ticks" style="position:relative;height:16px">' + tickHTML + '</div>'
+       + '</div>';
 }
 
 // ── Flip card ────────────────────────────────────────────────────────────
