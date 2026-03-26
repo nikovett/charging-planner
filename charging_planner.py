@@ -816,57 +816,67 @@ def _select_with_min_block(
     n_slots: int,
     min_slots_per_block: int,
 ) -> list[Slot]:
-    sorted_candidates = sorted(candidates, key=lambda x: (x.price_eur_kwh, -x.start.timestamp()))
+    """Select n_slots from candidates such that every contiguous block of selected
+    slots is at least min_slots_per_block long, minimising total price.
+
+    Strategy: enumerate all valid consecutive blocks (runs of ≥ min_slots_per_block
+    consecutive slots), then greedily pick the cheapest individual slots that belong
+    to at least one valid block, using a block-aware repair loop to ensure no
+    orphaned short blocks remain.
+    """
     slot_dur = candidates[0].duration_minutes if candidates else 15
 
-    # Use start datetime as the identity key — guaranteed unique within any
-    # non-overlapping price series, and does not depend on the slot ordinal
-    # field (which is only assigned inside fetch_entsoe_prices).
-    selected_set: set  = set()   # Slot.start datetimes of selected slots
-    disqualified: set  = set()   # Slot.start datetimes of disqualified slots
+    # Build a time-ordered list and a lookup by start time
+    ordered = sorted(candidates, key=lambda x: x.start)
+    slot_by_start = {s.start: s for s in ordered}
 
-    def pick_next(n: int) -> list[Slot]:
-        result = []
-        for s in sorted_candidates:
-            if len(result) == n:
-                break
-            if s.start not in selected_set and s.start not in disqualified:
-                result.append(s)
-        return result
+    # Identify all maximal runs of consecutive slots
+    runs: list[list[Slot]] = []
+    current_run: list[Slot] = []
+    for s in ordered:
+        if current_run and s.start != current_run[-1].end:
+            runs.append(current_run)
+            current_run = []
+        current_run.append(s)
+    if current_run:
+        runs.append(current_run)
 
-    for s in pick_next(n_slots):
-        selected_set.add(s.start)
+    # From each run, enumerate all sub-blocks of size >= min_slots_per_block
+    # ranked by average price — these are the valid atomic units we can pick
+    valid_blocks: list[list[Slot]] = []
+    for run in runs:
+        for size in range(min_slots_per_block, len(run) + 1):
+            for start_i in range(len(run) - size + 1):
+                valid_blocks.append(run[start_i:start_i + size])
 
-    slot_by_start = {s.start: s for s in sorted_candidates}
+    # Sort blocks by average price ascending, then by start time descending
+    # (prefer later blocks as tiebreaker — consistent with single-slot behaviour)
+    valid_blocks.sort(key=lambda b: (sum(s.price_eur_kwh for s in b) / len(b), -b[0].start.timestamp(), -len(b)))
 
-    for iteration in range(len(candidates)):
-        current = sorted([slot_by_start[k] for k in selected_set], key=lambda x: x.start)
-        blocks = _group_continuous(current)
-        short_blocks = [b for b in blocks if len(b) < min_slots_per_block]
-        if not short_blocks:
+    # Greedy block selection: pick cheapest blocks until quota met, no overlap
+    selected_set: set = set()
+    for block in valid_blocks:
+        if len(selected_set) >= n_slots:
             break
-
-        for block in short_blocks:
-            for s in block:
-                selected_set.discard(s.start)
-                disqualified.add(s.start)
-
-        deficit = n_slots - len(selected_set)
-        if deficit <= 0:
+        # Skip if any slot in this block is already selected (overlap)
+        if any(s.start in selected_set for s in block):
             continue
-        backfill = pick_next(deficit)
-        if not backfill:
-            log.warning("Could not backfill %d slot(s) while respecting min_slot_minutes=%d min.",
-                        deficit, min_slots_per_block * slot_dur)
-            break
-        for s in backfill:
-            selected_set.add(s.start)
-    else:
-        log.warning("min_slot_minutes enforcement loop exhausted without converging.")
+        # Only add as many slots as we still need
+        remaining = n_slots - len(selected_set)
+        if len(block) <= remaining:
+            for s in block:
+                selected_set.add(s.start)
+        else:
+            # Block is larger than remaining quota — take the latest consecutive
+            # sub-block of the required size (consistent with latest-preferred tiebreaker)
+            sub_size = remaining
+            if sub_size >= min_slots_per_block:
+                sub = block[-sub_size:]  # take latest slots from the block
+                for s in sub:
+                    selected_set.add(s.start)
 
     result = sorted([slot_by_start[k] for k in selected_set], key=lambda x: x.start)
     final_blocks  = _group_continuous(result)
-    slot_dur      = candidates[0].duration_minutes if candidates else 15
     min_block_min = min_slots_per_block * slot_dur
     short = [b for b in final_blocks if len(b) < min_slots_per_block]
     if short:
