@@ -979,101 +979,119 @@ def _select_with_min_block(
     n_slots: int,
     min_slots_per_block: int,
 ) -> list[Slot]:
-    """Select n_slots from candidates such that every contiguous block of selected
-    slots is at least min_slots_per_block long AND every gap between blocks is also
-    at least min_slots_per_block long, minimising total price.
+    """Select n_slots from candidates at minimum total cost, where every block is
+    ≥ min_slots_per_block long and every gap between blocks is ≥ min_slots_per_block
+    long.  Uses dynamic programming for a globally optimal solution.
 
-    Both constraints mirror the same physical requirement: the charger should not
-    run (or be off) for less than min_slot_minutes at a time.
+    DP formulation:
+      dp[i][r] = minimum total price to schedule exactly r more slots,
+                 using only candidates[i:]
+      choice[i][r] = block length k chosen at position i when dp[i][r] was set
+                     (0 = skip slot i)
+
+    Transitions at position i with r slots remaining:
+      Skip:           dp[i][r] = dp[i+1][r]
+      Start block k:  dp[i][r] = sum(prices[i:i+k]) + dp[i+k+min_gap][r-k]
+                      for k in [min_slots_per_block .. min(r, n - i)]
+                      next valid start = i + k + min_slots_per_block (min gap enforced)
+
+    Reconstruction walks choice[][] forward to collect selected slots.
     """
-    slot_dur = candidates[0].duration_minutes if candidates else 15
-    min_gap  = timedelta(minutes=min_slots_per_block * slot_dur)
+    if not candidates:
+        return []
 
-    # Build a time-ordered list and a lookup by start time
     ordered = sorted(candidates, key=lambda x: x.start)
-    slot_by_start = {s.start: s for s in ordered}
+    n = len(ordered)
+    slot_dur = ordered[0].duration_minutes
+    INF = float("inf")
 
-    # Identify all maximal runs of consecutive slots
-    runs: list[list[Slot]] = []
-    current_run: list[Slot] = []
-    for s in ordered:
-        if current_run and s.start != current_run[-1].end:
-            runs.append(current_run)
-            current_run = []
-        current_run.append(s)
-    if current_run:
-        runs.append(current_run)
+    # Precompute prefix sums for O(1) range cost queries
+    prefix = [0.0] * (n + 1)
+    for i, s in enumerate(ordered):
+        prefix[i + 1] = prefix[i] + s.price_eur_kwh
 
-    # From each run, enumerate all sub-blocks of size >= min_slots_per_block
-    valid_blocks: list[list[Slot]] = []
-    for run in runs:
-        for size in range(min_slots_per_block, len(run) + 1):
-            for start_i in range(len(run) - size + 1):
-                valid_blocks.append(run[start_i:start_i + size])
+    def block_cost(i: int, k: int) -> float:
+        return prefix[i + k] - prefix[i]
 
-    # Sort blocks by average price ascending, then by start time descending
-    valid_blocks.sort(key=lambda b: (sum(s.price_eur_kwh for s in b) / len(b), -b[0].start.timestamp(), -len(b)))
+    # dp[i][r]: min cost to schedule r more slots from position i onwards
+    # Use dicts to avoid allocating a full n×n_slots+1 table (sparse)
+    dp     = [[INF] * (n_slots + 1) for _ in range(n + 1)]
 
-    # Greedy block selection: pick cheapest blocks until quota met,
-    # respecting both overlap and minimum gap constraints.
-    selected_set: set = set()
-    selected_blocks: list[tuple] = []  # list of (block_start, block_end) for gap checks
+    # Base: 0 remaining slots = 0 cost, regardless of position
+    for i in range(n + 1):
+        dp[i][0] = 0.0
 
-    def _violates_min_gap(block: list[Slot]) -> bool:
-        """Return True if this block would create a gap smaller than min_gap
-        with any already-selected block."""
-        b_start = block[0].start
-        b_end   = block[-1].end
-        for sel_start, sel_end in selected_blocks:
-            # Gap between candidate and selected block — check both directions
-            if b_end <= sel_start:
-                gap = sel_start - b_end
-            elif sel_end <= b_start:
-                gap = b_start - sel_end
-            else:
-                gap = timedelta(0)  # overlap — handled separately
-            if timedelta(0) < gap < min_gap:
-                return True
-        return False
+    # Fill backwards
+    for i in range(n - 1, -1, -1):
+        for r in range(1, n_slots + 1):
+            # Option 1: skip slot i
+            best  = dp[i + 1][r]
+            best_k = 0
 
-    for block in valid_blocks:
-        if len(selected_set) >= n_slots:
+            # Option 2: start a block of length k here
+            max_k = min(r, n - i)
+            for k in range(min_slots_per_block, max_k + 1):
+                # Next valid position after this block + mandatory gap
+                next_i = i + k + min_slots_per_block
+                if next_i > n:
+                    next_i = n
+                remaining_r = r - k
+                if dp[next_i][remaining_r] < INF:
+                    cost = block_cost(i, k) + dp[next_i][remaining_r]
+                    # Strict < only — on equal cost keep the solution found
+                    # at the highest i (latest), since we fill backwards
+                    if cost < best:
+                        best   = cost
+                        best_k = k
+
+            dp[i][r]     = best
+
+    if dp[0][n_slots] == INF:
+        log.warning("No valid solution found for n_slots=%d min_slots_per_block=%d — "
+                    "not enough eligible slots.", n_slots, min_slots_per_block)
+        return []
+
+    # Reconstruct: at each step find the latest position where we can place
+    # a block that still leads to the optimal total cost. This ensures that
+    # on equal-price ties the latest slots are preferred.
+    selected: list[Slot] = []
+    r = n_slots
+    i = 0
+    while r > 0:
+        # Find latest i' >= i where placing a block gives the optimal remaining cost
+        best_i = None
+        best_k = None
+        for i2 in range(i, n):
+            for k in range(min_slots_per_block, min(r, n - i2) + 1):
+                next_i = min(i2 + k + min_slots_per_block, n)
+                cost = block_cost(i2, k) + dp[next_i][r - k]
+                if abs(cost - dp[i][r]) < 1e-12:
+                    best_i = i2
+                    best_k = k
+        if best_i is None:
             break
-        if any(s.start in selected_set for s in block):
-            continue
-        if _violates_min_gap(block):
-            continue
-        remaining = n_slots - len(selected_set)
-        if len(block) <= remaining:
-            for s in block:
-                selected_set.add(s.start)
-            selected_blocks.append((block[0].start, block[-1].end))
-        else:
-            sub_size = remaining
-            if sub_size >= min_slots_per_block:
-                sub = block[-sub_size:]
-                if not _violates_min_gap(sub):
-                    for s in sub:
-                        selected_set.add(s.start)
-                    selected_blocks.append((sub[0].start, sub[-1].end))
+        selected.extend(ordered[best_i:best_i + best_k])
+        i = best_i + best_k + min_slots_per_block
+        r -= best_k
 
-    result = sorted([slot_by_start[k] for k in selected_set], key=lambda x: x.start)
-    final_blocks  = _group_continuous(result)
+    slot_dur      = ordered[0].duration_minutes if ordered else 15
     min_block_min = min_slots_per_block * slot_dur
+    final_blocks  = _group_continuous(sorted(selected, key=lambda x: x.start))
     short = [b for b in final_blocks if len(b) < min_slots_per_block]
     if short:
-        log.warning("%d block(s) still shorter than %d min — not enough eligible slots.",
+        log.warning("%d block(s) still shorter than %d min.",
                     len(short), min_block_min)
     else:
         log.info("All %d block(s) meet the minimum block length of %d min.",
                  len(final_blocks), min_block_min)
-    # Validate gaps
-    for i in range(len(final_blocks) - 1):
-        gap_min = int((final_blocks[i+1][0].start - final_blocks[i][-1].end).total_seconds() / 60)
+    for i2 in range(len(final_blocks) - 1):
+        gap_min = int(
+            (final_blocks[i2 + 1][0].start - final_blocks[i2][-1].end
+             ).total_seconds() / 60)
         if gap_min < min_block_min:
             log.warning("Gap of %d min between blocks is shorter than min_slot_minutes=%d min.",
                         gap_min, min_block_min)
-    return result
+    return sorted(selected, key=lambda x: x.start)
 
 
 def _best_continuous_window(
