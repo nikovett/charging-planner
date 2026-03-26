@@ -654,6 +654,24 @@ class TestSelectSpillover(unittest.TestCase):
         for i in range(len(all_selected) - 1):
             self.assertEqual(all_selected[i].end, all_selected[i + 1].start)
 
+    def test_spill_remaining_less_than_min_slot(self):
+        # Regression: remaining=15 with min_slot_minutes=30 previously returned
+        # nothing because _select_with_min_block couldn't form a valid 30-min block
+        # from a single 15-min spillover slot. Spillover should ignore min_slot_minutes.
+        ws, we = self._window_utc("00:00", "04:00")
+        before_base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        outside = slots_from(before_base, 4, price_cents=2.0)  # 4 × 15-min slots before window
+        inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 7)  # 7 slots = 105 min
+        result = _select_spillover(
+            outside=outside, selected=inside,
+            continuous_only=False, win_end_utc=we, win_end_local="04:00",
+            required_minutes=120, remaining=15,
+            max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
+        )
+        self.assertEqual(len(result), 1, "Should fill the 15-min deficit with one spillover slot")
+        total = sum(s.duration_minutes for s in result)
+        self.assertEqual(total, 15)
+
     def test_no_spill_after_window_end(self):
         ws, we = self._window_utc("00:00", "04:00")
         after_base = datetime(2026, 3, 15, 2, 30, tzinfo=UTC)  # 04:30 Helsinki — past window end

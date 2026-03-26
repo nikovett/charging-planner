@@ -1256,12 +1256,15 @@ def _select_spillover(
         n_slots  = (remaining + slot_dur - 1) // slot_dur
         return _best_continuous_window(filtered, all_prices, n_slots)
 
+    # Spillover slots extend existing selected blocks — they don't need to satisfy
+    # min_slot_minutes on their own since they'll be adjacent to already-scheduled slots.
+    slot_dur = candidates[0].duration_minutes if candidates else 15
     return select_charging_windows(
         candidates,
         required_minutes=remaining,
         continuous_only=False,
         max_price=max_price_eur,
-        min_slot_minutes=min_slot_minutes,
+        min_slot_minutes=slot_dur,
     )
 
 
