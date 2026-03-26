@@ -550,11 +550,16 @@ FORECAST_URL = (
     "https://raw.githubusercontent.com/vividfog/nordpool-predict-fi"
     "/main/deploy/prediction.json"
 )
-FINLAND_VAT = 1.255  # 25.5% VAT — forecast prices include VAT, ENTSO-E does not
+# Finnish VAT rate applied to electricity since Sep 2024.
+# Update if the rate changes — forecast prices include VAT, ENTSO-E does not.
+FINLAND_VAT = 1.255  # 25.5%
 
 
-def fetch_forecast_prices() -> list[Slot]:
+def fetch_forecast_prices(area: str = "FI") -> list[Slot]:
     """Fetch hourly price forecast from nordpool-predict-fi as a fallback.
+
+    Only available for the Finnish (FI) bidding zone. Raises PricesNotYetAvailable
+    for any other area since no equivalent public forecast exists.
 
     The JSON is a list of [unix_ms_utc, price_c_kwh_with_VAT] pairs at hourly
     resolution. Each hour is expanded into four 15-minute Slot objects at the
@@ -562,6 +567,10 @@ def fetch_forecast_prices() -> list[Slot]:
 
     Raises PricesNotYetAvailable if the fetch fails or returns no usable data.
     """
+    if area.upper() not in ("FI", "10YFI-1--------U"):
+        raise PricesNotYetAvailable(
+            f"Forecast fallback is only available for area FI (got '{area}')."
+        )
     log.info("Fetching forecast prices from nordpool-predict-fi (fallback)")
     req = urllib.request.Request(FORECAST_URL, headers={"Accept": "application/json"})
     try:
@@ -2037,7 +2046,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     except PricesNotYetAvailable as exc:
         log.warning("%s — trying forecast fallback.", exc)
         try:
-            all_prices = fetch_forecast_prices()
+            all_prices = fetch_forecast_prices(cfg0.area)
             price_source = "forecast"
             log.info("Using forecast prices as fallback.")
         except PricesNotYetAvailable as exc2:
@@ -2047,7 +2056,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     except Exception as exc:
         log.error("ENTSO-E fetch failed: %s — trying forecast fallback.", exc)
         try:
-            all_prices = fetch_forecast_prices()
+            all_prices = fetch_forecast_prices(cfg0.area)
             price_source = "forecast"
             log.info("Using forecast prices as fallback.")
         except PricesNotYetAvailable as exc2:

@@ -153,6 +153,16 @@ See [`delivery/README.md`](delivery/README.md) for full handler configuration re
 
 ---
 
+## Fallback price source
+
+When ENTSO-E is unavailable (maintenance, 503/404 errors), the planner automatically falls back to the [nordpool-predict-fi](https://github.com/vividfog/nordpool-predict-fi) forecast published at `https://raw.githubusercontent.com/vividfog/nordpool-predict-fi/main/deploy/prediction.json`.
+
+The fallback is only available for area `FI`. For other areas, the planner exits gracefully with an ntfy notification.
+
+The prediction.json blends realized Nord Pool prices (for past and present hours) with ML-predicted prices for future hours. By ~14:00–16:00 Helsinki time — shortly after Nord Pool publishes tomorrow's day-ahead prices — the forecast transitions to actual market prices, making it as reliable as ENTSO-E for planning purposes.
+
+Plans generated from forecast data are tagged `"price_source": "forecast"` in the plan JSON and display a `FORECAST` warning on the dashboard.
+
 ## Dashboard
 
 A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan JSONs from `data/` and `config.yaml` directly from the repository — no token or backend needed.
