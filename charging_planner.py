@@ -162,14 +162,17 @@ def _http_request_with_retry(
     retries: int = 3,
     backoff: float = 2.0,
     label: str = "",
+    retry_codes: set = None,
 ) -> str:
+    if retry_codes is None:
+        retry_codes = {500, 502, 503, 504}
     last_exc: Exception = RuntimeError("No attempts made")
     for attempt in range(1, retries + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read().decode()
         except urllib.error.HTTPError as e:
-            if 400 <= e.code < 500:
+            if e.code not in retry_codes:
                 body = e.read().decode()
                 log.error("%s HTTP %s: %s", label or req.full_url, e.code, body[:500])
                 raise
@@ -515,7 +518,16 @@ def fetch_entsoe_prices(
     log.info("Fetching ENTSO-E prices: area=%s", area)
     req = urllib.request.Request(url, headers={"Accept": "application/xml"})
     try:
-        raw = _http_request_with_retry(req, timeout=30, retries=5, backoff=5.0, label="ENTSO-E")
+        raw = _http_request_with_retry(req, timeout=30, retries=5, backoff=5.0, label="ENTSO-E",
+                                       retry_codes={404, 500, 502, 503, 504})
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise PricesNotYetAvailable(
+                f"ENTSO-E returned 404 after retries — tomorrow's prices may not be "
+                f"published yet (ENTSO-E publishes at ~12:00 UTC)."
+            )
+        log.error("ENTSO-E request failed after retries: %s", e)
+        raise
     except Exception as e:
         log.error("ENTSO-E request failed after retries: %s", e)
         raise
