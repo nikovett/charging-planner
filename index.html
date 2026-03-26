@@ -614,7 +614,7 @@ function renderTimeline(plan) {
 
   var n = visible.length;
   var gapPx = 1;
-  var barW = "calc(" + (100/n).toFixed(4) + "% - " + gapPx + "px)";
+  var slotWidthPct = (15 / totalMins * 100).toFixed(4); // each 15-min slot as % of total range
 
   // Min/max slot indices
   // Find min/max within visible slots (may differ from plan stats if some slots are outside range)
@@ -624,30 +624,26 @@ function renderTimeline(plan) {
     if (visible[i].price_cents_kwh > visible[maxIdx].price_cents_kwh) maxIdx = i;
   }
 
-  // Bars
-  // Compute label positions for min/max
-  var minLabelPct = ((minIdx + 0.5) / n * 100).toFixed(1);
-  var maxLabelPct = ((maxIdx + 0.5) / n * 100).toFixed(1);
-  // Min/max labels rendered inside histogram at top of bar
-  var minMaxHTML = ""; // labels are rendered inline above each bar
-
-  var barsHTML = visible.map(function(s, i) {
+  // Bars — positioned by actual timestamp so "now" line, ticks, and bars all align
+  var barsHTML = '<div style="position:absolute;left:0;right:0;top:0;bottom:0;">'
+  + visible.map(function(s, i) {
+    var lm = new Date(s.start_utc).getTime() / 60000 + utcOffset;
+    var leftPct = ((lm - rangeStart) / totalMins * 100).toFixed(4);
     var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 63)).toFixed(1);
     var isMin = i === minIdx, isMax = i === maxIdx;
     var bg = s.charging ? "var(--accent)" : "var(--dim)";
     var border = s.charging ? "border-top:1px solid var(--accent2);" : "border-top:1px solid var(--border2);";
-    var lm = new Date(s.start_utc).getTime() / 60000 + utcOffset;
     var hh = Math.floor(((lm % (24*60)) + 24*60) % (24*60) / 60);
     var mm = Math.floor(((lm % (24*60)) + 24*60) % (24*60) % 60);
     var tip = String(hh).padStart(2,"0") + ":" + String(mm).padStart(2,"0") + "  " + s.price_cents_kwh.toFixed(2) + " c\u20ac/kWh" + (s.charging ? "  \u26a1" : "");
 
-    // Min/max dot above bar
+    // Min/max annotation above bar
     var annotation = "";
     if (i === minIdx) annotation = '<div style="position:absolute;top:-11px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap">' + s.price_cents_kwh.toFixed(2) + '</div>';
     if (i === maxIdx) annotation = '<div style="position:absolute;top:-11px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:7px;color:var(--warn);white-space:nowrap">' + s.price_cents_kwh.toFixed(2) + '</div>';
 
-    return '<div title="' + tip + '" style="position:relative;display:inline-block;width:' + barW + ';height:' + h + '%;background:' + bg + ';' + border + 'margin-right:' + gapPx + 'px;vertical-align:bottom;box-sizing:border-box;border-radius:2px 2px 0 0">' + annotation + '</div>';
-  }).join("");
+    return '<div title="' + tip + '" style="position:absolute;left:' + leftPct + '%;bottom:0;width:calc(' + slotWidthPct + '% - ' + gapPx + 'px);height:' + h + '%;background:' + bg + ';' + border + 'box-sizing:border-box;border-radius:2px 2px 0 0">' + annotation + '</div>';
+  }).join("") + '</div>';
 
   // "Now" separator — current time position on histogram
   var midnightHTML = "";
@@ -973,10 +969,12 @@ function renderOptimalHistogram(plan) {
   if (!visible.length) visible = slots;
 
   var n = visible.length;
-  var barW = "calc(" + (100/n).toFixed(4) + "% - 1px)";
-  // Dot pattern as inline SVG data URI for "charging but not optimal"
+  var slotWidthPct2 = (15 / totalMins * 100).toFixed(4);
 
-  var barsHTML = visible.map(function(s) {
+  var barsHTML = '<div style="position:absolute;left:0;right:0;top:0;bottom:0;">'
+  + visible.map(function(s) {
+    var lm = new Date(s.start_utc).getTime() / 60000 + utcOffset;
+    var leftPct = ((lm - rangeStart) / totalMins * 100).toFixed(4);
     var h = (25 + ((s.price_cents_kwh - minP) / rangeP * 63)).toFixed(1);
     var bg, border;
     if (s.charging && s.optimal) {
@@ -988,8 +986,8 @@ function renderOptimalHistogram(plan) {
     } else {
       bg = "var(--dim)"; border = "border-top:1px solid var(--border2);";
     }
-    return '<div style="display:inline-block;width:' + barW + ';height:' + h + '%;background:' + bg + ';' + border + 'margin-right:1px;vertical-align:bottom;box-sizing:border-box;border-radius:2px 2px 0 0"></div>';
-  }).join("");
+    return '<div style="position:absolute;left:' + leftPct + '%;bottom:0;width:calc(' + slotWidthPct2 + '% - 1px);height:' + h + '%;background:' + bg + ';' + border + 'box-sizing:border-box;border-radius:2px 2px 0 0"></div>';
+  }).join("") + '</div>';
 
   var optSlots = visible.filter(function(s) { return s.optimal; });
   var optAvg = optSlots.length ? (optSlots.reduce(function(a,b){return a+b.price_cents_kwh;},0)/optSlots.length).toFixed(2) : null;
