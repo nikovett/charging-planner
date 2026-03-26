@@ -660,9 +660,24 @@ function renderTimeline(plan) {
       if (slotMins <= nowMins && nowMins < slotMins + 15) { nowSlot = visible[ni]; break; }
     }
     var nowPrice = nowSlot ? nowSlot.price_cents_kwh.toFixed(2) : "";
-    midnightHTML = '<div style="position:absolute;left:' + nowPct + '%;top:0;bottom:0;width:1px;background:var(--accent);opacity:0.8;z-index:2;pointer-events:none"></div>'
+    // Calculate bar height % so line stops at top of current bar
+    var nowBarH = nowSlot ? (25 + ((nowSlot.price_cents_kwh - minP) / rangeP * 63)) : 50;
+    var lineTopPct = (100 - nowBarH).toFixed(1); // top:X% means line starts from X% down
+    // Arrow: small downward-pointing SVG triangle centered on nowPct, sitting at bar top
+    var arrowH = 6; // px height of arrow
+    midnightHTML = '<div style="position:absolute;left:' + nowPct + '%;top:' + lineTopPct + '%;bottom:0;width:1px;background:var(--accent);opacity:0.9;z-index:2;pointer-events:none;transform:translateX(-50%)"></div>'
+                 + '<svg style="position:absolute;left:' + nowPct + '%;top:calc(' + lineTopPct + '% - 7px);transform:translateX(-50%);overflow:visible;z-index:3;pointer-events:none" width="9" height="7" viewBox="0 0 9 7"><polygon points="4.5,7 0,0 9,0" fill="var(--accent)" opacity="0.9"/></svg>'
                  + '<span style="position:absolute;left:' + nowPct + '%;top:3px;transform:translateX(-100%);padding-right:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3;text-align:right;line-height:1.4">now</span>'
                  + (nowPrice ? '<span style="position:absolute;left:' + nowPct + '%;top:3px;padding-left:3px;font-family:var(--mono);font-size:7px;color:var(--accent);white-space:nowrap;z-index:3">' + nowPrice + '</span>' : '');
+  }
+
+  // Market average horizontal dashed line
+  var avgP = plan.price_stats ? plan.price_stats.avg_cents_kwh : null;
+  var marketLineHTML = "";
+  if (avgP !== null) {
+    var avgBarH = 25 + ((avgP - minP) / rangeP * 63);
+    var avgLinePct = (100 - avgBarH).toFixed(1);
+    marketLineHTML = '<div style="position:absolute;left:0;right:0;top:' + avgLinePct + '%;height:1px;border-top:1px dashed var(--border2);z-index:1;pointer-events:none;opacity:0.6"></div>';
   }
 
 
@@ -682,6 +697,7 @@ function renderTimeline(plan) {
        + '</div>'
        + '<div style="position:relative;width:100%;height:90px;background:var(--bg3);border:1px solid var(--border);border-radius:2px;overflow:visible;box-sizing:border-box;display:flex;align-items:flex-end">'
        + barsHTML
+       + marketLineHTML
        + '<div style="position:absolute;top:0;left:0;right:0;bottom:0;overflow:hidden;pointer-events:none">' + midnightHTML + '</div>'
        + '</div>'
        + '<div class="timeline-ticks" style="position:relative;height:16px">' + tickHTML + '</div>'
