@@ -24,8 +24,11 @@ Bug fixes, algorithm improvements, histogram visualization, optimal slot compari
 ### Session 4 — 2026-03-26 (afternoon)
 DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast display augmentation, histogram redesign, dashboard theme exploration.
 
-### Session 5 — 2026-03-27 (this session)
+### Session 5 — 2026-03-27 (morning)
 Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring, gap merge removal, algorithm correctness fixes.
+
+### Session 6 — 2026-03-27 (afternoon)
+Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow (catches partial/stale responses during maintenance). Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots.
 
 ---
 
@@ -47,11 +50,11 @@ config.yaml                  # Configuration (committed with empty secrets)
 
 ## Price sources (three-level fallback)
 
-1. **ENTSO-E** — primary. Day-ahead 15-min prices. Retries 5×, backoff 5s.
+1. **ENTSO-E** — primary. Day-ahead 15-min prices. Retries 5×, backoff 5s. Raises `PricesNotYetAvailable` if slots don't reach tomorrow (catches partial/stale responses e.g. during maintenance).
 2. **Sähkötin** (`sahkotin.fi/api`) — actual Nord Pool 15-min prices, FI only, no API key. Used transparently.
 3. **nordpool-predict-fi** — ML forecast blended with realized prices. FI only. Tagged `price_source: "forecast"` in plan JSON; triggers dashboard warning.
 
-After a successful real-price fetch (ENTSO-E or Sähkötin), the planner checks if the last slot is before `(today+1) 12:00 UTC`. If so, up to 12h of forecast slots are fetched for display only — grey diagonal bars in the histogram, never used for selection.
+Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After a successful real-price fetch, the planner checks if the last slot is before `(today+1) 12:00 UTC`. If so, up to 12h of forecast slots are fetched for display only — grey diagonal bars in the histogram, never used for selection.
 
 ---
 
@@ -140,13 +143,17 @@ Light/dark with OS preference default (`@media (prefers-color-scheme: dark)`) an
 - Right: `now` — large white/dark price, `min / avg / max` underneath in teal/white/amber
 
 **Histogram (single row):**
-- Solid teal bars = scheduled slots
-- Teal outline bars = missed optimal slots (globally cheaper but not scheduled)
-- Diagonal stripe bars = suboptimal scheduled slots (scheduled but not optimal)
+- Solid teal bars = optimal scheduled slots (`charging && optimal`)
+- Teal diagonal stripe bars = suboptimal scheduled slots (`charging && !optimal`)
+- Teal outline bars = missed optimal slots (`!charging && optimal`)
 - Grey diagonal stripe bars = forecast augmentation slots (display only)
 - Playhead triangle above current bar = now position
 - Dashed avg line
 - No bar labels — all numbers live in the hero area
+
+**Legend items** are all conditional — each only appears when that bar type is visible in the histogram. Labels: optimal, suboptimal, missed, forecast.
+
+**Histogram window:** centered on the midpoint of charging slots ±12h, starting no earlier than the first available slot.
 
 **Hover/touch interaction:**
 - Hovering any bar → right hero shows that slot's price and time
@@ -195,6 +202,9 @@ Both block length and inter-block gaps must be ≥ `min_slot_minutes`. Same phys
 
 ### Forecast augmentation is display-only
 Forecast slots in `price_slots` are never passed to the selection algorithm or optimal calculation. They exist solely to fill the histogram's right side before Nord Pool publishes tomorrow's prices.
+
+### Historical slots included in price_slots
+Both ENTSO-E and Sähkötin return slots from the previous evening onwards (not just future slots). This gives the histogram enough data to center properly on the charging slot midpoint without being clamped to "now".
 
 ### Hero price replaces stat grid
 The old 4-column stats row (scheduled / avg price / vs market / vs optimal) was replaced with two large hero numbers. The "vs optimal" percentage is replaced by visual outline bars in the histogram — if scheduled and optimal slots overlap completely, no outlines appear.
