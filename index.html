@@ -452,23 +452,48 @@ function hoverBar(el, profileName) {
   var avgLabelEl = document.getElementById("avg-label-"  + profileName);
   if (!priceEl || !labelEl) return;
 
-  // Store originals on first hover
   if (!NOW_PRICE_ORIG[profileName])  NOW_PRICE_ORIG[profileName]  = priceEl.innerHTML;
   if (avgPriceEl && !AVG_PRICE_ORIG[profileName]) AVG_PRICE_ORIG[profileName] = avgPriceEl.innerHTML;
   if (avgLabelEl && !AVG_LABEL_ORIG[profileName]) AVG_LABEL_ORIG[profileName] = avgLabelEl.textContent;
 
-  var price     = el.getAttribute("data-price");
-  var time      = el.getAttribute("data-time");
+  var price      = el.getAttribute("data-price");
+  var time       = el.getAttribute("data-time");
   var isCharging = el.getAttribute("data-charging") === "1";
 
   // Right hero: always shows hovered slot price + time
-  priceEl.innerHTML    = price + ' <span class="hero-unit">c\u20ac/kWh</span>';
-  labelEl.textContent  = time || "now";
+  priceEl.innerHTML   = price + ' <span class="hero-unit">c\u20ac/kWh</span>';
+  labelEl.textContent = time || "now";
 
-  // Left hero: only updates when hovering a charging slot
+  // Left hero: show window avg + time range when hovering a charging slot
   if (avgPriceEl && avgLabelEl && isCharging) {
-    avgPriceEl.innerHTML   = price + ' <span class="hero-unit">c\u20ac/kWh</span>';
-    avgLabelEl.textContent = time;
+    var plan = PLAN_DATA[profileName];
+    if (plan && plan.windows) {
+      // Find which window this bar's time falls in
+      var barTime = el.getAttribute("data-time"); // "HH:MM" local
+      var win = null;
+      for (var i = 0; i < plan.windows.length; i++) {
+        var w = plan.windows[i];
+        // Compare time string — window start/end are local HH:MM
+        // Treat window as spanning midnight if end < start
+        var wStart = w.start, wEnd = w.end;
+        if (barTime >= wStart || wEnd < wStart) {
+          // check proper range
+          if (wEnd < wStart) {
+            if (barTime >= wStart || barTime < wEnd) { win = w; break; }
+          } else {
+            if (barTime >= wStart && barTime < wEnd) { win = w; break; }
+          }
+        }
+      }
+      if (win) {
+        avgPriceEl.innerHTML   = win.avg_price_cents_kwh.toFixed(2) + ' <span class="hero-unit">c\u20ac/kWh</span>';
+        avgLabelEl.textContent = win.start + "\u2013" + win.end;
+      }
+    }
+  } else if (avgPriceEl && avgLabelEl && !isCharging) {
+    // Revert left hero when hovering non-charging bar
+    if (AVG_PRICE_ORIG[profileName]) avgPriceEl.innerHTML    = AVG_PRICE_ORIG[profileName];
+    if (AVG_LABEL_ORIG[profileName]) avgLabelEl.textContent  = AVG_LABEL_ORIG[profileName];
   }
 }
 
@@ -477,10 +502,10 @@ function unhoverBar(profileName) {
   var labelEl    = document.getElementById("now-label-"  + profileName);
   var avgPriceEl = document.getElementById("avg-price-"  + profileName);
   var avgLabelEl = document.getElementById("avg-label-"  + profileName);
-  if (priceEl && NOW_PRICE_ORIG[profileName])  priceEl.innerHTML    = NOW_PRICE_ORIG[profileName];
-  if (labelEl)                                  labelEl.textContent  = "now";
-  if (avgPriceEl && AVG_PRICE_ORIG[profileName]) avgPriceEl.innerHTML  = AVG_PRICE_ORIG[profileName];
-  if (avgLabelEl && AVG_LABEL_ORIG[profileName]) avgLabelEl.textContent = AVG_LABEL_ORIG[profileName];
+  if (priceEl    && NOW_PRICE_ORIG[profileName])  priceEl.innerHTML    = NOW_PRICE_ORIG[profileName];
+  if (labelEl)                                     labelEl.textContent  = "now";
+  if (avgPriceEl && AVG_PRICE_ORIG[profileName])  avgPriceEl.innerHTML  = AVG_PRICE_ORIG[profileName];
+  if (avgLabelEl && AVG_LABEL_ORIG[profileName])  avgLabelEl.textContent = AVG_LABEL_ORIG[profileName];
 }
 
 
