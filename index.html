@@ -425,7 +425,7 @@ function renderTimeline(plan, profileName, nowPrice) {
 
   return '<div class="timeline-wrap">'
        + '<div class="timeline-label-row"><span>charging slots</span>' + legendHTML + '</div>'
-       + '<div class="histogram" ontouchend="unhoverBar(\'' + profileName + '\')">'
+       + '<div class="histogram" style="-webkit-user-select:none;user-select:none;touch-action:pan-y" ontouchmove="histoTouchMove(event,\'' + profileName + '\')" ontouchend="unhoverBar(\'' + profileName + '\')" ontouchcancel="unhoverBar(\'' + profileName + '\')">'
        + barsHTML + avgLine
        + '</div>'
        + '<div class="timeline-ticks">' + tickHTML + '</div>'
@@ -625,8 +625,19 @@ function renderBackFace(profileName) {
 }
 
 function barTouch(e, el, profileName) {
-  e.stopPropagation(); // prevent card flip
+  e.stopPropagation();
+  e.preventDefault();
   hoverBar(el, profileName);
+}
+
+function histoTouchMove(e, profileName) {
+  e.stopPropagation();
+  e.preventDefault();
+  var touch = e.touches[0];
+  var el = document.elementFromPoint(touch.clientX, touch.clientY);
+  // Walk up to find a bar div with data-price
+  while (el && !el.getAttribute("data-price")) { el = el.parentElement; }
+  if (el && el.getAttribute("data-price")) hoverBar(el, profileName);
 }
 
 function flipCard(el) {
@@ -726,7 +737,7 @@ function loadFromRepo() {
       }
       if(plans.some(function(p){return p.price_source==="forecast";})) {
         var fw=document.createElement("div"); fw.className="warn-banner";
-        fw.textContent="\u26a0 using forecast prices \u2014 ENTSO-E was unavailable when this plan was generated";
+        fw.textContent="\u26a0 prices sourced from forecast \u2014 real-time data was unavailable";
         document.querySelector(".shell").insertBefore(fw,document.getElementById("profiles"));
       }
       renderProfiles(plans);
