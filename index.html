@@ -392,7 +392,7 @@ function renderTimeline(plan, profileName, nowPrice) {
         hoverTime = String(Math.floor(localMinOfDay / 60)).padStart(2,"0") + ":" + String(Math.floor(localMinOfDay % 60)).padStart(2,"0");
 
         var onEnter = profileName
-          ? 'onmouseenter="hoverBar(this,\'' + profileName + '\')" onmouseleave="unhoverBar(\'' + profileName + '\')"'
+          ? 'onmouseenter="hoverBar(this,\'' + profileName + '\')" onmouseleave="unhoverBar(\'' + profileName + '\')" ontouchstart="barTouch(event,this,\'' + profileName + '\')"'
           : '';
 
         return '<div data-price="' + s.price_cents_kwh.toFixed(2) + '" data-time="' + hoverTime + '" data-charging="' + (s.charging ? '1' : '0') + '" ' + onEnter
@@ -425,7 +425,7 @@ function renderTimeline(plan, profileName, nowPrice) {
 
   return '<div class="timeline-wrap">'
        + '<div class="timeline-label-row"><span>charging slots</span>' + legendHTML + '</div>'
-       + '<div class="histogram">'
+       + '<div class="histogram" ontouchend="unhoverBar(\'' + profileName + '\')">'
        + barsHTML + avgLine
        + '</div>'
        + '<div class="timeline-ticks">' + tickHTML + '</div>'
@@ -622,6 +622,11 @@ function renderBackFace(profileName) {
        + configHTML + schedHTML
        + '<div style="margin-top:16px;text-align:right"><span class="flip-hint">\u2190 tap to go back</span></div>'
        + '</div>';
+}
+
+function barTouch(e, el, profileName) {
+  e.stopPropagation(); // prevent card flip
+  hoverBar(el, profileName);
 }
 
 function flipCard(el) {
