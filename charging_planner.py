@@ -626,12 +626,16 @@ def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot
 
     Used to extend the histogram when real price data doesn't yet cover
     tomorrow (i.e. Nord Pool hasn't published yet). Only available for FI.
+    Fetches at most 12 hours beyond `after` — enough to fill the histogram
+    right edge regardless of where the charging midpoint lands.
     Returns slots with 15-min resolution, ex-VAT, same structure as real slots.
     Returns empty list on any failure — display augmentation is best-effort.
     """
     if area.upper() not in ("FI", "10YFI-1--------U"):
         return []
-    log.info("Fetching forecast display slots after %s", after.isoformat())
+    cap = after + timedelta(hours=12)
+    log.info("Fetching forecast display slots after %s (cap %s)",
+             after.strftime("%Y-%m-%d %H:%M UTC"), cap.strftime("%H:%M UTC"))
     req = urllib.request.Request(FORECAST_URL, headers={"Accept": "application/json"})
     try:
         raw = _http_request_with_retry(req, timeout=15, retries=2, backoff=3.0,
@@ -646,6 +650,8 @@ def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot
         hour_start = datetime.fromtimestamp(float(ts_ms) / 1000, tz=timezone.utc)
         if hour_start <= after:
             continue
+        if hour_start >= cap:
+            break
         price_ex_vat = price_vat / 100 / FINLAND_VAT
         for q in range(4):
             slot_start = hour_start + timedelta(minutes=15 * q)
