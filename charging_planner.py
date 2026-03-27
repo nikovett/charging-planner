@@ -2130,6 +2130,10 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
         log.error("%s", exc)
         sys.exit(1)
 
+    if not configs:
+        log.error("No charging profiles found in config. Add at least one entry under 'charging:'.")
+        sys.exit(1)
+
     cfg0 = configs[0]
     tz = _resolve_tz(cfg0.timezone_str, datetime.now(tz=timezone.utc).date())
     log.info("Timezone: %s (UTC%+d)", tz.name,
