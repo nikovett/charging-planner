@@ -22,7 +22,7 @@ sys.path.insert(0, ".")
 sys.path.insert(0, "..")
 
 # deliver_chargeamps.py lives in delivery/
-sys.path.insert(0, "charger")
+sys.path.insert(0, "delivery")
 
 from deliver_chargeamps import (
     _ca_build_periods,
