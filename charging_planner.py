@@ -621,6 +621,48 @@ def fetch_sahkotin_prices(area: str = "FI") -> list[Slot]:
     return result
 
 
+def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot]:
+    """Fetch forecast slots for display purposes only, starting after `after`.
+
+    Used to extend the histogram when real price data doesn't yet cover
+    tomorrow (i.e. Nord Pool hasn't published yet). Only available for FI.
+    Returns slots with 15-min resolution, ex-VAT, same structure as real slots.
+    Returns empty list on any failure — display augmentation is best-effort.
+    """
+    if area.upper() not in ("FI", "10YFI-1--------U"):
+        return []
+    log.info("Fetching forecast display slots after %s", after.isoformat())
+    req = urllib.request.Request(FORECAST_URL, headers={"Accept": "application/json"})
+    try:
+        raw = _http_request_with_retry(req, timeout=15, retries=2, backoff=3.0,
+                                       label="nordpool-predict-fi (display)")
+        data = json.loads(raw)
+    except Exception as e:
+        log.warning("Forecast display fetch failed (non-critical): %s", e)
+        return []
+
+    slots: list[Slot] = []
+    for ts_ms, price_vat in data:
+        hour_start = datetime.fromtimestamp(float(ts_ms) / 1000, tz=timezone.utc)
+        if hour_start <= after:
+            continue
+        price_ex_vat = price_vat / 100 / FINLAND_VAT
+        for q in range(4):
+            slot_start = hour_start + timedelta(minutes=15 * q)
+            slot_end   = slot_start + timedelta(minutes=15)
+            slots.append(Slot(
+                start=slot_start,
+                end=slot_end,
+                duration_minutes=15,
+                price_eur_kwh=price_ex_vat,
+                slot=len(slots),
+            ))
+
+    log.info("Forecast display: %d slots fetched beyond %s",
+             len(slots), after.strftime("%Y-%m-%d %H:%M UTC"))
+    return slots
+
+
 FORECAST_URL = (
     "https://raw.githubusercontent.com/vividfog/nordpool-predict-fi"
     "/main/deploy/prediction.json"
@@ -1362,6 +1404,7 @@ class PlanParams:
     max_price_eur:          Optional[float] = None
     min_slot_minutes:       int             = 30
     continuous_only:        bool            = False
+    forecast_slots:         list            = None  # display-only, not used for selection
 
 
 def build_plan(p: PlanParams) -> dict:
@@ -1442,6 +1485,19 @@ def build_plan(p: PlanParams) -> dict:
         }
         for s in sorted(p.all_prices, key=lambda x: x.start)
     ]
+
+    # Append display-only forecast slots beyond the real price data
+    if p.forecast_slots:
+        real_ends = {s.start for s in p.all_prices}
+        for s in sorted(p.forecast_slots, key=lambda x: x.start):
+            if s.start not in real_ends:
+                price_slots.append({
+                    "start_utc":       s.start.isoformat(),
+                    "price_cents_kwh": round(s.price_eur_kwh * 100, 4),
+                    "charging":        False,
+                    "optimal":         False,
+                    "forecasted":      True,
+                })
 
     return {
         "version":                PLAN_VERSION,
@@ -1893,11 +1949,12 @@ def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, s
 # ---------------------------------------------------------------------------
 
 def _plan_one_profile(
-    cfg:          "Config",
-    tz:           "TzInfo",
-    all_prices:   "list[Slot]",
-    price_source: str,
-    output_dir:   str,
+    cfg:                    "Config",
+    tz:                     "TzInfo",
+    all_prices:             "list[Slot]",
+    price_source:           str,
+    output_dir:             str,
+    forecast_display_slots: list = None,
 ) -> dict:
     """Run selection and build a plan dict for a single profile."""
     log.info("=== Profile: %s ===", cfg.name)
@@ -2005,6 +2062,7 @@ def _plan_one_profile(
         max_price_eur=cfg.max_price_eur,
         min_slot_minutes=cfg.min_slot_minutes,
         continuous_only=cfg.continuous_only,
+        forecast_slots=forecast_display_slots,
     ))
     plan["profile"] = cfg.name
 
@@ -2088,10 +2146,29 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
 
     plans = []
     skipped = []
+
+    # Check if real prices cover tomorrow — if not, fetch forecast slots for display
+    # This is data-driven: if the last real slot is before (today+1) 12:00 UTC,
+    # Nord Pool hasn't published tomorrow's prices yet and the histogram would
+    # look truncated. Forecast slots are display-only and never used for selection.
+    forecast_display_slots: list = []
+    if price_source != "forecast" and all_prices:
+        today_utc = datetime.now(tz=timezone.utc).date()
+        tomorrow_noon = datetime(today_utc.year, today_utc.month, today_utc.day,
+                                 12, 0, tzinfo=timezone.utc) + timedelta(days=1)
+        last_slot_start = max(s.start for s in all_prices)
+        if last_slot_start < tomorrow_noon:
+            log.info("Real prices end at %s — fetching forecast slots for display.",
+                     last_slot_start.strftime("%Y-%m-%d %H:%M UTC"))
+            forecast_display_slots = fetch_forecast_display_slots(
+                after=last_slot_start, area=cfg0.area
+            )
+
     for cfg in configs:
         try:
             plan = _plan_one_profile(
                 cfg, tz, all_prices, price_source, output_dir,
+                forecast_display_slots=forecast_display_slots,
             )
             plans.append(plan)
         except PricesNotYetAvailable as exc:
