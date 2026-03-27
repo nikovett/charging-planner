@@ -495,7 +495,7 @@ def fetch_entsoe_prices(
     tomorrow, so every possible preferred window (same-day or overnight) has
     the slots it needs regardless of what time of day the script runs.
 
-    Returns all non-past slots, renumbered. Callers filter by their window.
+    Returns all slots (including historical), renumbered. Callers filter by their window.
     Raises if no slots at all are returned (network/auth error).
     """
     eic   = _resolve_area(area)
@@ -536,14 +536,18 @@ def fetch_entsoe_prices(
     if not all_slots:
         raise PricesNotYetAvailable("No price slots returned from ENTSO-E.")
 
-    # Return all non-past slots; each profile's window filter picks what it needs.
+    # Return all slots (including historical) renumbered — same as fetch_sahkotin_prices.
+    # Past slots are used by the dashboard histogram; the scheduler ignores them
+    # because it filters by window start which is always in the future.
     now_utc = datetime.now(tz=timezone.utc)
-    usable  = [s for s in all_slots if s.start >= now_utc]
-    log.info("Fetched %d total slots, %d usable (not in the past)", len(all_slots), len(usable))
+    if not any(s.start >= now_utc for s in all_slots):
+        raise PricesNotYetAvailable("ENTSO-E returned no usable future slots.")
+    log.info("Fetched %d total slots (%d future)", len(all_slots),
+             sum(1 for s in all_slots if s.start >= now_utc))
 
     return [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
                  price_eur_kwh=s.price_eur_kwh, slot=i)
-            for i, s in enumerate(sorted(usable, key=lambda x: x.start))]
+            for i, s in enumerate(sorted(all_slots, key=lambda x: x.start))]
 
 
 SAHKOTIN_API = "https://sahkotin.fi/prices"
