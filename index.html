@@ -403,7 +403,7 @@ function renderTimeline(plan, profileName, nowPrice) {
   // Avg line
   var avgH = (100 - (plan.price_stats.avg_cents_kwh-minP)/rangeP*72 - 20).toFixed(1);
   var avgLine = '<div style="position:absolute;left:0;right:0;top:' + avgH + '%;border-top:1px dashed var(--border2);pointer-events:none"></div>'
-              + '<div style="position:absolute;right:4px;top:calc(' + avgH + '% + 2px);font-family:var(--mono);font-size:7px;color:var(--dim)">avg</div>';
+              + '<div style="position:absolute;right:4px;bottom:calc(' + (100-parseFloat(avgH)) + '% + 2px);font-family:var(--mono);font-size:7px;color:var(--dim)">avg</div>';
 
   // Ticks
   var tickHTML = "";
