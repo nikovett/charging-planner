@@ -167,7 +167,7 @@ If all three sources fail, an ntfy notification is sent and the script exits wit
 
 ## Histogram display augmentation
 
-Nord Pool publishes day-ahead prices at approximately 12:00 UTC. When the planner runs before publication — typically at 06:30–08:00 Helsinki time on weekdays, or any time on a morning run — ENTSO-E only has today's prices. The histogram would look truncated on the right side since the 24h view extends past midnight.
+ENTSO-E publishes day-ahead prices at approximately 12:00 UTC. If the planner is run before publication, ENTSO-E only has today's prices. The histogram would look truncated on the right side since the 24h view extends past midnight.
 
 After a successful real-price fetch, the planner checks whether the last available slot is before `(today+1) 12:00 UTC`. If so, it fetches up to 12 hours of forecast data from nordpool-predict-fi to fill the visible histogram range. These slots are **display-only** — they are never used for slot selection or optimal calculation. They appear as grey diagonal-striped bars in both histograms with a "forecasted" legend entry, making it clear they are estimates rather than confirmed prices.
 
