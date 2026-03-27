@@ -323,7 +323,7 @@ function savings(plan) {
 }
 
 // ── Histogram ─────────────────────────────────────────────────────────────
-function renderTimeline(plan) {
+function renderTimeline(plan, profileName, nowPrice) {
   var slots = plan.price_slots;
   if (!slots || !slots.length) return "";
 
@@ -387,7 +387,16 @@ function renderTimeline(plan) {
           ? '<svg style="position:absolute;left:50%;top:-8px;transform:translateX(-50%);overflow:visible;pointer-events:none" width="8" height="6" viewBox="0 0 8 6"><polygon points="4,6 0,0 8,0" fill="var(--text2)"/></svg>'
           : "";
 
-        return '<div style="position:absolute;left:' + leftPct + '%;bottom:0;width:calc(' + slotW + '% - 1px);height:' + h + '%;background:' + bg + ';' + extra + 'box-sizing:border-box;border-radius:2px 2px 0 0">' + playhead + '</div>';
+        var hoverTime = "";
+        var lmDate = new Date((lm - utcOffset) * 60000);
+        hoverTime = String(lmDate.getUTCHours()).padStart(2,"0") + ":" + String(lmDate.getUTCMinutes()).padStart(2,"0");
+
+        var onEnter = profileName
+          ? 'onmouseenter="hoverBar(this,\'' + profileName + '\')" onmouseleave="unhoverBar(\'' + profileName + '\')"'
+          : '';
+
+        return '<div data-price="' + s.price_cents_kwh.toFixed(2) + '" data-time="' + hoverTime + '" ' + onEnter
+             + ' style="position:absolute;left:' + leftPct + '%;bottom:0;width:calc(' + slotW + '% - 1px);height:' + h + '%;background:' + bg + ';' + extra + 'box-sizing:border-box;border-radius:2px 2px 0 0">' + playhead + '</div>';
       }).join("")
     + '</div>';
 
@@ -431,7 +440,34 @@ function renderTimeline(plan) {
        + '</div>';
 }
 
-// ── Front card ────────────────────────────────────────────────────────────
+// ── Histogram bar hover ───────────────────────────────────────────────────
+var NOW_PRICE_ORIG = {}; // stores original now price text per profile
+
+function hoverBar(el, profileName) {
+  var priceEl = document.getElementById("now-price-" + profileName);
+  var labelEl = document.getElementById("now-label-" + profileName);
+  if (!priceEl || !labelEl) return;
+  // Store original on first hover
+  if (!NOW_PRICE_ORIG[profileName]) {
+    NOW_PRICE_ORIG[profileName] = priceEl.innerHTML;
+  }
+  var price = el.getAttribute("data-price");
+  var time  = el.getAttribute("data-time");
+  priceEl.innerHTML = price + ' <span class="hero-unit">c\u20ac/kWh</span>';
+  labelEl.textContent = time || "now";
+}
+
+function unhoverBar(profileName) {
+  var priceEl = document.getElementById("now-price-" + profileName);
+  var labelEl = document.getElementById("now-label-" + profileName);
+  if (!priceEl || !labelEl) return;
+  if (NOW_PRICE_ORIG[profileName]) {
+    priceEl.innerHTML = NOW_PRICE_ORIG[profileName];
+  }
+  labelEl.textContent = "now";
+}
+
+
 function renderProfile(plan) {
   var sav      = savings(plan);
   var savStr   = sav !== null ? (sav > 0 ? "\u2193" + sav.toFixed(0) + "%" : "\u2191" + Math.abs(sav).toFixed(0) + "%") : "\u2014";
@@ -471,8 +507,8 @@ function renderProfile(plan) {
 
   // Hero right: now + market stats
   var heroR = '<div class="hero">'
-    + '<div class="hero-label">now</div>'
-    + '<div class="hero-price">' + (nowPrice !== null ? nowPrice.toFixed(2) : '\u2014') + ' <span class="hero-unit">c\u20ac/kWh</span></div>'
+    + '<div class="hero-label" id="now-label-' + plan.profile + '">now</div>'
+    + '<div class="hero-price" id="now-price-' + plan.profile + '">' + (nowPrice !== null ? nowPrice.toFixed(2) : '\u2014') + ' <span class="hero-unit">c\u20ac/kWh</span></div>'
     + '<div class="hero-details">'
     + (plan.price_stats
         ? '<div class="hero-det">min <span class="good">' + plan.price_stats.min_cents_kwh.toFixed(2) + '</span></div>'
@@ -496,7 +532,7 @@ function renderProfile(plan) {
        + '<span class="profile-date"' + dateStyle + '>charges ' + chargePeriod + '</span>'
        + '</div>'
        + '<div class="heroes">' + heroL + '<div class="hero-divider"></div>' + heroR + '</div>'
-       + renderTimeline(plan)
+       + renderTimeline(plan, plan.profile, nowPrice)
        + '<div class="windows-row"><div class="windows-pills">' + pillsHTML + '</div>'
        + '<div class="flip-hint">tap to see details \u2192</div></div>'
        + '</div>'
