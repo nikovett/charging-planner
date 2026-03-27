@@ -539,22 +539,11 @@ def fetch_entsoe_prices(
     # Return all slots (including historical) renumbered — same as fetch_sahkotin_prices.
     # Past slots are used by the dashboard histogram; the scheduler ignores them
     # because it filters by window start which is always in the future.
-    now_utc   = datetime.now(tz=timezone.utc)
-    tomorrow  = (now_utc.date() + timedelta(days=1))
-    # Require slots to extend into tomorrow — if ENTSO-E only returns today's
-    # prices (e.g. during maintenance returning a stale/partial response),
-    # treat it as unavailable so the Sähkötin fallback is tried.
-    future_slots = [s for s in all_slots if s.start >= now_utc]
-    if not future_slots:
+    now_utc = datetime.now(tz=timezone.utc)
+    if not any(s.start >= now_utc for s in all_slots):
         raise PricesNotYetAvailable("ENTSO-E returned no usable future slots.")
-    last_future = max(s.start for s in future_slots)
-    if last_future.date() < tomorrow:
-        raise PricesNotYetAvailable(
-            f"ENTSO-E slots only reach {last_future.strftime('%Y-%m-%d %H:%M UTC')} — "
-            f"tomorrow's prices not yet available. Trying fallback."
-        )
-    log.info("Fetched %d total slots (%d future, last: %s)", len(all_slots),
-             len(future_slots), last_future.strftime("%Y-%m-%d %H:%M UTC"))
+    log.info("Fetched %d total slots (%d future)", len(all_slots),
+             sum(1 for s in all_slots if s.start >= now_utc))
 
     return [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
                  price_eur_kwh=s.price_eur_kwh, slot=i)
@@ -648,7 +637,7 @@ def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot
     """
     if area.upper() not in ("FI", "10YFI-1--------U"):
         return []
-    cap = after + timedelta(hours=12)
+    cap = after + timedelta(hours=24)
     log.info("Fetching forecast display slots after %s (cap %s)",
              after.strftime("%Y-%m-%d %H:%M UTC"), cap.strftime("%H:%M UTC"))
     req = urllib.request.Request(FORECAST_URL, headers={"Accept": "application/json"})
