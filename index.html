@@ -967,6 +967,8 @@ function renderOptimalHistogram(plan) {
       bg = "repeating-linear-gradient(45deg, var(--dim) 0px, var(--dim) 2px, #1D9E75 2px, #1D9E75 4px)"; border = "border-top:1px solid var(--accent);border-left:1px solid var(--accent);border-right:1px solid var(--accent);";
     } else if (!s.charging && s.optimal) {
       bg = "transparent"; border = "border-top:1px solid var(--accent);border-left:1px solid var(--accent);border-right:1px solid var(--accent);";
+    } else if (s.forecasted) {
+      bg = "repeating-linear-gradient(45deg,var(--dim) 0px,var(--dim) 2px,var(--bg3) 2px,var(--bg3) 4px)"; border = "border-top:1px solid var(--border2);";
     } else {
       bg = "var(--dim)"; border = "border-top:1px solid var(--border2);";
     }
