@@ -388,8 +388,8 @@ function renderTimeline(plan, profileName, nowPrice) {
           : "";
 
         var hoverTime = "";
-        var lmDate = new Date((lm - utcOffset) * 60000);
-        hoverTime = String(lmDate.getUTCHours()).padStart(2,"0") + ":" + String(lmDate.getUTCMinutes()).padStart(2,"0");
+        var localMinOfDay = ((lm % (24*60)) + 24*60) % (24*60);
+        hoverTime = String(Math.floor(localMinOfDay / 60)).padStart(2,"0") + ":" + String(Math.floor(localMinOfDay % 60)).padStart(2,"0");
 
         var onEnter = profileName
           ? 'onmouseenter="hoverBar(this,\'' + profileName + '\')" onmouseleave="unhoverBar(\'' + profileName + '\')"'
@@ -404,13 +404,6 @@ function renderTimeline(plan, profileName, nowPrice) {
   var avgH = (100 - (plan.price_stats.avg_cents_kwh-minP)/rangeP*72 - 20).toFixed(1);
   var avgLine = '<div style="position:absolute;left:0;right:0;top:' + avgH + '%;border-top:1px dashed var(--border2);pointer-events:none"></div>'
               + '<div style="position:absolute;right:4px;top:calc(' + avgH + '% + 2px);font-family:var(--mono);font-size:7px;color:var(--dim)">avg</div>';
-
-  // Midnight lines
-  var midnightHTML = "";
-  for (var mm = Math.ceil(rangeStart/(24*60))*(24*60); mm < rangeEnd; mm += 24*60) {
-    var mpct = ((mm-rangeStart)/totalMins*100).toFixed(2);
-    midnightHTML += '<div style="position:absolute;left:' + mpct + '%;top:0;bottom:0;width:1px;background:var(--border2);opacity:0.6"></div>';
-  }
 
   // Ticks
   var tickHTML = "";
@@ -434,7 +427,6 @@ function renderTimeline(plan, profileName, nowPrice) {
        + '<div class="timeline-label-row"><span>charging slots</span>' + legendHTML + '</div>'
        + '<div class="histogram">'
        + barsHTML + avgLine
-       + '<div style="position:absolute;top:0;left:0;right:0;bottom:0;overflow:hidden;pointer-events:none">' + midnightHTML + '</div>'
        + '</div>'
        + '<div class="timeline-ticks">' + tickHTML + '</div>'
        + '</div>';
