@@ -28,7 +28,7 @@ DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast disp
 Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring, gap merge removal, algorithm correctness fixes.
 
 ### Session 6 — 2026-03-27 (afternoon)
-Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow (catches partial/stale responses during maintenance). Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots. Forecast display augmentation now always runs after a real-price fetch (not just when slots don't reach tomorrow noon) and cap extended from 12h to 24h — ensures histogram right edge is always filled. Histogram range snapped to 15-minute slot boundaries (floor rangeStart, ceil rangeEnd) to eliminate sub-slot gaps at histogram edges.
+Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow (catches partial/stale responses during maintenance). Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots. Forecast display augmentation now always runs after a real-price fetch (not just when slots don't reach tomorrow noon) and cap extended from 12h to 24h — ensures histogram right edge is always filled. Histogram range snapped to 15-minute slot boundaries (floor rangeStart, ceil rangeEnd) to eliminate sub-slot gaps at histogram edges. Two-mode histogram window: Mode 1 (charging far away) anchors on now-1h and extends to cover all charging slots+1h; Mode 2 (charging midpoint within 11h of now) centers on charging midpoint ±12h. Ensures now is always visible and charging slots are always visible, with now drifting toward center as charging approaches.
 
 ---
 
@@ -153,7 +153,10 @@ Light/dark with OS preference default (`@media (prefers-color-scheme: dark)`) an
 
 **Legend items** are all conditional — each only appears when that bar type is visible in the histogram. Labels: optimal, suboptimal, missed, forecast.
 
-**Histogram window:** centered on the midpoint of charging slots ±12h, starting no earlier than the first available slot. Both rangeStart and rangeEnd are snapped to 15-minute slot boundaries (floor/ceil) so bars always fill edge to edge.
+**Histogram window:** Two-mode logic, always snapped to 15-minute slot boundaries (floor/ceil):
+- **Mode 1** (charging midpoint > 11h away): rangeStart = now-1h, rangeEnd = max(now+23h, last_charging_slot_end+1h). Now is always 1h from the left edge; charging slots visible to the right. Window may exceed 24h if charging is far away.
+- **Mode 2** (charging midpoint ≤ 11h away): rangeStart = mid-12h, rangeEnd = mid+12h. Charging centered; now floats naturally within the window since charging is nearby.
+- Fallback (no charging slots): now-1h → now+23h.
 
 **Hover/touch interaction:**
 - Hovering any bar → right hero shows that slot's price and time
