@@ -214,11 +214,12 @@ def _send_delivery_ntfy(
     delivery_results: list[tuple[str, str, str, bool]],
     config: dict,
 ) -> None:
-    """Send a combined ntfy notification with plan summary and delivery status.
+    """Send an ntfy notification only when action is needed:
+    - Any delivery to a charger failed
+    - Any plan was built on forecast prices (real-time data was unavailable)
+    - Any profile was skipped
 
-    Each profile section shows its charging windows followed immediately by the
-    delivery status for that profile. delivery_results is a list of
-    (profile_name, handler_name, charge_point_id, ok) tuples.
+    Successful deliveries with real prices are silent.
     """
     ntfy_cfg = config.get("ntfy", {})
     if not ntfy_cfg.get("enabled", False):
@@ -234,7 +235,13 @@ def _send_delivery_ntfy(
         key=lambda p: p.get("required_minutes", 0),
     )
 
-    if not plans:
+    # Determine if notification is warranted
+    any_delivery_failed = any(not ok for _, _, _, ok in delivery_results)
+    any_forecast        = any(p.get("price_source") == "forecast" for p in plans)
+    any_skipped         = bool(skipped_profiles)
+
+    if not any_delivery_failed and not any_forecast and not any_skipped:
+        log.info("ntfy: all deliveries succeeded with real prices — skipping notification.")
         return
 
     # Index delivery results by profile for quick lookup
@@ -246,9 +253,14 @@ def _send_delivery_ntfy(
         h, m = divmod(minutes, 60)
         return f"{h}h" if m == 0 else f"{h}h{m:02d}m"
 
-    # Title: "Charging plan 2026-03-21"
-    date  = plans[0].get("date", "")
-    title = f"Charging plan {date}"
+    # Title signals why we're notifying
+    date  = plans[0].get("date", "") if plans else ""
+    if any_delivery_failed:
+        title = f"⚠ Delivery failed — {date}"
+    elif any_forecast:
+        title = f"⚠ Forecast prices used — {date}"
+    else:
+        title = f"⚠ Charging plan issue — {date}"
 
     def _sep(profile, tot, req, avg, market_avg):
         summary = fmt_h(tot)

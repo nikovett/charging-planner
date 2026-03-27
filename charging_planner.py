@@ -2095,7 +2095,7 @@ def _write_run_outputs(plans: "list[dict]") -> None:
 
 
 def _notify_prices_unavailable(ntfy_cfg: dict) -> None:
-    """Send an ntfy notification when ENTSO-E prices are not yet available."""
+    """Send an ntfy notification when no charging plan could be scheduled."""
     if not ntfy_cfg.get("enabled", False):
         return
     topic = os.environ.get("NTFY_TOPIC") or ntfy_cfg.get("topic", "")
@@ -2105,7 +2105,7 @@ def _notify_prices_unavailable(ntfy_cfg: dict) -> None:
         import urllib.request as _ur
         req = _ur.Request(
             f"https://ntfy.sh/{topic}",
-            data="Prices not yet published — no charging plan scheduled today.".encode(),
+            data="No price data — charging could not be scheduled.".encode(),
             method="POST",
             headers={
                 "Title":    "Charging plan unavailable",

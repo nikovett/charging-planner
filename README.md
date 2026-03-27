@@ -193,26 +193,28 @@ To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose
 
 ## Push notifications (ntfy)
 
-After delivery completes, `delivery/deliver.py` sends a single push notification containing the plan summary and delivery status for each charger. The notification is sent to the configured ntfy topic.
+ntfy notifications are sent only when something needs attention — successful deliveries with real prices are silent. A notification fires when:
 
-Example notification:
+- Any delivery to a charger fails
+- Prices were sourced from the forecast fallback (both ENTSO-E and Sähkötin were unavailable)
+- A profile was skipped because prices weren't yet available for its window
+
+The notification title indicates the reason (`⚠ Delivery failed`, `⚠ Forecast prices used`, etc.). The body includes the plan summary and delivery status per charger.
+
+Example notification when a delivery fails:
 
 ```
-Title: Charging plan 2026-03-21
+Title: ⚠ Delivery failed — 2026-03-21
 
 topup 2h @ 0.62 c€/kWh ↓64%
 03:30–05:30
   ✓ CHARGER-001
+  ✗ CHARGER-002
 
 overnight 6h @ 1.93 c€/kWh ↑9%
 22:00–06:00
   ✓ CHARGER-001
-  ✗ CHARGER-002
 ```
-
-The title contains the date. Each profile section shows the scheduled hours, average price, and how it compares to the market average (`↓` below, `↑` above). Chargers are listed indented under their profile. A delivery failure does not prevent the notification from being sent.
-
-ntfy is configured in `config.yaml` under the `ntfy:` key. The topic is injected at runtime via the `NTFY_TOPIC` environment variable — never commit it to the repository.
 
 ---
 

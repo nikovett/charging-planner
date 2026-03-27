@@ -27,13 +27,14 @@ from deliver import _send_delivery_ntfy
 # ===========================================================================
 
 def make_plan(profile: str = "topup", total: int = 120, required: int = 120,
-              windows=None) -> dict:
+              windows=None, price_source: str = "forecast") -> dict:
     if windows is None:
         windows = [{"start": "01:00", "end": "03:00",
                     "duration_minutes": 120, "avg_price_cents_kwh": 2.36}]
     return {
         "profile":                profile,
         "date":                   "2026-03-15",
+        "price_source":           price_source,
         "required_minutes":       required,
         "total_minutes":          total,
         "avg_price_cents_kwh":    2.36,
@@ -239,6 +240,51 @@ class TestNtfySending(unittest.TestCase):
              mock.patch("urllib.request.urlopen") as mock_open:
             _send_delivery_ntfy({}, [], [], make_config(enabled=True))
             mock_open.assert_not_called()
+
+    def test_success_with_real_prices_does_not_send(self):
+        # All deliveries OK, real prices — should be silent
+        real_plan = make_plan("topup", price_source="ENTSO-E")
+        results = [("topup", "chargeamps", "CHARGER-001", True)]
+        with mock.patch.dict("os.environ", {"NTFY_TOPIC": "test-topic"}), \
+             mock.patch("urllib.request.urlopen") as mock_open:
+            _send_delivery_ntfy({"topup": real_plan}, [], results, make_config(enabled=True))
+            mock_open.assert_not_called()
+
+    def test_delivery_failure_sends(self):
+        # Delivery failed — must notify
+        real_plan = make_plan("topup", price_source="ENTSO-E")
+        results = [("topup", "chargeamps", "CHARGER-001", False)]
+        with mock.patch.dict("os.environ", {"NTFY_TOPIC": "test-topic"}), \
+             mock.patch("urllib.request.urlopen") as mock_open:
+            _send_delivery_ntfy({"topup": real_plan}, [], results, make_config(enabled=True))
+            mock_open.assert_called_once()
+
+    def test_forecast_prices_sends(self):
+        # Forecast prices used — must notify even if delivery succeeded
+        forecast_plan = make_plan("topup", price_source="forecast")
+        results = [("topup", "chargeamps", "CHARGER-001", True)]
+        with mock.patch.dict("os.environ", {"NTFY_TOPIC": "test-topic"}), \
+             mock.patch("urllib.request.urlopen") as mock_open:
+            _send_delivery_ntfy({"topup": forecast_plan}, [], results, make_config(enabled=True))
+            mock_open.assert_called_once()
+
+    def test_skipped_profiles_sends(self):
+        # Skipped profiles — must notify
+        real_plan = make_plan("topup", price_source="ENTSO-E")
+        with mock.patch.dict("os.environ", {"NTFY_TOPIC": "test-topic"}), \
+             mock.patch("urllib.request.urlopen") as mock_open:
+            _send_delivery_ntfy({"topup": real_plan}, ["overnight"], [], make_config(enabled=True))
+            mock_open.assert_called_once()
+
+    def test_title_reflects_delivery_failure(self):
+        real_plan = make_plan("topup", price_source="ENTSO-E")
+        results = [("topup", "chargeamps", "CHARGER-001", False)]
+        sent = _capture_message({"topup": real_plan}, [], results, make_config(enabled=True))
+        self.assertIn("Delivery failed", sent["title"])
+
+    def test_title_reflects_forecast(self):
+        sent = _capture_message({"topup": self.PLAN}, [], [], make_config(enabled=True))
+        self.assertIn("Forecast", sent["title"])
 
     def test_send_failure_does_not_raise(self):
         with mock.patch.dict("os.environ", {"NTFY_TOPIC": "test-topic"}), \
