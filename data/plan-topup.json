@@ -12,16 +12,16 @@
   },
   "required_minutes": 120,
   "total_minutes": 120,
-  "avg_price_cents_kwh": 2.3152,
+  "avg_price_cents_kwh": 2.3183,
   "avg_optimal_price_cents_kwh": 0.4999,
   "preferred_window_start": "any",
   "preferred_window_end": "any",
   "windows": [
     {
-      "start": "16:15",
-      "end": "16:45",
+      "start": "17:00",
+      "end": "17:30",
       "duration_minutes": 30,
-      "avg_price_cents_kwh": 2.7185
+      "avg_price_cents_kwh": 2.7305
     },
     {
       "start": "23:30",
@@ -31,11 +31,11 @@
     }
   ],
   "window_starts_utc": [
-    "2026-03-27T14:15:00+00:00",
+    "2026-03-27T15:00:00+00:00",
     "2026-03-27T21:30:00+00:00"
   ],
   "window_ends_utc": [
-    "2026-03-27T14:45:00+00:00",
+    "2026-03-27T15:30:00+00:00",
     "2026-03-27T23:00:00+00:00"
   ],
   "price_slots": [
@@ -984,13 +984,13 @@
     {
       "start_utc": "2026-03-27T14:15:00+00:00",
       "price_cents_kwh": 2.565,
-      "charging": true,
+      "charging": false,
       "optimal": false
     },
     {
       "start_utc": "2026-03-27T14:30:00+00:00",
       "price_cents_kwh": 2.872,
-      "charging": true,
+      "charging": false,
       "optimal": false
     },
     {
@@ -1002,13 +1002,13 @@
     {
       "start_utc": "2026-03-27T15:00:00+00:00",
       "price_cents_kwh": 2.475,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-03-27T15:15:00+00:00",
       "price_cents_kwh": 2.986,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
@@ -1533,11 +1533,11 @@
     "stackLevel": 0,
     "chargingProfilePurpose": "TxDefaultProfile",
     "chargingProfileKind": "Absolute",
-    "validFrom": "2026-03-27T14:15:00+00:00",
+    "validFrom": "2026-03-27T15:00:00+00:00",
     "validTo": "2026-03-27T23:00:00+00:00",
     "chargingSchedule": {
-      "startSchedule": "2026-03-27T14:15:00+00:00",
-      "duration": 31500,
+      "startSchedule": "2026-03-27T15:00:00+00:00",
+      "duration": 28800,
       "chargingRateUnit": "W",
       "chargingSchedulePeriod": [
         {
@@ -1549,7 +1549,7 @@
           "limit": 0.0
         },
         {
-          "startPeriod": 26100,
+          "startPeriod": 23400,
           "limit": 11000.0
         }
       ]
