@@ -234,7 +234,7 @@
   .sched-cell { font-family: var(--mono); font-size: 9px; padding: 5px 4px; text-align: center; background: var(--bg2); color: var(--text2); line-height: 1.4; }
   .sched-cell.head  { background: var(--bg3); color: var(--muted); }
   .sched-cell.today { color: var(--accent); }
-  .sched-cell.any   { color: var(--text2); }
+  .sched-cell.any   { color: var(--text2); display: flex; align-items: center; justify-content: center; }
   .sched-cell.empty { color: var(--border2); }
 
   /* ── Footer ── */
@@ -582,7 +582,7 @@ function renderBackFace(profileName) {
     ["min slot", !cfg.continuous && cfg.minSlot ? cfg.minSlot + " min" : "\u2014"],
     ["ceiling",  cfg.maxPrice != null ? cfg.maxPrice.toFixed(2) + " c\u20ac/kWh" : "none"],
     ["delivery", cfg.handlers && cfg.handlers.length
-                   ? (cfg.handlers.some(function(h){return h.enabled;}) ? '<span class="badge on">\u2713 on</span>' : '<span class="badge">disabled</span>')
+                   ? (cfg.handlers.some(function(h){return h.enabled;}) ? '<span class="badge on">\u2713 on</span>' : '<span class="badge">off</span>')
                    : "\u2014"],
   ];
 
