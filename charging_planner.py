@@ -2178,16 +2178,12 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     # look truncated. Forecast slots are display-only and never used for selection.
     forecast_display_slots: list = []
     if price_source != "forecast" and all_prices:
-        today_utc = datetime.now(tz=timezone.utc).date()
-        tomorrow_noon = datetime(today_utc.year, today_utc.month, today_utc.day,
-                                 12, 0, tzinfo=timezone.utc) + timedelta(days=1)
         last_slot_start = max(s.start for s in all_prices)
-        if last_slot_start < tomorrow_noon:
-            log.info("Real prices end at %s — fetching forecast slots for display.",
-                     last_slot_start.strftime("%Y-%m-%d %H:%M UTC"))
-            forecast_display_slots = fetch_forecast_display_slots(
-                after=last_slot_start, area=cfg0.area
-            )
+        log.info("Real prices end at %s — fetching forecast slots for display.",
+                 last_slot_start.strftime("%Y-%m-%d %H:%M UTC"))
+        forecast_display_slots = fetch_forecast_display_slots(
+            after=last_slot_start, area=cfg0.area
+        )
 
     for cfg in configs:
         try:
