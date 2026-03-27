@@ -340,15 +340,30 @@ function renderTimeline(plan, profileName, nowPrice) {
     if (nowMs >= st && nowMs < st + 15*60000) { nowSlot = slots[ni]; break; }
   }
 
-  // Histogram range: midpoint of charging slots ± 12h
-  var allLm = slots.map(function(s) { return new Date(s.start_utc).getTime()/60000 + utcOffset; });
-  var cLm   = slots.filter(function(s){return s.charging;}).map(function(s){ return new Date(s.start_utc).getTime()/60000 + utcOffset; });
+  // Histogram range:
+  // Mode 1 (charging far away): anchor on now-1h, extend to cover all charging slots +1h.
+  //   Window = max(24h, now-1h → last_slot_end+1h). Now stays 1h from left.
+  // Mode 2 (charging close, mid within 11h of now): center on charging midpoint ±12h.
+  //   Now floats but is always visible since charging is nearby.
+  var allLm  = slots.map(function(s) { return new Date(s.start_utc).getTime()/60000 + utcOffset; });
+  var cLm    = slots.filter(function(s){return s.charging;}).map(function(s){ return new Date(s.start_utc).getTime()/60000 + utcOffset; });
+  var nowLm  = Date.now()/60000 + utcOffset;
   var rangeStart, rangeEnd;
   if (cLm.length) {
-    var mid = (Math.min.apply(null,cLm) + Math.max.apply(null,cLm)) / 2;
-    rangeStart = mid - 12*60; rangeEnd = mid + 12*60;
+    var mid        = (Math.min.apply(null,cLm) + Math.max.apply(null,cLm)) / 2;
+    var lastSlotLm = Math.max.apply(null,cLm) + 15; // end of last charging slot
+    if (mid - 12*60 <= nowLm - 60) {
+      // Mode 2: charge-centered ±12h (now is within the window naturally)
+      rangeStart = mid - 12*60;
+      rangeEnd   = mid + 12*60;
+    } else {
+      // Mode 1: anchor on now-1h, guarantee all charging slots +1h are visible
+      rangeStart = nowLm - 60;
+      rangeEnd   = Math.max(rangeStart + 24*60, lastSlotLm + 60);
+    }
   } else {
-    rangeStart = Math.min.apply(null,allLm); rangeEnd = rangeStart + 24*60;
+    rangeStart = nowLm - 60;
+    rangeEnd   = rangeStart + 24*60;
   }
   rangeStart = Math.max(rangeStart, Math.min.apply(null,allLm));
   // Snap to 15-minute slot boundaries so bars fill edge to edge
