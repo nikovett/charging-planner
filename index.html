@@ -415,10 +415,12 @@ function renderTimeline(plan, profileName, nowPrice) {
   }
 
   // Legend
-  var hasForecast = visible.some(function(s){ return s.forecasted; });
-  var hasMissed   = visible.some(function(s){ return !s.charging && s.optimal; });
+  var hasForecast    = visible.some(function(s){ return s.forecasted; });
+  var hasMissed      = visible.some(function(s){ return !s.charging && s.optimal; });
+  var hasSuboptimal  = visible.some(function(s){ return s.charging && !s.optimal; });
   var legendHTML = '<div class="legend-row">'
     + '<span class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span>scheduled</span>'
+    + (hasSuboptimal ? '<span class="legend-item"><span class="legend-swatch" style="background:repeating-linear-gradient(45deg,var(--dim) 0px,var(--dim) 2px,var(--accent) 2px,var(--accent) 4px)"></span>suboptimal</span>' : '')
     + (hasMissed ? '<span class="legend-item"><span class="legend-swatch" style="background:transparent;border:1px solid var(--accent)"></span>missed</span>' : '')
     + (hasForecast ? '<span class="legend-item"><span class="legend-swatch" style="background:repeating-linear-gradient(45deg,var(--dim) 0px,var(--dim) 2px,var(--bg3) 2px,var(--bg3) 4px);border:1px solid var(--border2)"></span>forecast</span>' : '')
     + '</div>';
