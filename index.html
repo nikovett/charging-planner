@@ -351,6 +351,9 @@ function renderTimeline(plan, profileName, nowPrice) {
     rangeStart = Math.min.apply(null,allLm); rangeEnd = rangeStart + 24*60;
   }
   rangeStart = Math.max(rangeStart, Math.min.apply(null,allLm));
+  // Snap to 15-minute slot boundaries so bars fill edge to edge
+  rangeStart = Math.floor(rangeStart / 15) * 15;
+  rangeEnd   = Math.ceil(rangeEnd / 15) * 15;
   var totalMins = rangeEnd - rangeStart;
 
   var visible = slots.filter(function(s) {
@@ -415,10 +418,10 @@ function renderTimeline(plan, profileName, nowPrice) {
   }
 
   // Legend
-  var hasForecast    = visible.some(function(s){ return s.forecasted; });
-  var hasMissed      = visible.some(function(s){ return !s.charging && s.optimal; });
-  var hasSuboptimal  = visible.some(function(s){ return s.charging && !s.optimal; });
-  var hasOptimal     = visible.some(function(s){ return s.charging && s.optimal; });
+  var hasForecast   = visible.some(function(s){ return s.forecasted; });
+  var hasMissed     = visible.some(function(s){ return !s.charging && s.optimal; });
+  var hasSuboptimal = visible.some(function(s){ return s.charging && !s.optimal; });
+  var hasOptimal    = visible.some(function(s){ return s.charging && s.optimal; });
   var legendHTML = '<div class="legend-row">'
     + (hasOptimal ? '<span class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span>optimal</span>' : '')
     + (hasSuboptimal ? '<span class="legend-item"><span class="legend-swatch" style="background:repeating-linear-gradient(45deg,var(--dim) 0px,var(--dim) 2px,var(--accent) 2px,var(--accent) 4px)"></span>suboptimal</span>' : '')
