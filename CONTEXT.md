@@ -28,7 +28,7 @@ DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast disp
 Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring, gap merge removal, algorithm correctness fixes.
 
 ### Session 6 — 2026-03-27 (afternoon)
-Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow (catches partial/stale responses during maintenance). Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots.
+Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow (catches partial/stale responses during maintenance). Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots. Forecast display augmentation now always runs after a real-price fetch (not just when slots don't reach tomorrow noon) and cap extended from 12h to 24h — ensures histogram right edge is always filled. Histogram range snapped to 15-minute slot boundaries (floor rangeStart, ceil rangeEnd) to eliminate sub-slot gaps at histogram edges.
 
 ---
 
@@ -54,7 +54,7 @@ config.yaml                  # Configuration (committed with empty secrets)
 2. **Sähkötin** (`sahkotin.fi/api`) — actual Nord Pool 15-min prices, FI only, no API key. Used transparently.
 3. **nordpool-predict-fi** — ML forecast blended with realized prices. FI only. Tagged `price_source: "forecast"` in plan JSON; triggers dashboard warning.
 
-Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After a successful real-price fetch, the planner checks if the last slot is before `(today+1) 12:00 UTC`. If so, up to 12h of forecast slots are fetched for display only — grey diagonal bars in the histogram, never used for selection.
+Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch (ENTSO-E or Sähkötin), up to 24h of forecast slots are always fetched beyond the last real slot for display only — grey diagonal bars in the histogram, never used for selection. This ensures the histogram right edge is always filled even when charging slots fall late the next day.
 
 ---
 
@@ -153,7 +153,7 @@ Light/dark with OS preference default (`@media (prefers-color-scheme: dark)`) an
 
 **Legend items** are all conditional — each only appears when that bar type is visible in the histogram. Labels: optimal, suboptimal, missed, forecast.
 
-**Histogram window:** centered on the midpoint of charging slots ±12h, starting no earlier than the first available slot.
+**Histogram window:** centered on the midpoint of charging slots ±12h, starting no earlier than the first available slot. Both rangeStart and rangeEnd are snapped to 15-minute slot boundaries (floor/ceil) so bars always fill edge to edge.
 
 **Hover/touch interaction:**
 - Hovering any bar → right hero shows that slot's price and time
@@ -200,8 +200,8 @@ The greedy algorithm made locally optimal choices that prevented globally optima
 ### `min_slot_minutes` applies to gaps too
 Both block length and inter-block gaps must be ≥ `min_slot_minutes`. Same physical constraint: the charger shouldn't toggle on or off for less than this duration.
 
-### Forecast augmentation is display-only
-Forecast slots in `price_slots` are never passed to the selection algorithm or optimal calculation. They exist solely to fill the histogram's right side before Nord Pool publishes tomorrow's prices.
+### Forecast augmentation is display-only (unless it's the only source)
+When real prices are available (ENTSO-E or Sähkötin), forecast slots in `price_slots` are never passed to the selection algorithm or optimal calculation — they exist solely to fill the histogram's right side. However, when both real sources fail, `fetch_forecast_prices` is used as a last resort and those slots ARE used for selection. In that case no display augmentation is fetched on top (the `price_source != "forecast"` guard prevents it).
 
 ### Historical slots included in price_slots
 Both ENTSO-E and Sähkötin return slots from the previous evening onwards (not just future slots). This gives the histogram enough data to center properly on the charging slot midpoint without being clamped to "now".
