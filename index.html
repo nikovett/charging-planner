@@ -468,22 +468,15 @@ function hoverBar(el, profileName) {
   if (avgPriceEl && avgLabelEl && isCharging) {
     var plan = PLAN_DATA[profileName];
     if (plan && plan.windows) {
-      // Find which window this bar's time falls in
-      var barTime = el.getAttribute("data-time"); // "HH:MM" local
+      var barTime = el.getAttribute("data-time");
       var win = null;
       for (var i = 0; i < plan.windows.length; i++) {
         var w = plan.windows[i];
-        // Compare time string — window start/end are local HH:MM
-        // Treat window as spanning midnight if end < start
-        var wStart = w.start, wEnd = w.end;
-        if (barTime >= wStart || wEnd < wStart) {
-          // check proper range
-          if (wEnd < wStart) {
-            if (barTime >= wStart || barTime < wEnd) { win = w; break; }
-          } else {
-            if (barTime >= wStart && barTime < wEnd) { win = w; break; }
-          }
-        }
+        var overnight = w.end < w.start;
+        var inWindow  = overnight
+          ? (barTime >= w.start || barTime < w.end)
+          : (barTime >= w.start && barTime < w.end);
+        if (inWindow) { win = w; break; }
       }
       if (win) {
         avgPriceEl.innerHTML   = win.avg_price_cents_kwh.toFixed(2) + ' <span class="hero-unit">c\u20ac/kWh</span>';
