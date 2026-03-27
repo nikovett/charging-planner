@@ -351,6 +351,7 @@ function renderTimeline(plan, profileName, nowPrice) {
     rangeStart = Math.min.apply(null,allLm); rangeEnd = rangeStart + 24*60;
   }
   rangeStart = Math.max(rangeStart, Math.min.apply(null,allLm));
+  rangeEnd = rangeStart + 24*60;
   var totalMins = rangeEnd - rangeStart;
 
   var visible = slots.filter(function(s) {
