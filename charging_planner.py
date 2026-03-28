@@ -539,11 +539,22 @@ def fetch_entsoe_prices(
     # Return all slots (including historical) renumbered — same as fetch_sahkotin_prices.
     # Past slots are used by the dashboard histogram; the scheduler ignores them
     # because it filters by window start which is always in the future.
-    now_utc = datetime.now(tz=timezone.utc)
-    if not any(s.start >= now_utc for s in all_slots):
+    now_utc   = datetime.now(tz=timezone.utc)
+    tomorrow  = (now_utc.date() + timedelta(days=1))
+    # Require slots to extend into tomorrow — if ENTSO-E only returns today's
+    # prices (e.g. during maintenance returning a stale/partial response),
+    # treat it as unavailable so the Sähkötin fallback is tried.
+    future_slots = [s for s in all_slots if s.start >= now_utc]
+    if not future_slots:
         raise PricesNotYetAvailable("ENTSO-E returned no usable future slots.")
-    log.info("Fetched %d total slots (%d future)", len(all_slots),
-             sum(1 for s in all_slots if s.start >= now_utc))
+    last_future = max(s.start for s in future_slots)
+    if last_future.date() < tomorrow:
+        raise PricesNotYetAvailable(
+            f"ENTSO-E slots only reach {last_future.strftime('%Y-%m-%d %H:%M UTC')} — "
+            f"tomorrow's prices not yet available. Trying fallback."
+        )
+    log.info("Fetched %d total slots (%d future, last: %s)", len(all_slots),
+             len(future_slots), last_future.strftime("%Y-%m-%d %H:%M UTC"))
 
     return [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
                  price_eur_kwh=s.price_eur_kwh, slot=i)
@@ -2171,16 +2182,12 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     # look truncated. Forecast slots are display-only and never used for selection.
     forecast_display_slots: list = []
     if price_source != "forecast" and all_prices:
-        today_utc = datetime.now(tz=timezone.utc).date()
-        tomorrow_noon = datetime(today_utc.year, today_utc.month, today_utc.day,
-                                 12, 0, tzinfo=timezone.utc) + timedelta(days=1)
         last_slot_start = max(s.start for s in all_prices)
-        if last_slot_start < tomorrow_noon:
-            log.info("Real prices end at %s — fetching forecast slots for display.",
-                     last_slot_start.strftime("%Y-%m-%d %H:%M UTC"))
-            forecast_display_slots = fetch_forecast_display_slots(
-                after=last_slot_start, area=cfg0.area
-            )
+        log.info("Real prices end at %s — fetching forecast slots for display.",
+                 last_slot_start.strftime("%Y-%m-%d %H:%M UTC"))
+        forecast_display_slots = fetch_forecast_display_slots(
+            after=last_slot_start, area=cfg0.area
+        )
 
     for cfg in configs:
         try:
