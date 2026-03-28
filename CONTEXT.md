@@ -28,6 +28,22 @@ DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast disp
 Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring, gap merge removal, algorithm correctness fixes.
 
 
+### Session 8 — 2026-03-28 (afternoon)
+
+**min_gap_minutes**: new config parameter separating gap constraint from block length. `min_slot_minutes` now only controls minimum block length; `min_gap_minutes` (default 15, divisible by 15, can be 0) controls minimum gap between blocks independently.
+
+**retained_hours**: each run reads the previous plan JSON, counts future `charging: true` minutes, and adds them to `required_hours` before running the DP. The scheduler covers the full combined need with proper gap enforcement — no special merging, no OCPP complications. `retained_hours` written to plan JSON (converted from minutes). Dashboard hero shows `scheduled 2h + 30m retained` in accent2 color when non-zero. End-to-end tests updated to use `tempfile.TemporaryDirectory` for output dir to prevent retained minutes leaking between test runs.
+
+**ntfy removed**: GHA is the primary run environment. Delivery failures already exit non-zero. Forecast warning visible on dashboard. `_send_delivery_ntfy` and `skipped_profiles` logic removed from `deliver.py`. `NTFY_TOPIC` removed from `schedule.yml`. `ntfy:` block removed from `config.yaml`. `test_deliver.py` removed entirely (covered ntfy logic only) — test count drops from 186 to 156.
+
+**Responsive histogram ticks**: 4h intervals on screens narrower than 520px (phone portrait), 2h on wider screens.
+
+**Schedule cell centering**: profile name cell in the config back-card weekly schedule now uses flex centering to match the "any" cells.
+
+**OCPP_ENDPOINT_URL removed from GHA**: OCPP delivery requires direct network access to the charger — not applicable to GHA runs. Removed from `schedule.yml` and README secrets table. `websockets` dependency moved to a separate "Optional — local OCPP delivery only" section in README requirements.
+
+**README rewritten**: "What makes this different" section expanded and tightened — zero hardware, fits any setup (3.7 kW vs 22 kW example), globally optimal scheduling, realistic charger behaviour, retained hours, three-level fallback, modular delivery. Config parameter names removed from the feature pitch; concrete examples added to each bullet. ntfy section removed throughout.
+
 ### Session 7 — 2026-03-28
 DST transition day. Several bugs found and fixed stemming from adding historical slots for histogram display without auditing all downstream uses of `all_prices`.
 
