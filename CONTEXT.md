@@ -320,3 +320,16 @@ Seven color pairs considered as alternative themes for the dashboard. Each pair 
 | 5 | Icy blue / Gunmetal | `#EEF5FF` | `#35393C` | `#35393C` | `#A4D8FF` |
 | 6 | Raspberry red / Deep space blue | `#FFF0F5` | `#EE005A` | `#012641` | `#EE005A` |
 | 7 | Lime cream / Vintage grape | `#DDEA78` | `#433455` | `#433455` | `#DDEA78` |
+---
+
+## Future work
+
+### Retain already-committed future charging slots across plan runs — IMPLEMENTED
+
+Each plan run reads `data/plan-{name}.json` (or the local output dir), counts future `charging: true` minutes (`retained_minutes`), and adds them to `required_hours` before running the DP scheduler. This means the new plan always schedules `required_hours + retained_hours` total, with full gap enforcement and optimal slot selection. If the DP picks the same slots as last time, fine. If it finds cheaper ones, even better.
+
+`retained_hours` is written to the plan JSON (converted from minutes). The dashboard hero shows `scheduled 2h + 30m retained` in accent2 color when `retained_hours > 0`. No special bar styling or `retained: true` flags needed — the DP handles everything cleanly.
+
+The charger API is an alternative source for retained slot data but reading from `data/` is preferred — simpler, no external dependency, guaranteed to match what was delivered.
+
+Test note: end-to-end tests use `tempfile.TemporaryDirectory` for `output_dir` to prevent retained minutes from previous test runs leaking into subsequent runs.

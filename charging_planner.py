@@ -1441,6 +1441,7 @@ class PlanParams:
     min_gap_minutes:        int             = 30
     continuous_only:        bool            = False
     forecast_slots:         list            = None  # display-only, not used for selection
+    retained_minutes:       int             = 0     # future charging minutes carried over from previous plan
 
 
 def build_plan(p: PlanParams) -> dict:
@@ -1550,6 +1551,7 @@ def build_plan(p: PlanParams) -> dict:
         ),
         "price_stats":            price_stats,
         "required_minutes":       p.required_minutes,
+        "retained_hours":         round(p.retained_minutes / 60, 4),
         "total_minutes":          total_min,
         "avg_price_cents_kwh":    round(overall_avg, 4),
         "avg_optimal_price_cents_kwh": avg_optimal,
@@ -1895,6 +1897,7 @@ def _select_slots(
     win_end_utc:      datetime,
     win_start_str:    str,
     win_end_str:      str,
+    required_minutes_override: int = None,
 ) -> tuple[list[Slot], set]:
     """Run the full slot-selection pipeline and return selected slots.
 
@@ -1912,16 +1915,18 @@ def _select_slots(
 
     _check_window_coverage(inside, win_start_utc, win_end_utc, cfg.name)
 
+    req_min = required_minutes_override if required_minutes_override is not None else cfg.required_minutes
+
     selected = select_charging_windows(
         inside,
-        required_minutes=cfg.required_minutes,
+        required_minutes=req_min,
         continuous_only=cfg.continuous_only,
         max_price=cfg.max_price_eur,
         min_slot_minutes=cfg.min_slot_minutes,
         min_gap_minutes=cfg.min_gap_minutes,
     )
 
-    remaining = cfg.required_minutes - sum(s.duration_minutes for s in selected)
+    remaining = req_min - sum(s.duration_minutes for s in selected)
     if remaining > 0 and outside:
         log.info("Filling %d min from outside preferred window.", remaining)
         spillover = _select_spillover(
@@ -1930,7 +1935,7 @@ def _select_slots(
             continuous_only=cfg.continuous_only,
             win_end_utc=win_end_utc,
             win_end_local=win_end_str,
-            required_minutes=cfg.required_minutes,
+            required_minutes=req_min,
             remaining=remaining,
             max_price_eur=cfg.max_price_eur,
             min_slot_minutes=cfg.min_slot_minutes,
@@ -1943,12 +1948,12 @@ def _select_slots(
                   cfg.name)
     else:
         scheduled_min = sum(s.duration_minutes for s in selected)
-        if scheduled_min < cfg.required_minutes:
+        if scheduled_min < req_min:
             log.warning(
                 "⚠ Profile '%s': only %d min scheduled of %d min required. "
                 "Window prices may all be above max_price_cents_kwh, or the window "
                 "is too short for the required hours.",
-                cfg.name, scheduled_min, cfg.required_minutes,
+                cfg.name, scheduled_min, req_min,
             )
 
     return selected
@@ -1987,6 +1992,42 @@ def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, s
 # ---------------------------------------------------------------------------
 # Main planning command
 # ---------------------------------------------------------------------------
+
+def _load_retained_minutes(output_dir: str, profile_name: str, now_utc: datetime) -> int:
+    """Return the number of future charging minutes from the previous plan.
+
+    Reads plan-{name}.json from output_dir or data/, sums duration of slots
+    where charging: true and start_utc > now_utc (excluding forecasted slots).
+    These represent hours already committed to the charger that haven't been
+    used yet — added to required_minutes so the new plan covers the full need.
+
+    Returns 0 if no previous plan exists or on any read/parse error.
+    """
+    import json as _json
+    for candidate in [
+        os.path.join(output_dir, f"plan-{profile_name}.json"),
+        os.path.join("data", f"plan-{profile_name}.json"),
+    ]:
+        if not os.path.exists(candidate):
+            continue
+        try:
+            with open(candidate) as f:
+                prev = _json.load(f)
+            minutes = sum(
+                s.get("duration_minutes", 15)
+                for s in prev.get("price_slots", [])
+                if s.get("charging") and not s.get("forecasted")
+                and datetime.fromisoformat(s["start_utc"]) > now_utc
+            )
+            if minutes:
+                log.info("Profile '%s': %d min of future charging retained from %s.",
+                         profile_name, minutes, candidate)
+            return minutes
+        except Exception as e:
+            log.warning("Could not load previous plan for '%s' from %s: %s",
+                        profile_name, candidate, e)
+    return 0
+
 
 def _plan_one_profile(
     cfg:                    "Config",
@@ -2084,10 +2125,14 @@ def _plan_one_profile(
         log.info("Trimmed %d unreachable slots (earliest useful: %s UTC)",
                  trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"))
 
-    selected = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str)
+    now_utc_plan  = datetime.now(tz=timezone.utc)
+    retained_minutes = _load_retained_minutes(output_dir, cfg.name, now_utc_plan)
+    effective_required = cfg.required_minutes + retained_minutes
+
+    selected = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str,
+                             required_minutes_override=effective_required)
     windows = merge_continuous_slots(selected)
 
-    now_utc_plan = datetime.now(tz=timezone.utc)
     future_prices = [s for s in display_prices if s.start >= now_utc_plan]
 
     plan = build_plan(PlanParams(
@@ -2099,6 +2144,7 @@ def _plan_one_profile(
         selected=selected,
         windows=windows,
         required_minutes=cfg.required_minutes,
+        retained_minutes=retained_minutes,
         tz=tz.zone,
         timezone_name=tz.name,
         preferred_window_start=win_start_str,
