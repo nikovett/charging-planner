@@ -167,7 +167,7 @@ Light/dark with OS preference default (`@media (prefers-color-scheme: dark)`) an
 **Window pills:** time range, avg price, duration
 
 ### Back card layout
-- Config grid: required, mode, min slot, ceiling, delivery
+- Config grid: required, mode, min slot, ceiling, delivery — all values shown as pills. Teal pill for active/positive values (hours, mode, min slot, ceiling, ✓ on). Grey pill for negative/absent values (none, off, —)
 - Weekly schedule grid: days × start/end times, today highlighted in teal, "any" slots centered
 
 ### Warnings (banners)
