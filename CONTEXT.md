@@ -340,6 +340,14 @@ Seven color pairs considered as alternative themes for the dashboard. Each pair 
 
 ## Decisions
 
+### OCPP delivery handler removed
+
+`delivery/deliver_ocpp.py` removed. OCPP requires direct WebSocket access to the charger — fundamentally incompatible with GHA-first architecture. The `websockets` dependency was the only reason for the optional local dependency section in README.
+
+The OCPP `ChargingProfile` object remains in the plan JSON output — ready-to-use for any downstream system that wants it. The delivery handler on top of it is gone.
+
+`config.yaml` OCPP example block removed. README delivery table now shows only the Charge Amps handler.
+
 ### ntfy removed — GHA is the primary run environment
 
 ntfy was originally used to notify on delivery failures, forecast prices, and skipped profiles. Removed because:

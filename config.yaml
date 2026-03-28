@@ -61,25 +61,5 @@ charging:
         restore_mode: true              # Charge Amps only: delivered schedule always changes the charger mode to "Schedule". Enabling this restores charging mode back to what it was before delivery.
         
 
-    # Example: deliver overnight profile to two chargers via different handlers
-    #
-    # deliveries:
-    #   - handler: chargeamps
-    #     charge_point_id:          # list — same plan delivered to both chargers
-    #       - CHARGER_ID_1
-    #       - CHARGER_ID_2
-    #     connector_id: 1
-    #     max_charging_rate: 16.0      # amps — Charge Amps API uses current (A)
-    #
-    #   - handler: ocpp                # → delivery/deliver_ocpp.py
-    #     charge_point_id: CHARGER_ID_2   # reuse same CHARGER_ID_# scheme
-    #     endpoint_url_env: OCPP_ENDPOINT_URL  # e.g. ws://192.168.1.10:9000/ocpp
-    #     ocpp_version: "1.6"          # Quoted — would parse as float without quotes
-    #     connector_id: 1              # OCPP 1.6 connectorId / 2.x evseId — default 1
-    #     transaction_id: null         # omit or null for TxDefaultProfile
-    #     timeout: 30                  # seconds to wait for response — default 30
-    #     charging_rate_unit: W        # unit for max_charging_rate: W (power in watts) or A (current in amps per phase) — check your charger's OCPP documentation
-    #     max_charging_rate: 11000.0   # limit in W or A during charging windows — default 11000.0
-    #     profile_id: 1                # ChargingProfile identifier, must be unique on the charger — default 1
-    #     stack_level: 0               # higher values take precedence; 0 = lowest priority — default 0
+
 

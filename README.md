@@ -50,10 +50,6 @@ Most EV charging schedulers pick a fixed overnight window and call it done. This
 
 No other dependencies. The script otherwise uses only the standard library, including [`zoneinfo`](https://docs.python.org/3/library/zoneinfo.html) (stdlib since Python 3.9) for DST-correct timezone handling.
 
-**Optional — local OCPP delivery only:**
-- [`websockets`](https://pypi.org/project/websockets/) — `pip install websockets`
-
-Required only when using the OCPP handler to deliver directly to a charger over WebSocket. The charger must be reachable from the machine running the script — not applicable to GitHub Actions runs.
 
 ---
 
@@ -162,11 +158,10 @@ Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` bloc
 | Handler | Script | Description |
 |---|---|---|
 | `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API |
-| `ocpp` | `delivery/deliver_ocpp.py` | Delivers via OCPP WebSocket (`SetChargingProfile.req`), supports 1.6 / 2.0.1 / 2.1 |
 
 The `chargeamps` handler supports one additional option: `restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
 
-See [`delivery/README.md`](delivery/README.md) for full handler configuration reference and instructions for adding a new handler.
+See [`delivery/README.md`](delivery/README.md) for full handler configuration reference and instructions for adding a new handler. New handlers can be added by creating a `deliver_<name>.py` script with a single `deliver` function — the dispatcher handles the rest.
 
 ---
 
