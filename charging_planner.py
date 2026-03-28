@@ -1450,8 +1450,11 @@ def build_plan(p: PlanParams) -> dict:
       ]
     }
     """
-    # Use selected prices as fallback if all_prices is somehow empty
-    stat_source = p.all_prices or p.selected
+    # Use future-only prices for stats so min/avg/max reflect the actual
+    # opportunity set available to the scheduler, not historical slots.
+    now_utc = datetime.now(tz=timezone.utc)
+    future_prices = [s for s in p.all_prices if s.start >= now_utc]
+    stat_source = future_prices or p.all_prices or p.selected
     all_prices_eur = [s.price_eur_kwh for s in stat_source]
     if all_prices_eur:
         price_stats = {
