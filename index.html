@@ -598,13 +598,13 @@ function renderBackFace(profileName) {
   var cfg = PROFILE_CONFIG[profileName] || {};
 
   var cfgFields = [
-    ["required", cfg.requiredHours !== undefined ? cfg.requiredHours + "h" : "\u2014"],
-    ["mode",     cfg.continuous !== undefined ? '<span class="badge on">' + (cfg.continuous ? "continuous" : "split") + '</span>' : "\u2014"],
-    ["min slot", !cfg.continuous && cfg.minSlot ? cfg.minSlot + " min" : "\u2014"],
-    ["ceiling",  cfg.maxPrice != null ? cfg.maxPrice.toFixed(2) + " c\u20ac/kWh" : "none"],
+    ["required", cfg.requiredHours !== undefined ? '<span class="badge on">' + cfg.requiredHours + 'h</span>' : '<span class="badge">\u2014</span>'],
+    ["mode",     cfg.continuous !== undefined ? '<span class="badge on">' + (cfg.continuous ? "continuous" : "split") + '</span>' : '<span class="badge">\u2014</span>'],
+    ["min slot", !cfg.continuous && cfg.minSlot ? '<span class="badge on">' + cfg.minSlot + ' min</span>' : '<span class="badge">\u2014</span>'],
+    ["ceiling",  cfg.maxPrice != null ? '<span class="badge on">' + cfg.maxPrice.toFixed(2) + ' c\u20ac/kWh</span>' : '<span class="badge">none</span>'],
     ["delivery", cfg.handlers && cfg.handlers.length
                    ? (cfg.handlers.some(function(h){return h.enabled;}) ? '<span class="badge on">\u2713 on</span>' : '<span class="badge">off</span>')
-                   : "\u2014"],
+                   : '<span class="badge">\u2014</span>'],
   ];
 
   var configHTML = '<div class="config-grid">'
