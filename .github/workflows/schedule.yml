@@ -28,14 +28,11 @@ jobs:
         id: plan
         env:
           ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
-          NTFY_TOPIC:     ${{ secrets.NTFY_TOPIC }}
         run: python charging_planner.py --output-dir .
 
       - name: Deliver to charger(s)
         if: steps.plan.outputs.prices_available == 'true'
         env:
-          # ntfy push notification
-          NTFY_TOPIC:       ${{ secrets.NTFY_TOPIC }}
           # Charge Amps credentials (used by deliver_chargeamps.py)
           CHARGER_EMAIL:    ${{ secrets.CHARGER_EMAIL }}
           CHARGER_PASSWORD: ${{ secrets.CHARGER_PASSWORD }}
