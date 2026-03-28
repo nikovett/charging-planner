@@ -1076,17 +1076,17 @@ class TestSelectWithMinBlock(unittest.TestCase):
         all_slots = block_a + gap + block_b + rest
 
         selected = select_charging_windows(
-            all_slots, required_minutes=60, min_slot_minutes=30
+            all_slots, required_minutes=60, min_slot_minutes=30, min_gap_minutes=30
         )
         groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        # Check every gap between groups is >= 30 min
+        # Check every gap between groups is >= 30 min (explicit min_gap_minutes=30)
         for i in range(len(groups) - 1):
             gap_min = int(
                 (groups[i+1][0].start - groups[i][-1].end).total_seconds() / 60
             )
             self.assertGreaterEqual(
                 gap_min, 30,
-                f"Gap of {gap_min} min between blocks violates min_slot_minutes=30"
+                f"Gap of {gap_min} min between blocks violates min_gap_minutes=30"
             )
 
 

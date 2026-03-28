@@ -41,6 +41,8 @@ DST transition day. Several bugs found and fixed stemming from adding historical
 
 **Forecast augmentation**: always runs after any real-price fetch (removed the `tomorrow_noon` condition). Ensures histogram right edge is always filled.
 
+**min_gap_minutes**: new config parameter separating gap constraint from block length constraint. `min_slot_minutes` now only controls minimum block length; `min_gap_minutes` (default 15, divisible by 15, can be 0) controls minimum gap between blocks. Allows e.g. 2h blocks with 30-minute gaps without forcing 2h gaps.
+
 **Config pills**: all five back-card config fields now use pills consistently — teal for active values, grey for negative/absent (none, off, —).
 
 **avg line z-order**: moved behind bars so playhead and price bars render in front.
@@ -93,11 +95,9 @@ Dynamic programming: finds the globally cheapest combination of blocks covering 
 - Reconstruction: forward scan finding the **latest** valid block at each step (latest-preferred tiebreaker for equal-price ties)
 - Globally optimal — no greedy approximation
 
-**`min_slot_minutes`** applies to both:
-- Minimum individual block length
-- Minimum gap between blocks
+**`min_slot_minutes`** controls the minimum individual block length — the charger should not run for less than this duration.
 
-This prevents the charger from being toggled on/off too rapidly in either direction.
+**`min_gap_minutes`** controls the minimum gap between blocks (default 15 min, must be divisible by 15, can be 0). Prevents the charger toggling off and straight back on. Kept separate from `min_slot_minutes` so e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 30-minute gaps rather than forcing 2h gaps too.
 
 **Gap merge removed:** The old `close_gap_merge` post-selection patch was removed. Short gaps between blocks are now impossible by construction — the DP enforces gap constraints at selection time.
 
@@ -220,8 +220,8 @@ The greedy algorithm made locally optimal choices that prevented globally optima
 ### Gap merge removed
 `close_gap_merge` would bridge short gaps by including expensive gap slots, overriding price optimisation. The DP enforces gap constraints at selection time — gaps between blocks are a direct consequence of price optimisation, not something to patch.
 
-### `min_slot_minutes` applies to gaps too
-Both block length and inter-block gaps must be ≥ `min_slot_minutes`. Same physical constraint: the charger shouldn't toggle on or off for less than this duration.
+### `min_slot_minutes` and `min_gap_minutes` are separate constraints
+`min_slot_minutes` controls minimum block length; `min_gap_minutes` controls minimum gap between blocks (default 15). They were previously the same value which forced unnecessarily long gaps when `min_slot_minutes` was set to e.g. 2h.
 
 ### Forecast augmentation is display-only (unless it's the only source)
 When real prices are available (ENTSO-E or Sähkötin), forecast slots in `price_slots` are never passed to the selection algorithm or optimal calculation — they exist solely to fill the histogram's right side. However, when both real sources fail, `fetch_forecast_prices` is used as a last resort and those slots ARE used for selection. In that case no display augmentation is fetched on top (the `price_source != "forecast"` guard prevents it).
@@ -255,7 +255,8 @@ charging:
   - name: topup
     required_hours: 2
     continuous_only: false
-    min_slot_minutes: 30       # Min block length AND min gap between blocks
+    min_slot_minutes: 30       # Min block length
+    min_gap_minutes: 15        # Min gap between blocks (independent of min_slot_minutes)
     max_price_cents_kwh: null
     preferred_window_start: "21:00"
     preferred_window_end: "06:30"

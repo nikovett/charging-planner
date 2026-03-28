@@ -78,6 +78,7 @@ CHARGING_DEFAULTS = {
     "max_price_cents_kwh":    None,
     "continuous_only":        False,
     "min_slot_minutes":       30,
+    "min_gap_minutes":        15,
     "preferred_window_start": "00:00",
     "preferred_window_end":   "23:59",
 }
@@ -243,6 +244,11 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
         errors.append(f"charging.min_slot_minutes must be positive, got: {min_slot!r}.")
     elif int(min_slot) % 15 != 0:
         errors.append(f"charging.min_slot_minutes={min_slot} must be divisible by 15.")
+    min_gap = ch.get("min_gap_minutes", 30)
+    if not isinstance(min_gap, (int, float)) or min_gap < 0:
+        errors.append(f"charging.min_gap_minutes must be non-negative, got: {min_gap!r}.")
+    elif int(min_gap) % 15 != 0:
+        errors.append(f"charging.min_gap_minutes={min_gap} must be divisible by 15.")
 
     ceil = ch.get("max_price_cents_kwh")
     if ceil is not None and (not isinstance(ceil, (int, float)) or ceil <= 0):
@@ -374,6 +380,7 @@ class Config:
     required_minutes:       int
     continuous_only:        bool
     min_slot_minutes:       int
+    min_gap_minutes:        int
     max_price_eur:          Optional[float]   # None = no ceiling
     preferred_window_start: str               # validated HH:MM or "any"
     preferred_window_end:   str               # validated HH:MM or "any"
@@ -404,6 +411,7 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         required_minutes=int(ch["required_hours"] * 60),
         continuous_only=bool(ch.get("continuous_only", False)),
         min_slot_minutes=int(ch.get("min_slot_minutes", 30)),
+        min_gap_minutes=int(ch.get("min_gap_minutes", 30)),
         max_price_eur=ceil_cents / 100.0 if ceil_cents is not None else None,
         preferred_window_start=ch.get("preferred_window_start", "00:00"),
         preferred_window_end=ch.get("preferred_window_end", "23:45"),
@@ -996,6 +1004,7 @@ def select_charging_windows(
     continuous_only: bool = False,
     max_price: Optional[float] = None,
     min_slot_minutes: int = 15,
+    min_gap_minutes: int = 15,
 ) -> list[Slot]:
     if not prices:
         return []
@@ -1029,21 +1038,24 @@ def select_charging_windows(
         log.info("min_slot_minutes rounded up to %d to align with %d-minute slots.",
                  effective_min_minutes, slot_dur)
 
-    if min_slots_per_block <= 1:
+    min_slots_per_gap = max(0, min_gap_minutes // slot_dur)
+
+    if min_slots_per_block <= 1 and min_slots_per_gap == 0:
         selected = sorted(candidates, key=lambda x: (x.price_eur_kwh, -x.start.timestamp()))[:n_slots]
         selected.sort(key=lambda x: x.start)
         return selected
 
-    return _select_with_min_block(candidates, n_slots, min_slots_per_block)
+    return _select_with_min_block(candidates, n_slots, min_slots_per_block, min_slots_per_gap)
 
 
 def _select_with_min_block(
     candidates: list[Slot],
     n_slots: int,
     min_slots_per_block: int,
+    min_slots_per_gap: int = 2,
 ) -> list[Slot]:
     """Select n_slots from candidates at minimum total cost, where every block is
-    ≥ min_slots_per_block long and every gap between blocks is ≥ min_slots_per_block
+    ≥ min_slots_per_block long and every gap between blocks is ≥ min_slots_per_gap
     long.  Uses dynamic programming for a globally optimal solution.
 
     DP formulation:
@@ -1056,7 +1068,7 @@ def _select_with_min_block(
       Skip:           dp[i][r] = dp[i+1][r]
       Start block k:  dp[i][r] = sum(prices[i:i+k]) + dp[i+k+min_gap][r-k]
                       for k in [min_slots_per_block .. min(r, n - i)]
-                      next valid start = i + k + min_slots_per_block (min gap enforced)
+                      next valid start = i + k + min_slots_per_gap (min gap enforced)
 
     Reconstruction walks choice[][] forward to collect selected slots.
     """
@@ -1095,7 +1107,7 @@ def _select_with_min_block(
             max_k = min(r, n - i)
             for k in range(min_slots_per_block, max_k + 1):
                 # Next valid position after this block + mandatory gap
-                next_i = i + k + min_slots_per_block
+                next_i = i + k + min_slots_per_gap
                 if next_i > n:
                     next_i = n
                 remaining_r = r - k
@@ -1126,7 +1138,7 @@ def _select_with_min_block(
         best_k = None
         for i2 in range(i, n):
             for k in range(min_slots_per_block, min(r, n - i2) + 1):
-                next_i = min(i2 + k + min_slots_per_block, n)
+                next_i = min(i2 + k + min_slots_per_gap, n)
                 cost = block_cost(i2, k) + dp[next_i][r - k]
                 if abs(cost - dp[i][r]) < 1e-12:
                     best_i = i2
@@ -1134,7 +1146,7 @@ def _select_with_min_block(
         if best_i is None:
             break
         selected.extend(ordered[best_i:best_i + best_k])
-        i = best_i + best_k + min_slots_per_block
+        i = best_i + best_k + min_slots_per_gap
         r -= best_k
 
     slot_dur      = ordered[0].duration_minutes if ordered else 15
@@ -1151,9 +1163,10 @@ def _select_with_min_block(
         gap_min = int(
             (final_blocks[i2 + 1][0].start - final_blocks[i2][-1].end
              ).total_seconds() / 60)
-        if gap_min < min_block_min:
-            log.warning("Gap of %d min between blocks is shorter than min_slot_minutes=%d min.",
-                        gap_min, min_block_min)
+        min_gap_min = min_slots_per_gap * slot_dur
+        if gap_min < min_gap_min:
+            log.warning("Gap of %d min between blocks is shorter than min_gap_minutes=%d min.",
+                        gap_min, min_gap_min)
     return sorted(selected, key=lambda x: x.start)
 
 
@@ -1425,6 +1438,7 @@ class PlanParams:
     preferred_window_end:   str
     max_price_eur:          Optional[float] = None
     min_slot_minutes:       int             = 30
+    min_gap_minutes:        int             = 30
     continuous_only:        bool            = False
     forecast_slots:         list            = None  # display-only, not used for selection
 
@@ -1495,6 +1509,7 @@ def build_plan(p: PlanParams) -> dict:
         continuous_only=p.continuous_only,
         max_price=p.max_price_eur,
         min_slot_minutes=p.min_slot_minutes,
+        min_gap_minutes=p.min_gap_minutes,
     )
     optimal_starts = {s.start for s in optimal_selected}
     opt_prices = [s.price_eur_kwh for s in optimal_selected]
@@ -1903,6 +1918,7 @@ def _select_slots(
         continuous_only=cfg.continuous_only,
         max_price=cfg.max_price_eur,
         min_slot_minutes=cfg.min_slot_minutes,
+        min_gap_minutes=cfg.min_gap_minutes,
     )
 
     remaining = cfg.required_minutes - sum(s.duration_minutes for s in selected)
@@ -2089,6 +2105,7 @@ def _plan_one_profile(
         preferred_window_end=win_end_str,
         max_price_eur=cfg.max_price_eur,
         min_slot_minutes=cfg.min_slot_minutes,
+        min_gap_minutes=cfg.min_gap_minutes,
         continuous_only=cfg.continuous_only,
         forecast_slots=forecast_display_slots,
     ))
