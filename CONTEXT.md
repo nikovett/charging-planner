@@ -27,6 +27,26 @@ DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast disp
 ### Session 5 — 2026-03-27 (morning)
 Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring, gap merge removal, algorithm correctness fixes.
 
+
+### Session 7 — 2026-03-28
+DST transition day. Several bugs found and fixed stemming from adding historical slots for histogram display without auditing all downstream uses of `all_prices`.
+
+**PlanParams refactor**: renamed `all_prices` → `display_prices`, added `future_prices` (real slots from now onwards). Three clearly named pools now: `display_prices` (all real slots incl. historical — histogram output only), `future_prices` (future real slots — stats, optimal, scheduler), `forecast_slots` (predicted slots — display only, never used in calculations).
+
+**price_stats fix**: min/avg/max and "vs market %" now use `future_prices` only, so historical price spikes don't distort the displayed market stats.
+
+**optimal fix**: optimal slot calculation now uses `future_prices` — same pool as the scheduler, no window constraint, no historical or forecast slots.
+
+**ENTSO-E fallback fix**: raises `PricesNotYetAvailable` when returned slots don't reach tomorrow (catches maintenance/stale responses). Triggers Sähkötin fallback correctly.
+
+**Forecast augmentation**: always runs after any real-price fetch (removed the `tomorrow_noon` condition). Ensures histogram right edge is always filled.
+
+**Config pills**: all five back-card config fields now use pills consistently — teal for active values, grey for negative/absent (none, off, —).
+
+**avg line z-order**: moved behind bars so playhead and price bars render in front.
+
+**Tests**: 186 tests passing (3 skipped). `test_charging_planner.py` updated to use new `display_prices`/`future_prices` field names in `PlanParams`.
+
 ### Session 6 — 2026-03-27 (afternoon)
 Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow (catches partial/stale responses during maintenance). Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots. Forecast display augmentation now always runs after a real-price fetch (not just when slots don't reach tomorrow noon) and cap extended from 12h to 24h — ensures histogram right edge is always filled. Histogram range snapped to 15-minute slot boundaries (floor rangeStart, ceil rangeEnd) to eliminate sub-slot gaps at histogram edges. Two-mode histogram window: Mode 1 (charging far away) anchors on now-1h and extends to cover all charging slots+1h; Mode 2 (charging midpoint within 11h of now) centers on charging midpoint ±12h. Ensures now is always visible and charging slots are always visible, with now drifting toward center as charging approaches.
 
@@ -208,6 +228,12 @@ When real prices are available (ENTSO-E or Sähkötin), forecast slots in `price
 
 ### Historical slots included in price_slots
 Both ENTSO-E and Sähkötin return slots from the previous evening onwards (not just future slots). This gives the histogram enough data to center properly on the charging slot midpoint without being clamped to "now".
+
+### PlanParams price pool separation
+`PlanParams` has three explicitly named price pools to prevent historical/forecast data leaking into calculations:
+- `display_prices` — all real slots including historical. Used only for building `price_slots` in the JSON output.
+- `future_prices` — real slots from now onwards. Used for `price_stats` (min/avg/max), optimal calculation, and print summary.
+- `forecast_slots` — predicted slots. Appended to `price_slots` after real slots, never used in any calculation.
 
 ### Hero price replaces stat grid
 The old 4-column stats row (scheduled / avg price / vs market / vs optimal) was replaced with two large hero numbers. The "vs optimal" percentage is replaced by visual outline bars in the histogram — if scheduled and optimal slots overlap completely, no outlines appear.
