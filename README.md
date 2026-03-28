@@ -6,17 +6,21 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 ## What makes this different
 
-Most EV charging schedulers pick a fixed overnight window and call it done. This one is built around a few harder problems.
+Most EV charging schedulers pick a fixed overnight window and call it done. This one treats price optimization as a real scheduling problem.
 
-**Globally optimal slot selection.** The scheduler uses dynamic programming to find the mathematically cheapest combination of charging blocks — not a greedy approximation. On a split plan it evaluates every valid combination of blocks and gaps before committing. The result is often a non-obvious schedule: three 30-minute windows spread across the night, each hitting a local price minimum, that together cost significantly less than any single overnight block would.
+**Zero hardware required.** Runs as a GitHub Actions cron job — no server, no hub, no Raspberry Pi. Day-ahead prices publish on a predictable schedule, making this a natural fit for a cloud cron. Local cron works too if preferred.
 
-**Separate block and gap constraints.** `min_slot_minutes` controls how long each charging block must run. `min_gap_minutes` controls the minimum pause between blocks. They're independent — so `min_slot_minutes: 120` gives 2-hour blocks without forcing 2-hour gaps between them. Both are enforced by the DP at selection time, not patched on afterwards.
+**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight blocks; a 22 kW charger benefits from hunting the cheapest short windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file, configured per day of the week.
 
-**Retained hours.** Each run reads the previous plan and counts how many future charging minutes were already committed to the charger. Those hours are added to `required_hours` for the new run — the DP schedules the full combined need, finds the cheapest slots for everything, and the charger gets a complete updated schedule. Previously committed slots are honoured unless cheaper alternatives exist.
+**Globally optimal scheduling.** Continuous mode finds the cheapest unbroken block ending at departure time. Split mode uses dynamic programming — not a greedy approximation. The result is often non-obvious: three 30-minute windows at 01:00, 03:30 and 05:15 can be significantly cheaper than one 90-minute block at the same total cost.
 
-**Three-level price source fallback.** ENTSO-E is the primary source. If it's unavailable, returns a stale response, or hasn't published tomorrow's prices yet, the planner automatically falls back to Sähkötin (actual Nord Pool prices, no API key needed), then to a nordpool-predict-fi ML forecast as a last resort. The fallback is transparent — `price_source` in the plan JSON tells you which source was used.
+**Realistic charger behaviour built in.** Independent minimum block length and minimum gap between blocks prevent short on/off cycling — the planner won't schedule 15 minutes on, 15 minutes off, on again. Long blocks don't force equally long gaps. Both enforced at selection time, not patched on afterwards.
 
-**Everything else that matters.** DST-correct scheduling throughout. Forecast bars fill the histogram when tomorrow's prices aren't published yet. The "vs market" percentage compares your scheduled average against the full opportunity set the scheduler had — not some arbitrary baseline. The OCPP profile in the plan JSON is ready to deliver to any 1.6, 2.0.1, or 2.1 charger without modification.
+**Previously committed charging is never lost.** Each run reads the previous plan and carries forward any future charging already committed to the charger. If Saturday's plan included a cheap slot at 23:30, Sunday's run keeps it and schedules the new requirement on top — unless it finds something even cheaper for that time.
+
+**Three-level price source fallback.** ENTSO-E → Sähkötin → nordpool-predict-fi forecast. If ENTSO-E is under maintenance at 14:30, the plan still builds and delivers on time using real Nord Pool prices from Sähkötin. The dashboard warns when the plan is based on forecast rather than confirmed prices.
+
+**Modular charger delivery.** Each charger type is a small handler script with a single deliver function. Charge Amps and OCPP are included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
 
 ```
   ══════════════════════════════════════════════════════════════════
@@ -42,10 +46,14 @@ Most EV charging schedulers pick a fixed overnight window and call it done. This
 
 - Python 3.11+
 - [`pyyaml`](https://pypi.org/project/PyYAML/) — `pip install pyyaml`
-- [`websockets`](https://pypi.org/project/websockets/) — `pip install websockets` (only needed for the OCPP delivery handler)
 - An ENTSO-E API key (free)
 
-No other dependencies. The script uses only the standard library, including [`zoneinfo`](https://docs.python.org/3/library/zoneinfo.html) (stdlib since Python 3.9) for DST-correct timezone handling.
+No other dependencies. The script otherwise uses only the standard library, including [`zoneinfo`](https://docs.python.org/3/library/zoneinfo.html) (stdlib since Python 3.9) for DST-correct timezone handling.
+
+**Optional — local OCPP delivery only:**
+- [`websockets`](https://pypi.org/project/websockets/) — `pip install websockets`
+
+Required only when using the OCPP handler to deliver directly to a charger over WebSocket. The charger must be reachable from the machine running the script — not applicable to GitHub Actions runs.
 
 ---
 
@@ -237,7 +245,6 @@ Settings → Secrets and variables → Actions → New repository secret
 | `CHARGER_PASSWORD` | Charge Amps login password |
 | `CHARGER_ID_1` | First charger ID |
 | `CHARGER_ID_2` | Second charger ID (if applicable) |
-| `OCPP_ENDPOINT_URL` | WebSocket base URL for OCPP charger (if applicable) |
 
 Never commit secrets to the repository. All sensitive values are injected at runtime as environment variables — `config.yaml` keeps only empty placeholders.
 
