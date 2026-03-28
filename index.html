@@ -447,7 +447,7 @@ function renderTimeline(plan, profileName, nowPrice) {
   return '<div class="timeline-wrap">'
        + '<div class="timeline-label-row"><span>charging slots</span>' + legendHTML + '</div>'
        + '<div class="histogram" style="-webkit-user-select:none;user-select:none;touch-action:pan-y" ontouchmove="histoTouchMove(event,\'' + profileName + '\')" ontouchend="unhoverBar(\'' + profileName + '\')" ontouchcancel="unhoverBar(\'' + profileName + '\')">'
-       + barsHTML + avgLine
+       + avgLine + barsHTML
        + '</div>'
        + '<div class="timeline-ticks">' + tickHTML + '</div>'
        + '</div>';
