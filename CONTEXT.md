@@ -322,6 +322,19 @@ Seven color pairs considered as alternative themes for the dashboard. Each pair 
 | 7 | Lime cream / Vintage grape | `#DDEA78` | `#433455` | `#433455` | `#DDEA78` |
 ---
 
+## Decisions
+
+### ntfy removed — GHA is the primary run environment
+
+ntfy was originally used to notify on delivery failures, forecast prices, and skipped profiles. Removed because:
+- Forecast warning is already visible on the dashboard
+- Delivery failures now exit non-zero → GHA emails the operator and flags the workflow as failed
+- GHA is the primary run environment; local cron is a secondary use case
+
+`deliver.py` already exited non-zero on delivery failure — no change needed there. `schedule.yml` and `config.yaml` updated to remove all ntfy references. `_send_delivery_ntfy` and `skipped_profiles` logic removed from `deliver.py`.
+
+---
+
 ## Future work
 
 ### Retain already-committed future charging slots across plan runs — IMPLEMENTED

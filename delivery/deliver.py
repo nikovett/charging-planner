@@ -34,6 +34,10 @@ it does not need to be repeated inside delivery entries.
 Each resolved ID is delivered independently; all are attempted even if one
 fails — the exit code reflects whether all succeeded.
 
+Exit code is 0 only if every delivery succeeded. Failures are surfaced via
+non-zero exit so the GitHub Actions job is marked as failed and the operator
+receives an email notification.
+
 Handlers expose:  deliver(plan, charge_point_id, entry, timezone) -> bool
 Exit code is 0 only if every delivery succeeded.
 """
@@ -208,136 +212,6 @@ def _load_handler(handler_name: str):
 # Dispatch
 # ===========================================================================
 
-def _send_delivery_ntfy(
-    plans_by_profile: dict[str, dict],
-    skipped_profiles: list[str],
-    delivery_results: list[tuple[str, str, str, bool]],
-    config: dict,
-) -> None:
-    """Send an ntfy notification only when action is needed:
-    - Any delivery to a charger failed
-    - Any plan was built on forecast prices (real-time data was unavailable)
-    - Any profile was skipped
-
-    Successful deliveries with real prices are silent.
-    """
-    ntfy_cfg = config.get("ntfy", {})
-    if not ntfy_cfg.get("enabled", False):
-        return
-
-    topic = os.environ.get("NTFY_TOPIC") or ntfy_cfg.get("topic", "")
-    if not topic:
-        log.warning("ntfy.enabled is true but no topic configured — skipping.")
-        return
-
-    plans = sorted(
-        [p for p in plans_by_profile.values() if p.get("window_starts_utc")],
-        key=lambda p: p.get("required_minutes", 0),
-    )
-
-    # Determine if notification is warranted
-    any_delivery_failed = any(not ok for _, _, _, ok in delivery_results)
-    any_forecast        = any(p.get("price_source") == "forecast" for p in plans)
-    any_skipped         = bool(skipped_profiles)
-
-    if not any_delivery_failed and not any_forecast and not any_skipped:
-        log.info("ntfy: all deliveries succeeded with real prices — skipping notification.")
-        return
-
-    # Index delivery results by profile for quick lookup
-    results_by_profile: dict[str, list[tuple[str, str, bool]]] = {}
-    for profile, handler, cp_id, ok in delivery_results:
-        results_by_profile.setdefault(profile, []).append((handler, cp_id, ok))
-
-    def fmt_h(minutes: int) -> str:
-        h, m = divmod(minutes, 60)
-        return f"{h}h" if m == 0 else f"{h}h{m:02d}m"
-
-    # Title signals why we're notifying
-    date  = plans[0].get("date", "") if plans else ""
-    if any_delivery_failed:
-        title = f"⚠ Delivery failed — {date}"
-    elif any_forecast:
-        title = f"⚠ Forecast prices used — {date}"
-    else:
-        title = f"⚠ Charging plan issue — {date}"
-
-    def _sep(profile, tot, req, avg, market_avg):
-        summary = fmt_h(tot)
-        if tot < req:
-            summary += f"/{fmt_h(req)}"
-        if avg is not None:
-            savings = ((1 - avg / market_avg) * 100) if market_avg else 0
-            if savings > 0:
-                savings_str = f" ↓{savings:.0f}%"
-            elif savings < 0:
-                savings_str = f" ↑{-savings:.0f}%"
-            else:
-                savings_str = ""
-            price_str = f" @ {avg:.2f} c€/kWh{savings_str}"
-        else:
-            price_str = ""
-        return f"{profile} {summary}{price_str}"
-
-    # Body: profile header line, windows, indented chargers
-    sections = []
-    for plan in plans:
-        profile    = plan.get("profile", "default")
-        wins       = plan["windows"]
-        req        = plan["required_minutes"]
-        tot        = plan["total_minutes"]
-        avg        = plan.get("avg_price_cents_kwh")
-        market_avg = plan.get("price_stats", {}).get("avg_cents_kwh")
-
-        sep = _sep(profile, tot, req, avg, market_avg)
-
-        if wins:
-            win_lines = "\n".join(f"{w['start']}–{w['end']}" for w in wins)
-        else:
-            win_lines = "no windows selected"
-
-        if tot < req:
-            win_lines += f"\n⚠ only {fmt_h(tot)} of {fmt_h(req)} scheduled"
-
-        block = f"{sep}\n{win_lines}"
-
-        profile_results = results_by_profile.get(profile, [])
-        if profile_results:
-            delivery_lines = "\n".join(
-                f"  {'✓' if ok else '✗'} {cp_id}"
-                for handler, cp_id, ok in profile_results
-            )
-            block += f"\n{delivery_lines}"
-
-        sections.append(block)
-
-    if skipped_profiles:
-        skipped_lines = "\n".join(f"  - {n}" for n in skipped_profiles)
-        sections.append(f"skipped\n{skipped_lines}")
-
-    message = "\n\n".join(sections)
-    url     = f"https://ntfy.sh/{topic}"
-
-    try:
-        import json as _json
-        import urllib.request as _ur
-        payload = _json.dumps({
-            "topic":    topic,
-            "title":    title,
-            "message":  message,
-            "priority": 3,
-        }).encode("utf-8")
-        req = _ur.Request(
-            "https://ntfy.sh/",
-            data=payload,
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        _ur.urlopen(req, timeout=10)
-        log.info("ntfy notification sent to %s", url)
-    except Exception as exc:
-        log.warning("ntfy notification failed: %s", exc)
-
 
 def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
     """Resolve deliveries from charging profiles and call each handler.
@@ -345,8 +219,7 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
     For each delivery entry, calls:
         handler.deliver(plan, charge_point_id, entry, timezone)
     once per resolved charger ID. All chargers are attempted; failures are
-    accumulated and reported at the end. Sends a combined ntfy notification
-    with plan summary and delivery status after all deliveries complete.
+    accumulated and reported at the end.
 
     Returns True only if every delivery succeeded.
     """
@@ -358,7 +231,6 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
 
     handler_cache: dict[str, object] = {}
     all_ok = True
-    delivery_results: list[tuple[str, str, str, bool]] = []  # (profile, handler, cp_id, ok)
 
     for profile_name, timezone, entry, charge_point_ids in deliveries:
         handler_name = entry["handler"]
@@ -399,8 +271,6 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
                 )
                 ok = False
 
-            delivery_results.append((profile_name, handler_name, charge_point_id, ok))
-
             if not ok:
                 log.error(
                     "Delivery failed: profile='%s'  handler='%s'  charger='%s'",
@@ -412,17 +282,6 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
                     "Delivery succeeded: profile='%s'  handler='%s'  charger='%s'",
                     profile_name, handler_name, charge_point_id,
                 )
-
-    # Profiles in config that had no plan (prices skipped) — infer from missing plans
-    skipped_profiles = [
-        p.get("name", "default")
-        for p in config.get("charging", [])
-        if isinstance(p, dict)
-        and p.get("deliveries")
-        and p.get("name") not in plans_by_profile
-    ]
-
-    _send_delivery_ntfy(plans_by_profile, skipped_profiles, delivery_results, config)
 
     return all_ok
 

@@ -4,9 +4,19 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 ---
 
-## Overview
+## What makes this different
 
-The script makes a single API call to fetch all available day-ahead prices, then runs each configured charging profile against the price data independently. Each profile picks its own cheapest windows within its configured preferred window (or from all available prices if no window is set) and writes a plan to JSON. Once plans are built, `delivery/deliver.py` dispatches each plan to the configured chargers and sends a push notification with the plan summary and delivery status.
+Most EV charging schedulers pick a fixed overnight window and call it done. This one is built around a few harder problems.
+
+**Globally optimal slot selection.** The scheduler uses dynamic programming to find the mathematically cheapest combination of charging blocks — not a greedy approximation. On a split plan it evaluates every valid combination of blocks and gaps before committing. The result is often a non-obvious schedule: three 30-minute windows spread across the night, each hitting a local price minimum, that together cost significantly less than any single overnight block would.
+
+**Separate block and gap constraints.** `min_slot_minutes` controls how long each charging block must run. `min_gap_minutes` controls the minimum pause between blocks. They're independent — so `min_slot_minutes: 120` gives 2-hour blocks without forcing 2-hour gaps between them. Both are enforced by the DP at selection time, not patched on afterwards.
+
+**Retained hours.** Each run reads the previous plan and counts how many future charging minutes were already committed to the charger. Those hours are added to `required_hours` for the new run — the DP schedules the full combined need, finds the cheapest slots for everything, and the charger gets a complete updated schedule. Previously committed slots are honoured unless cheaper alternatives exist.
+
+**Three-level price source fallback.** ENTSO-E is the primary source. If it's unavailable, returns a stale response, or hasn't published tomorrow's prices yet, the planner automatically falls back to Sähkötin (actual Nord Pool prices, no API key needed), then to a nordpool-predict-fi ML forecast as a last resort. The fallback is transparent — `price_source` in the plan JSON tells you which source was used.
+
+**Everything else that matters.** DST-correct scheduling throughout. Forecast bars fill the histogram when tomorrow's prices aren't published yet. The "vs market" percentage compares your scheduled average against the full opportunity set the scheduler had — not some arbitrary baseline. The OCPP profile in the plan JSON is ready to deliver to any 1.6, 2.0.1, or 2.1 charger without modification.
 
 ```
   ══════════════════════════════════════════════════════════════════
@@ -34,7 +44,6 @@ The script makes a single API call to fetch all available day-ahead prices, then
 - [`pyyaml`](https://pypi.org/project/PyYAML/) — `pip install pyyaml`
 - [`websockets`](https://pypi.org/project/websockets/) — `pip install websockets` (only needed for the OCPP delivery handler)
 - An ENTSO-E API key (free)
-- [ntfy app](https://ntfy.sh) on iOS or Android (optional — for push notifications)
 
 No other dependencies. The script uses only the standard library, including [`zoneinfo`](https://docs.python.org/3/library/zoneinfo.html) (stdlib since Python 3.9) for DST-correct timezone handling.
 
@@ -64,6 +73,8 @@ charging:
   - name: topup
     required_hours: 2
     continuous_only: false
+    min_slot_minutes: 30
+    min_gap_minutes: 15
     preferred_window_start: "22:00"
     preferred_window_end: "06:30"
     schedule:
@@ -92,9 +103,6 @@ charging:
         max_charging_rate: 16.0
         restore_mode: true
 
-ntfy:
-  enabled: true
-  topic: ""
 ```
 
 `charge_point_id` accepts either a single env var name or a list — when a list is given, the same plan is delivered to every charger independently. Timezone is set once in the `entsoe:` block and applies to all profiles and delivery handlers.
@@ -110,7 +118,7 @@ ntfy:
 | `charging.required_hours` | `4` | Hours of charging to schedule |
 | `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
 | `charging.min_slot_minutes` | `30` | Minimum continuous block length. The charger should not run for less than this duration. Must be a multiple of 15 |
-| `charging.min_gap_minutes` | `15` | Minimum gap between charging blocks. Prevents the charger toggling off and straight back on. Must be a multiple of 15. `0` = no gap constraint (adjacent cheap slots merge naturally). Can be set independently of `min_slot_minutes` — e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps |
+| `charging.min_gap_minutes` | `15` | Minimum gap between charging blocks. Prevents the charger toggling off and straight back on. Must be a multiple of 15. `0` = no gap constraint. Can be set independently of `min_slot_minutes` — e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or `any`. `any` start = use all slots from script run time. `any` + `HH:MM` end = charge anytime until departure time. Both `any` = no constraint. |
 | `charging.preferred_window_end` | `any` | End of preferred charging window (`HH:MM`), or `any`. If earlier than `preferred_window_start` the window wraps midnight. Use `23:45` for end of day. `HH:MM` start + `any` end = charge from that time until last available price. Both `any` = no constraint. |
@@ -131,7 +139,7 @@ A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — i
 
 Days not listed in `schedule` use the top-level preferred window.
 
-**Slot selection** — for `continuous_only: true`, the planner evaluates all possible contiguous blocks of `required_hours` length and picks the cheapest. For `continuous_only: false`, it finds the globally cheapest combination of blocks that together cover exactly `required_hours`, where every block and every gap between blocks is ≥ `min_slot_minutes`. Adjacent selected blocks are merged into a single charging window automatically.
+**Slot selection** — for `continuous_only: true`, the planner evaluates all possible contiguous blocks of `required_hours` length and picks the cheapest. For `continuous_only: false`, it uses dynamic programming to find the globally cheapest combination of blocks that together cover exactly `required_hours`, where every block is ≥ `min_slot_minutes` and every gap between blocks is ≥ `min_gap_minutes`. Adjacent selected blocks are merged into a single charging window automatically.
 
 **Preferred window and spillover** — slots within the configured preferred window are the primary candidates. If the window doesn't contain enough slots to satisfy `required_hours` (too few slots, or all above `max_price_cents_kwh`), the planner adds the cheapest available slots from outside the window to cover the deficit — but never past `preferred_window_end`. When no window is configured (`any`), all available slots are candidates from the start.
 
@@ -172,7 +180,7 @@ If all three sources fail, an ntfy notification is sent and the script exits wit
 
 Both ENTSO-E and Sähkötin return price slots from the previous evening onwards, including historical prices. This gives the dashboard histogram enough data to the left of "now" for context.
 
-After every successful real-price fetch, the planner always fetches up to 24 hours of forecast data from nordpool-predict-fi beyond the last real price slot. These slots are **display-only** — they are never used for slot selection or optimal calculation. They appear as grey diagonal-striped bars in the histogram with a "forecast" legend entry, making it clear they are estimates rather than confirmed prices. This ensures the right side of the histogram is always filled, even when charging slots fall late the following day.
+After every successful real-price fetch, the planner always fetches up to 12 hours of forecast data from nordpool-predict-fi beyond the last real price slot. These slots are **display-only** — they are never used for slot selection or optimal calculation. They appear as grey diagonal-striped bars in the histogram with a "forecast" legend entry, making it clear they are estimates rather than confirmed prices. This ensures the right side of the histogram is always filled, even when charging slots fall late the following day.
 
 ## Dashboard
 
@@ -180,13 +188,15 @@ A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan
 
 Features:
 
-- One flip card per profile — front shows the plan, back shows profile configuration, optimal slots histogram, and weekly schedule
+- One flip card per profile — front shows the plan, back shows profile configuration and weekly schedule
 - Price histogram with all available slots positioned by actual timestamp. The histogram window uses two modes depending on how far away the charging slots are:
   - **When charging is more than 11 hours away**: the window starts 1 hour before now and extends to cover all charging slots plus 1 hour, so "now" is always visible and the upcoming charging plan is visible to the right
-  - **When charging is within 11 hours**: the window centers on the charging slot midpoint ±12h, so the charging slots are prominent in the middle and now is naturally visible nearby
+  - **When charging is within 11 hours**: the window centers on the charging slot midpoint ±12h, so the charging slots are prominent and now is naturally visible nearby
 - Four bar states: solid teal (scheduled + optimal), teal diagonal stripe (scheduled but not optimal), teal outline (optimal but not scheduled/missed), grey diagonal stripe (forecast display-only). Legend items are conditional — each only appears when that bar type is visible
+- Hero shows `scheduled 2h + 30m retained` when hours from the previous plan are carried forward
 - "vs market" percentage shows how much cheaper the scheduled avg price is compared to the average across all slots available to the scheduler at run time
 - Hover/touch any bar to see its price and time in the hero area; hovering a charging bar shows the window avg price
+- Responsive tick intervals — 2h on wide screens, 4h on narrow (phone portrait)
 - Forecast warning banner when `price_source` is `"forecast"`
 - Staleness warning when plan is more than a day old
 - Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")
@@ -194,32 +204,6 @@ Features:
 
 To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose `main` and `/ (root)`. The site will be live at `https://<username>.github.io/<repo>/`.
 
----
-
-## Push notifications (ntfy)
-
-ntfy notifications are sent only when something needs attention — successful deliveries with real prices are silent. A notification fires when:
-
-- Any delivery to a charger fails
-- Prices were sourced from the forecast fallback (both ENTSO-E and Sähkötin were unavailable)
-- A profile was skipped because prices weren't yet available for its window
-
-The notification title indicates the reason (`⚠ Delivery failed`, `⚠ Forecast prices used`, etc.). The body includes the plan summary and delivery status per charger.
-
-Example notification when a delivery fails:
-
-```
-Title: ⚠ Delivery failed — 2026-03-21
-
-topup 2h @ 0.62 c€/kWh ↓64%
-03:30–05:30
-  ✓ CHARGER-001
-  ✗ CHARGER-002
-
-overnight 6h @ 1.93 c€/kWh ↑9%
-22:00–06:00
-  ✓ CHARGER-001
-```
 
 ---
 
@@ -249,7 +233,6 @@ Settings → Secrets and variables → Actions → New repository secret
 | Secret | Value |
 |---|---|
 | `ENTSOE_API_KEY` | Your ENTSO-E security token |
-| `NTFY_TOPIC` | Your ntfy topic name — only needed if `ntfy.enabled: true` |
 | `CHARGER_EMAIL` | Charge Amps login email |
 | `CHARGER_PASSWORD` | Charge Amps login password |
 | `CHARGER_ID_1` | First charger ID |
@@ -289,7 +272,8 @@ One `plan-{name}.json` file is written per profile:
     "avg_cents_kwh": 3.14
   },
   "required_minutes": 360,
-  "total_minutes": 360,
+  "retained_hours": 0.5,
+  "total_minutes": 390,
   "avg_price_cents_kwh": 0.91,
   "avg_optimal_price_cents_kwh": 0.91,
   "preferred_window_start": "22:00",
@@ -297,34 +281,19 @@ One `plan-{name}.json` file is written per profile:
   "windows": [
     {
       "start": "00:00",
-      "end": "06:00",
-      "duration_minutes": 360,
+      "end": "06:30",
+      "duration_minutes": 390,
       "avg_price_cents_kwh": 0.91
     }
   ],
   "window_starts_utc": ["2026-03-14T22:00:00+00:00"],
-  "window_ends_utc":   ["2026-03-15T04:00:00+00:00"],
+  "window_ends_utc":   ["2026-03-15T04:30:00+00:00"],
   "price_slots": [
     { "start_utc": "2026-03-14T20:00:00+00:00", "price_cents_kwh": 0.82, "charging": false, "optimal": false },
     { "start_utc": "2026-03-14T22:00:00+00:00", "price_cents_kwh": 0.91, "charging": true, "optimal": true },
     ...
   ],
-  "ocpp_charging_profile": {
-    "chargingProfileId": 1,
-    "stackLevel": 0,
-    "chargingProfilePurpose": "TxDefaultProfile",
-    "chargingProfileKind": "Absolute",
-    "validFrom": "2026-03-14T22:00:00+00:00",
-    "validTo":   "2026-03-15T04:00:00+00:00",
-    "chargingSchedule": {
-      "startSchedule":    "2026-03-14T22:00:00+00:00",
-      "duration":         21600,
-      "chargingRateUnit": "W",
-      "chargingSchedulePeriod": [
-        { "startPeriod": 0, "limit": 11000.0 }
-      ]
-    }
-  }
+  "ocpp_charging_profile": { ... }
 }
 ```
 
@@ -333,6 +302,8 @@ One `plan-{name}.json` file is written per profile:
 `window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems.
 
 `price_slots` contains all available price slots from the previous evening onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `continuous_only` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. `price_stats` (min/avg/max) reflects the full range of slots available to the scheduler at run time — the basis for the "vs market" percentage shown on the dashboard.
+
+`retained_hours` is the number of future charging hours carried forward from the previous plan. When non-zero, `total_minutes` will exceed `required_minutes` by the equivalent amount.
 
 Slots with `"forecasted": true` are display-only — they extend the histogram beyond the last real price slot. They are never used for slot selection or optimal calculation.
 
