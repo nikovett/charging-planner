@@ -1414,7 +1414,8 @@ class PlanParams:
     target_date:            date
     area:                   str
     price_source:           str
-    all_prices:             list[Slot]
+    display_prices:         list[Slot]      # all real slots incl. historical — for price_slots output only
+    future_prices:          list[Slot]      # real slots from now onwards — for stats, optimal, scheduler
     selected:               list[Slot]
     windows:                list
     required_minutes:       int
@@ -1450,11 +1451,9 @@ def build_plan(p: PlanParams) -> dict:
       ]
     }
     """
-    # Use future-only prices for stats so min/avg/max reflect the actual
+    # Use future_prices for stats so min/avg/max reflect the actual
     # opportunity set available to the scheduler, not historical slots.
-    now_utc = datetime.now(tz=timezone.utc)
-    future_prices = [s for s in p.all_prices if s.start >= now_utc]
-    stat_source = future_prices or p.all_prices or p.selected
+    stat_source = p.future_prices or p.display_prices or p.selected
     all_prices_eur = [s.price_eur_kwh for s in stat_source]
     if all_prices_eur:
         price_stats = {
@@ -1489,12 +1488,9 @@ def build_plan(p: PlanParams) -> dict:
 
     # Compute optimal slots: cheapest possible ignoring window constraints only.
     # Respects continuous_only and min_slot_minutes so comparison is fair.
-    # Uses all real future prices from now onwards — no window constraint, no
-    # forecasted slots (historical slots included for histogram are excluded).
-    now_utc = datetime.now(tz=timezone.utc)
-    optimal_prices = [s for s in p.all_prices if s.start >= now_utc]
+    # Uses future_prices — no window constraint, no historical or forecast slots.
     optimal_selected = select_charging_windows(
-        optimal_prices or p.all_prices,
+        p.future_prices or p.display_prices,
         required_minutes=p.required_minutes,
         continuous_only=p.continuous_only,
         max_price=p.max_price_eur,
@@ -1511,12 +1507,12 @@ def build_plan(p: PlanParams) -> dict:
             "charging":          s.start in selected_starts,
             "optimal":           s.start in optimal_starts,
         }
-        for s in sorted(p.all_prices, key=lambda x: x.start)
+        for s in sorted(p.display_prices, key=lambda x: x.start)
     ]
 
     # Append display-only forecast slots beyond the real price data
     if p.forecast_slots:
-        real_ends = {s.start for s in p.all_prices}
+        real_ends = {s.start for s in p.display_prices}
         for s in sorted(p.forecast_slots, key=lambda x: x.start):
             if s.start not in real_ends:
                 price_slots.append({
@@ -2075,11 +2071,15 @@ def _plan_one_profile(
     selected = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str)
     windows = merge_continuous_slots(selected)
 
+    now_utc_plan = datetime.now(tz=timezone.utc)
+    future_prices = [s for s in display_prices if s.start >= now_utc_plan]
+
     plan = build_plan(PlanParams(
         target_date=plan_date,
         area=cfg.area,
         price_source=price_source,
-        all_prices=display_prices,
+        display_prices=display_prices,
+        future_prices=future_prices,
         selected=selected,
         windows=windows,
         required_minutes=cfg.required_minutes,
@@ -2094,7 +2094,7 @@ def _plan_one_profile(
     ))
     plan["profile"] = cfg.name
 
-    print_plan_summary(plan, display_prices)
+    print_plan_summary(plan, future_prices)
     output_path = os.path.join(output_dir, f"plan-{cfg.name}.json")
     save_plan(plan, output_path)
     print(f"  Plan saved to: {output_path}\n")
