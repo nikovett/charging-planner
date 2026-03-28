@@ -39,8 +39,6 @@ jobs:
           # Charger IDs — shared across all handlers; add more as needed
           CHARGER_ID_1:     ${{ secrets.CHARGER_ID_1 }}
           CHARGER_ID_2:     ${{ secrets.CHARGER_ID_2 }}
-          # OCPP endpoint URL (used by deliver_ocpp.py)
-          OCPP_ENDPOINT_URL: ${{ secrets.OCPP_ENDPOINT_URL }}
         run: python delivery/deliver.py plan-*.json --config config.yaml
 
       - name: Publish plans to data/ for dashboard
