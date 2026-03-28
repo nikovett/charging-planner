@@ -6,21 +6,21 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 ## What makes this different
 
-Most EV charging schedulers pick a fixed overnight window and call it done. This one treats price optimization as a real scheduling problem.
+**Build once, deliver once, charge unsupervised.** Day-ahead prices are published every afternoon for the following day — that's enough information to plan the entire next charging cycle in one go. The result is a charging profile delivered directly to the charger. No further monitoring, no on/off toggling, no always-on process needed.
 
 **Zero hardware required.** Runs as a GitHub Actions cron job — no server, no hub, no Raspberry Pi. Day-ahead prices publish on a predictable schedule, making this a natural fit for a cloud cron. Local cron works too if preferred.
 
-**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight blocks; a 22 kW charger benefits from hunting the cheapest short windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file, configured per day of the week.
+**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file, configured per day of the week.
 
 **Globally optimal scheduling.** Continuous mode finds the cheapest unbroken block ending at departure time. Split mode uses dynamic programming — not a greedy approximation. The result is often non-obvious: three 30-minute windows at 01:00, 03:30 and 05:15 can be significantly cheaper than one 90-minute block at the same total cost.
 
-**Realistic charger behaviour built in.** Independent minimum block length and minimum gap between blocks prevent short on/off cycling — the planner won't schedule 15 minutes on, 15 minutes off, on again. Long blocks don't force equally long gaps. Both enforced at selection time, not patched on afterwards.
+**Realistic charger behaviour built in.** Independent minimum charging length and minimum gap between charging blocks prevent short on/off cycling — the planner won't schedule 15 minutes on, 15 minutes off, on again.
 
-**Previously committed charging is never lost.** Each run reads the previous plan and carries forward any future charging already committed to the charger. If Saturday's plan included a cheap slot at 23:30, Sunday's run keeps it and schedules the new requirement on top — unless it finds something even cheaper for that time.
+**Previously committed charging is never lost.** Each run reads the previous plan and carries forward any future charging already committed to the charger.
 
-**Three-level price source fallback.** ENTSO-E → Sähkötin → nordpool-predict-fi forecast. If ENTSO-E is under maintenance at 14:30, the plan still builds and delivers on time using real Nord Pool prices from Sähkötin. The dashboard warns when the plan is based on forecast rather than confirmed prices.
+**Three-level price source fallback for Finland.** ENTSO-E → Sähkötin → nordpool-predict-fi forecast. If ENTSO-E is under maintenance at 14:30, the plan still builds and delivers on time using real Nord Pool prices from Sähkötin. The dashboard warns when the plan is based on forecast rather than confirmed prices.
 
-**Modular charger delivery.** Each charger type is a small handler script with a single deliver function. Charge Amps and OCPP are included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
+**Modular charger delivery.** Each charger type is a small handler script with a single deliver function. A Charge Amps handler is included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
 
 ```
   ══════════════════════════════════════════════════════════════════
@@ -175,9 +175,9 @@ When ENTSO-E is unavailable or returns incomplete data, the planner automaticall
 
 The ENTSO-E fallback triggers in two cases: network/HTTP errors, and when the returned prices don't extend into tomorrow (e.g. during scheduled maintenance where ENTSO-E returns a valid but stale response with only today's data). In either case the planner falls through to Sähkötin automatically.
 
-Both fallbacks are only available for area `FI`. For other areas, the planner exits gracefully with an ntfy notification.
+Both fallbacks are only available for area `FI`. For other areas, the script exits with a non-zero code so the GHA run is marked as failed.
 
-If all three sources fail, an ntfy notification is sent and the script exits with a non-zero code so the GHA run is marked as failed.
+If all three sources fail, the script exits with a non-zero code so the GHA run is marked as failed.
 
 ## Histogram display augmentation
 
@@ -323,7 +323,7 @@ For a split plan with two windows separated by a gap, the schedule periods alter
 ]
 ```
 
-The profile is `TxDefaultProfile` (`Absolute` kind), meaning it applies automatically to any transaction started on the EVSE without needing a transaction ID in advance. OCPP 2.0.1 and 2.1 use `id` instead of `chargingProfileId` — pass `ocpp_version` in the delivery config to get the correct field names.
+The profile is `TxDefaultProfile` (`Absolute` kind), meaning it applies automatically to any transaction started on the EVSE without needing a transaction ID in advance. OCPP 2.0.1 and 2.1 use `id` instead of `chargingProfileId` — adjust the field name when consuming the profile in your own delivery integration.
 
 ## Future work
 
