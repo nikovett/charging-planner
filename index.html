@@ -426,7 +426,9 @@ function renderTimeline(plan, profileName, nowPrice) {
   // Ticks
   var tickHTML = "";
   var tickStart = Math.ceil(rangeStart/60)*60;
-  for (var tm = tickStart; tm <= rangeEnd; tm += 120) {
+  // Use 4h ticks on narrow screens (<520px), 2h on wider screens
+  var tickInterval = window.innerWidth < 520 ? 240 : 120;
+  for (var tm = tickStart; tm <= rangeEnd; tm += tickInterval) {
     var tpct = ((tm-rangeStart)/totalMins*100).toFixed(2);
     var hh   = Math.floor(((tm%(24*60))+24*60)%(24*60)/60);
     tickHTML += '<span class="tick" style="left:' + tpct + '%">' + String(hh).padStart(2,"0") + ":00</span>";
