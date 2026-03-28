@@ -278,3 +278,18 @@ ntfy:
 | `test_deliver_chargeamps.py` | Charge Amps tests |
 | `README.md` | Project documentation |
 | `CONTEXT.md` | This file |
+---
+
+## Theme candidates
+
+Seven color pairs considered as alternative themes for the dashboard. Each pair is (light mode accent / dark mode accent). The current theme uses warm cream + teal.
+
+| # | Name | Light bg | Accent (light) | Dark bg | Accent (dark) |
+|---|---|---|---|---|---|
+| 1 | Cherry blossom / Deep twilight | `#F7F4EF` | `#1A1265` | `#1A1265` | `#F9A8BB` |
+| 2 | Celadon / Chocolate plum | `#F0F7F0` | `#553832` | `#553832` | `#A8D3A8` |
+| 3 | Shadow grey / Sandy clay | `#f5f0eb` | `#272727` | `#272727` | `#D4AA7D` |
+| 4 | Electric rose / Chartreuse | `#f5f0eb` | `#FE00AE` | `#272727` | `#C1FE1A` |
+| 5 | Icy blue / Gunmetal | `#EEF5FF` | `#35393C` | `#35393C` | `#A4D8FF` |
+| 6 | Raspberry red / Deep space blue | `#FFF0F5` | `#EE005A` | `#012641` | `#EE005A` |
+| 7 | Lime cream / Vintage grape | `#DDEA78` | `#433455` | `#433455` | `#DDEA78` |
