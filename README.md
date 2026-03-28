@@ -155,11 +155,13 @@ See [`delivery/README.md`](delivery/README.md) for full handler configuration re
 
 ## Fallback price sources
 
-When ENTSO-E is unavailable (scheduled maintenance, 503/404 errors), the planner automatically tries two fallback sources before giving up:
+When ENTSO-E is unavailable or returns incomplete data, the planner automatically tries two fallback sources before giving up:
 
 1. **Sähkötin** (`sahkotin.fi/api`) — actual realized Nord Pool 15-min prices, same data range as ENTSO-E, Finland only. No API key needed. Used transparently — `price_source: "Sähkötin"` in the plan JSON, no dashboard warning.
 
 2. **nordpool-predict-fi** (`raw.githubusercontent.com/vividfog/nordpool-predict-fi`) — ML forecast blended with realized Sähkötin prices. Hourly data expanded to 15-min slots. By ~14:00–16:00 Helsinki time the forecast transitions to actual market prices, making it nearly as reliable as ENTSO-E once Nord Pool has published. Plans from this source are tagged `price_source: "forecast"` and display a warning banner on the dashboard.
+
+The ENTSO-E fallback triggers in two cases: network/HTTP errors, and when the returned prices don't extend into tomorrow (e.g. during scheduled maintenance where ENTSO-E returns a valid but stale response with only today's data). In either case the planner falls through to Sähkötin automatically.
 
 Both fallbacks are only available for area `FI`. For other areas, the planner exits gracefully with an ntfy notification.
 
@@ -167,20 +169,23 @@ If all three sources fail, an ntfy notification is sent and the script exits wit
 
 ## Histogram display augmentation
 
-ENTSO-E publishes day-ahead prices at approximately 12:00 UTC. If the planner is run before publication, ENTSO-E only has today's prices. The histogram would look truncated on the right side since the 24h view extends past midnight.
+Both ENTSO-E and Sähkötin return price slots from the previous evening onwards, including historical prices. This gives the dashboard histogram enough data to the left of "now" for context.
 
-After a successful real-price fetch, the planner checks whether the last available slot is before `(today+1) 12:00 UTC`. If so, it fetches up to 12 hours of forecast data from nordpool-predict-fi to fill the visible histogram range. These slots are **display-only** — they are never used for slot selection or optimal calculation. They appear as grey diagonal-striped bars in both histograms with a "forecasted" legend entry, making it clear they are estimates rather than confirmed prices.
+After every successful real-price fetch, the planner always fetches up to 24 hours of forecast data from nordpool-predict-fi beyond the last real price slot. These slots are **display-only** — they are never used for slot selection or optimal calculation. They appear as grey diagonal-striped bars in the histogram with a "forecast" legend entry, making it clear they are estimates rather than confirmed prices. This ensures the right side of the histogram is always filled, even when charging slots fall late the following day.
 
 ## Dashboard
 
 A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan JSONs from `data/` and `config.yaml` directly from the repository — no token or backend needed.
 
 Features:
+
 - One flip card per profile — front shows the plan, back shows profile configuration, optimal slots histogram, and weekly schedule
-- Price histogram with all available slots positioned by actual timestamp (so "now" line, tick labels, and bars always align). Charging windows highlighted in teal, min price labelled in teal, max in amber — labels rotated inside the bar, visible only when bars are wide enough
-- Three optimal slot bar states: solid teal (charging + optimal), diagonal stripe (charging but not optimal), teal outline (optimal but not charged/missed)
-- Stats row: scheduled hours, avg price, vs market %, vs optimal % (overlap between scheduled and globally cheapest slots)
-- "Outside visible range" amber pill when optimal slots fall outside the 24h histogram window
+- Price histogram with all available slots positioned by actual timestamp. The histogram window uses two modes depending on how far away the charging slots are:
+  - **When charging is more than 11 hours away**: the window starts 1 hour before now and extends to cover all charging slots plus 1 hour, so "now" is always visible and the upcoming charging plan is visible to the right
+  - **When charging is within 11 hours**: the window centers on the charging slot midpoint ±12h, so the charging slots are prominent in the middle and now is naturally visible nearby
+- Four bar states: solid teal (scheduled + optimal), teal diagonal stripe (scheduled but not optimal), teal outline (optimal but not scheduled/missed), grey diagonal stripe (forecast display-only). Legend items are conditional — each only appears when that bar type is visible
+- "vs market" percentage shows how much cheaper the scheduled avg price is compared to the average across all slots available to the scheduler at run time
+- Hover/touch any bar to see its price and time in the hero area; hovering a charging bar shows the window avg price
 - Forecast warning banner when `price_source` is `"forecast"`
 - Staleness warning when plan is more than a day old
 - Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")
@@ -189,7 +194,6 @@ Features:
 To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose `main` and `/ (root)`. The site will be live at `https://<username>.github.io/<repo>/`.
 
 ---
-
 
 ## Push notifications (ntfy)
 
@@ -327,9 +331,9 @@ One `plan-{name}.json` file is written per profile:
 
 `window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems.
 
-`price_slots` contains all available price slots from the script run onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `continuous_only` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. Used by the dashboard to show the "vs optimal" comparison and render the optimal slots histogram on the back card.
+`price_slots` contains all available price slots from the previous evening onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `continuous_only` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. `price_stats` (min/avg/max) reflects the full range of slots available to the scheduler at run time — the basis for the "vs market" percentage shown on the dashboard.
 
-Slots with `"forecasted": true` are display-only — they extend the histogram beyond the last real price when Nord Pool hasn't published tomorrow's prices yet. They are never used for slot selection or optimal calculation.
+Slots with `"forecasted": true` are display-only — they extend the histogram beyond the last real price slot. They are never used for slot selection or optimal calculation.
 
 ### OCPP smart charging
 
@@ -372,4 +376,3 @@ The buffer covers charge rate tapering in the upper SoC range, cold-climate dera
 `required_hours` will remain as a config fallback for when the car is not plugged in at plan-build time or SoC data is unavailable.
 
 ---
-
