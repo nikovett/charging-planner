@@ -14,11 +14,13 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Globally optimal scheduling.** Continuous mode finds the cheapest unbroken block ending at departure time. Split mode uses dynamic programming — not a greedy approximation. The result is often non-obvious: three 30-minute windows at 01:00, 03:30 and 05:15 can be significantly cheaper than one 90-minute block at the same total cost.
 
-**Realistic charger behaviour built in.** Independent minimum charging length and minimum gap between charging blocks prevent short on/off cycling — the planner won't schedule 15 minutes on, 15 minutes off, on again.
+**Realistic charger behaviour built in.** Independent minimum charging length and minimum gap between charging blocks prevent short on/off cycling — by default the planner won't schedule 15 minutes on, 15 minutes off, on again. The minimum block length and gap are both configurable; the gap can be set to zero if no pause between blocks is needed.
 
 **Previously committed charging is never lost.** Each run reads the previous plan and carries forward any future charging already committed to the charger.
 
 **Three-level price source fallback for Finland.** ENTSO-E → Sähkötin → nordpool-predict-fi forecast. If ENTSO-E is under maintenance at 14:30, the plan still builds and delivers on time using real Nord Pool prices from Sähkötin. The dashboard warns when the plan is based on forecast rather than confirmed prices.
+
+**Works with any car.** The planner schedules the charger, not the car. No car integration, no brand-specific API, no pairing required. Swap cars and nothing changes — the charger infrastructure stays the same and the planner keeps working exactly as before.
 
 **Modular charger delivery.** Each charger type is a small handler script with a single deliver function. A Charge Amps handler is included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
 
@@ -123,7 +125,7 @@ charging:
 | `charging.name` | `"default"` | Profile name — used in the output filename (`plan-{name}.json`) |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
 | `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
-| `charging.min_slot_minutes` | `30` | Minimum continuous block length. The charger should not run for less than this duration. Must be a multiple of 15 |
+| `charging.min_slot_minutes` | `30` | Minimum continuous block length. The charger should not run for less than this duration. Must be 15 minutes or more and a multiple of 15 (the price slot resolution) |
 | `charging.min_gap_minutes` | `15` | Minimum gap between charging blocks. Prevents the charger toggling off and straight back on. Must be a multiple of 15. `0` = no gap constraint. Can be set independently of `min_slot_minutes` — e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or `any`. `any` start = use all slots from script run time. `any` + `HH:MM` end = charge anytime until departure time. Both `any` = no constraint. |

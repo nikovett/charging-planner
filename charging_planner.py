@@ -240,8 +240,8 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
         errors.append(f"charging.required_hours must be a positive number, got: {req_hours!r}.")
 
     min_slot = ch.get("min_slot_minutes", 30)
-    if not isinstance(min_slot, (int, float)) or min_slot <= 0:
-        errors.append(f"charging.min_slot_minutes must be positive, got: {min_slot!r}.")
+    if not isinstance(min_slot, (int, float)) or min_slot < 15:
+        errors.append(f"charging.min_slot_minutes must be 15 minutes or more (the price slot resolution), got: {min_slot!r}.")
     elif int(min_slot) % 15 != 0:
         errors.append(f"charging.min_slot_minutes={min_slot} must be divisible by 15.")
     min_gap = ch.get("min_gap_minutes", 30)
