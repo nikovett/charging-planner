@@ -28,6 +28,16 @@ DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast disp
 Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring, gap merge removal, algorithm correctness fixes.
 
 
+### Session 9 — 2026-03-29
+
+**Per-day required_hours in schedule entries**: `required_hours` can now be overridden per day within a `schedule` entry, independently of the window override. `_resolve_schedule_window` updated to return a third value — `required_minutes_override` (None when not specified). `_plan_one_profile` uses `base_required = sched_required_minutes or cfg.required_minutes` before adding retained minutes. Validation added for `required_hours` in schedule entries. Tests updated to unpack three values from `_resolve_schedule_window`.
+
+**Back card updated**: "required" pill removed from config pills. Weekly schedule grid now has two rows — "window" and "required". Required hours row shows per-day override when present, falls back to top-level value otherwise. Config grid column count reduced from 5 to 4 (desktop) and 3 to 2 (mobile) to remove the empty gray cell left by removing the required pill.
+
+**OCPP delivery handler removed**: `deliver_ocpp.py` removed. OCPP requires direct WebSocket access — incompatible with GHA-first architecture. `websockets` dependency removed. OCPP ChargingProfile remains in the plan JSON output. `config.yaml` OCPP example block removed.
+
+**README**: "What makes this different" now leads with the schedule-once architecture as the opening statement. Per-day required_hours documented. Config example updated to show required_hours in schedule entries.
+
 ### Session 8 — 2026-03-28 (afternoon)
 
 **min_gap_minutes**: new config parameter separating gap constraint from block length. `min_slot_minutes` now only controls minimum block length; `min_gap_minutes` (default 15, divisible by 15, can be 0) controls minimum gap between blocks independently.

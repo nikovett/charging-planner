@@ -10,7 +10,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Zero hardware required.** Runs as a GitHub Actions cron job — no server, no hub, no Raspberry Pi. Day-ahead prices publish on a predictable schedule, making this a natural fit for a cloud cron. Local cron works too if preferred.
 
-**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file. The preferred charging window can be configured per day of the week within each profile.
+**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file. Both the preferred charging window and required hours can be configured per day of the week within each profile.
 
 **Globally optimal scheduling.** Continuous mode finds the cheapest unbroken block ending at departure time. Split mode uses dynamic programming — not a greedy approximation. The result is often non-obvious: three 30-minute windows at 01:00, 03:30 and 05:15 can be significantly cheaper than one 90-minute block at the same total cost.
 
@@ -146,6 +146,8 @@ A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — i
 Days not listed in `schedule` use the top-level preferred window.
 
 **Slot selection** — for `continuous_only: true`, the planner evaluates all possible contiguous blocks of `required_hours` length and picks the cheapest. For `continuous_only: false`, it uses dynamic programming to find the globally cheapest combination of blocks that together cover exactly `required_hours`, where every block is ≥ `min_slot_minutes` and every gap between blocks is ≥ `min_gap_minutes`. Adjacent selected blocks are merged into a single charging window automatically.
+
+**Per-day required hours** — `required_hours` can be overridden per day within a `schedule` entry, independently of the window override. This allows a single profile to act as a true per-car profile: 1.5h on weekdays for a short commute, 4.5h on weekends for a longer charge. The top-level `required_hours` is the fallback when no schedule entry specifies it.
 
 **Preferred window and spillover** — slots within the configured preferred window are the primary candidates. If the window doesn't contain enough slots to satisfy `required_hours` (too few slots, or all above `max_price_cents_kwh`), the planner adds the cheapest available slots from outside the window to cover the deficit — but never past `preferred_window_end`. When no window is configured (`any`), all available slots are candidates from the start.
 
