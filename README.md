@@ -250,7 +250,7 @@ Settings → Secrets and variables → Actions → New repository secret
 
 Never commit secrets to the repository. All sensitive values are injected at runtime as environment variables — `config.yaml` keeps only empty placeholders.
 
-The workflow runs daily at 12:30 UTC — 14:30 Helsinki time in winter (EET, UTC+2) and 15:30 in summer (EEST, UTC+3). A single cron covers both DST states because 12:30 UTC always lands after ENTSO-E's ~12:00 UTC publication time.
+The workflow runs daily at 10:30 UTC, targeting ~14:30 Helsinki time in summer (EEST, UTC+3) accounting for typical GHA scheduling delay of ~1 hour. ENTSO-E publishes prices at ~12:00 UTC so this always lands after publication.
 
 Day-ahead prices are published at approximately 12:00 UTC each day. If ENTSO-E is unavailable or prices aren't published yet, the planner automatically tries Sähkötin, then the nordpool-predict-fi forecast. If all sources fail, a push notification is sent and the run exits with a non-zero code. Once prices are available the next scheduled run will succeed.
 
