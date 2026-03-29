@@ -196,7 +196,7 @@ Features:
   - **When charging is more than 11 hours away**: the window starts 1 hour before now and extends to cover all charging slots plus 1 hour, so "now" is always visible and the upcoming charging plan is visible to the right
   - **When charging is within 11 hours**: the window centers on the charging slot midpoint ±12h, so the charging slots are prominent and now is naturally visible nearby
 - Four bar states: solid teal (scheduled + optimal), teal diagonal stripe (scheduled but not optimal), teal outline (optimal but not scheduled/missed), grey diagonal stripe (forecast display-only). Legend items are conditional — each only appears when that bar type is visible
-- Hero shows `scheduled 2h + 30m retained` when hours from the previous plan are carried forward
+- Hero shows `scheduled 2h + 30m carried over` when hours from the previous plan are carried forward
 - "vs market" percentage shows how much cheaper the scheduled avg price is compared to the average across all slots available to the scheduler at run time
 - Hover/touch any bar to see its price and time in the hero area; hovering a charging bar shows the window avg price
 - Responsive tick intervals — 2h on wide screens, 4h on narrow (phone portrait)
