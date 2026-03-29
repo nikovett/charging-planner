@@ -1508,9 +1508,11 @@ def build_plan(p: PlanParams) -> dict:
     # Compute optimal slots: cheapest possible ignoring window constraints only.
     # Respects continuous_only and min_slot_minutes so comparison is fair.
     # Uses future_prices — no window constraint, no historical or forecast slots.
+    # Includes retained_minutes so optimal covers the same total as scheduled.
+    optimal_required = p.required_minutes + p.retained_minutes
     optimal_selected = select_charging_windows(
         p.future_prices or p.display_prices,
-        required_minutes=p.required_minutes,
+        required_minutes=optimal_required,
         continuous_only=p.continuous_only,
         max_price=p.max_price_eur,
         min_slot_minutes=p.min_slot_minutes,
