@@ -16,7 +16,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file. Both the preferred charging window and required hours can be configured per day of the week within each profile.
 
-**Globally optimal scheduling.** Continuous mode finds the cheapest unbroken block ending at departure time. Split mode uses dynamic programming — not a greedy approximation. The result is often non-obvious: three 30-minute windows at 01:00, 03:30 and 05:15 can be significantly cheaper than one 90-minute block at the same total cost.
+**Globally optimal scheduling.** Continuous mode finds the cheapest unbroken block ending at departure time. Split mode uses dynamic programming to evaluate every valid combination of blocks across 96 price slots per day — not a greedy approximation. The cheapest combination is rarely obvious to a human eye, and even harder to find manually as prices fluctuate every 15 minutes.
 
 **Realistic charger behaviour built in.** Independent minimum charging length and minimum gap between charging blocks prevent short on/off cycling — by default the planner won't schedule 15 minutes on, 15 minutes off, on again. The minimum block length and gap are both configurable; the gap can be set to zero if no pause between blocks is needed.
 
