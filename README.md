@@ -6,9 +6,13 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 ## What makes this different
 
-**Build once, deliver once, charge unsupervised.** Day-ahead prices are published every afternoon for the following day — that's enough information to plan the entire next charging cycle in one go. The result is a charging profile delivered directly to the charger. No further monitoring, no on/off toggling, no always-on process needed.
+**Build once, deliver once, charge unsupervised.** Day-ahead prices are published every afternoon for the following day — only information needed to plan the entire next charging cycle in one go. The result is a charging profile delivered directly to the charger. No further monitoring, no on/off toggling, no always-on process needed.
 
-**Zero hardware required.** Runs as a GitHub Actions cron job — no server, no hub, no Raspberry Pi. Day-ahead prices publish on a predictable schedule, making this a natural fit for a cloud cron. Local cron works too if preferred.
+**Zero extra hardware required.** Runs as a GitHub Actions cron job — no server, no hub, no Raspberry Pi. Day-ahead prices publish on a predictable schedule, making this a natural fit for a cloud cron. Local cron works too if preferred.
+
+**Works with any car.** The planner schedules the charger, not the car. No car integration, no brand-specific API, no pairing required. Swap cars and nothing changes — the charger infrastructure stays the same and the planner keeps working exactly as before.
+
+**Modular charger delivery.** Each charger type is a small handler script with a single deliver function. A Charge Amps handler is included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
 
 **Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file. Both the preferred charging window and required hours can be configured per day of the week within each profile.
 
@@ -20,9 +24,6 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Three-level price source fallback for Finland.** ENTSO-E → Sähkötin → nordpool-predict-fi forecast. If ENTSO-E is under maintenance at 14:30, the plan still builds and delivers on time using real Nord Pool prices from Sähkötin. The dashboard warns when the plan is based on forecast rather than confirmed prices.
 
-**Works with any car.** The planner schedules the charger, not the car. No car integration, no brand-specific API, no pairing required. Swap cars and nothing changes — the charger infrastructure stays the same and the planner keeps working exactly as before.
-
-**Modular charger delivery.** Each charger type is a small handler script with a single deliver function. A Charge Amps handler is included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
 
 ```
   ══════════════════════════════════════════════════════════════════
