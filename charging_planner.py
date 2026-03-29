@@ -286,6 +286,10 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
             e_start_any = entry.get("preferred_window_start") is None or str(entry.get("preferred_window_start", "")).lower() == "any"
             e_end_any   = entry.get("preferred_window_end")   is None or str(entry.get("preferred_window_end",   "")).lower() == "any"
             # Mixing any with HH:MM is allowed (see top-level comment above)
+            if "required_hours" in entry:
+                rh = entry["required_hours"]
+                if not isinstance(rh, (int, float)) or rh <= 0:
+                    errors.append(f"charging.schedule[{i}].required_hours must be a positive number, got: {rh!r}.")
 
     pw_s = _validate_hhmm(ch, "preferred_window_start", errors)
     pw_e = _validate_hhmm(ch, "preferred_window_end", errors)
@@ -1966,12 +1970,13 @@ def _select_slots(
 _DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
 
-def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, str]:
-    """Return (preferred_window_start, preferred_window_end) for target_date.
+def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, str, Optional[int]]:
+    """Return (preferred_window_start, preferred_window_end, required_minutes_override) for target_date.
 
     Checks cfg.schedule entries in order, returning the first entry whose
     days list includes the weekday of target_date. Falls back to the
     top-level preferred_window_start / preferred_window_end if no entry matches.
+    required_minutes_override is None when no schedule entry specifies required_hours.
     """
     day_name = _DAY_NAMES[target_date.weekday()]
     for entry in cfg.schedule:
@@ -1980,13 +1985,19 @@ def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, s
             e = entry.get("preferred_window_end")
             s_str = "any" if (s is None or str(s).lower() == "any") else str(s)
             e_str = "any" if (e is None or str(e).lower() == "any") else str(e)
-            log.info("Profile '%s': using schedule entry for %s (%s–%s)", cfg.name, day_name, s_str, e_str)
-            return s_str, e_str
+            req_override = None
+            if "required_hours" in entry:
+                req_override = int(float(entry["required_hours"]) * 60)
+                log.info("Profile '%s': using schedule entry for %s (%s–%s, %d min)",
+                         cfg.name, day_name, s_str, e_str, req_override)
+            else:
+                log.info("Profile '%s': using schedule entry for %s (%s–%s)", cfg.name, day_name, s_str, e_str)
+            return s_str, e_str, req_override
     if cfg.preferred_window_any:
-        return "any", "any"
+        return "any", "any", None
     s_str = "any" if cfg.window_start_any else cfg.preferred_window_start
     e_str = "any" if cfg.window_end_any   else cfg.preferred_window_end
-    return s_str, e_str
+    return s_str, e_str, None
 
 
 # ---------------------------------------------------------------------------
@@ -2085,7 +2096,7 @@ def _plan_one_profile(
 
     if cfg.schedule or cfg.preferred_window_any or cfg.window_start_any or cfg.window_end_any:
         tomorrow = plan_date + timedelta(days=1)
-        win_start_str, win_end_str = _resolve_schedule_window(cfg, tomorrow)
+        win_start_str, win_end_str, sched_required_minutes = _resolve_schedule_window(cfg, tomorrow)
         s_any = str(win_start_str).lower() == "any"
         e_any = str(win_end_str).lower() == "any"
         if s_any or e_any:
@@ -2105,6 +2116,7 @@ def _plan_one_profile(
         plan_date = win_start_utc.astimezone(tz.zone).date()
     else:
         win_start_str, win_end_str = cfg.preferred_window_start, cfg.preferred_window_end
+        sched_required_minutes = None
 
     log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
 
@@ -2119,7 +2131,7 @@ def _plan_one_profile(
                            23, 0, tzinfo=timezone.utc) + timedelta(days=1)
     display_prices = [s for s in all_prices if s.start < horizon_utc]
 
-    earliest_useful  = win_start_utc - timedelta(minutes=cfg.required_minutes)
+    earliest_useful  = win_start_utc - timedelta(minutes=sched_required_minutes or cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
     if trimmed := len(all_prices) - len(candidate_prices):
         log.info("Trimmed %d unreachable slots (earliest useful: %s UTC)",
@@ -2127,7 +2139,8 @@ def _plan_one_profile(
 
     now_utc_plan  = datetime.now(tz=timezone.utc)
     retained_minutes = _load_retained_minutes(output_dir, cfg.name, now_utc_plan)
-    effective_required = cfg.required_minutes + retained_minutes
+    base_required = sched_required_minutes if sched_required_minutes is not None else cfg.required_minutes
+    effective_required = base_required + retained_minutes
 
     selected = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str,
                              required_minutes_override=effective_required)
@@ -2143,7 +2156,7 @@ def _plan_one_profile(
         future_prices=future_prices,
         selected=selected,
         windows=windows,
-        required_minutes=cfg.required_minutes,
+        required_minutes=base_required,
         retained_minutes=retained_minutes,
         tz=tz.zone,
         timezone_name=tz.name,

@@ -344,7 +344,7 @@ class TestResolveScheduleWindow(unittest.TestCase):
              "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
         ])
         # 2026-03-21 is a Saturday
-        start, end = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
         self.assertEqual(start, "00:00")
         self.assertEqual(end, "23:45")
 
@@ -354,13 +354,13 @@ class TestResolveScheduleWindow(unittest.TestCase):
              "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
         ])
         # 2026-03-16 is a Monday — no matching entry
-        start, end = _resolve_schedule_window(cfg, date(2026, 3, 16))
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 16))
         self.assertEqual(start, "22:00")
         self.assertEqual(end, "06:30")
 
     def test_empty_schedule_returns_defaults(self):
         cfg = self._make_cfg([])
-        start, end = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
         self.assertEqual(start, "22:00")
         self.assertEqual(end, "06:30")
 
@@ -371,7 +371,7 @@ class TestResolveScheduleWindow(unittest.TestCase):
             {"days": ["sunday"],
              "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
         ])
-        start, end = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
         self.assertEqual(start, "08:00")
 
     def test_any_window_returns_sentinel(self):
@@ -379,7 +379,7 @@ class TestResolveScheduleWindow(unittest.TestCase):
             {"days": ["saturday", "sunday"],
              "preferred_window_start": "any", "preferred_window_end": "any"},
         ])
-        start, end = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
         self.assertEqual(start, "any")
         self.assertEqual(end, "any")
 

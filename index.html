@@ -603,7 +603,6 @@ function renderBackFace(profileName) {
   var cfg = PROFILE_CONFIG[profileName] || {};
 
   var cfgFields = [
-    ["required", cfg.requiredHours !== undefined ? '<span class="badge on">' + cfg.requiredHours + 'h</span>' : '<span class="badge">\u2014</span>'],
     ["mode",     cfg.continuous !== undefined ? '<span class="badge on">' + (cfg.continuous ? "continuous" : "split") + '</span>' : '<span class="badge">\u2014</span>'],
     ["min slot", !cfg.continuous && cfg.minSlot ? '<span class="badge on">' + cfg.minSlot + ' min</span>' : '<span class="badge">\u2014</span>'],
     ["ceiling",  cfg.maxPrice != null ? '<span class="badge on">' + cfg.maxPrice.toFixed(2) + ' c\u20ac/kWh</span>' : '<span class="badge">none</span>'],
@@ -625,7 +624,7 @@ function renderBackFace(profileName) {
   var headerRow = '<div class="sched-cell head"></div>'
     + DAYS_S.map(function(d,i){ return '<div class="sched-cell head' + (i===todayIdx?' today':'') + '">' + d + '</div>'; }).join("");
 
-  var dataRow = '<div class="sched-cell head">' + profileName + '</div>'
+  var dataRow = '<div class="sched-cell head">window</div>'
     + DAYS_F.map(function(day) {
         var entry = null;
         for (var i=0; i<(cfg.schedule||[]).length; i++) {
@@ -638,9 +637,21 @@ function renderBackFace(profileName) {
         return '<div class="sched-cell">' + start + '<br>' + end + '</div>';
       }).join("");
 
+  // Required hours row — show per-day override if present, else top-level default
+  var reqRow = '<div class="sched-cell head">required</div>'
+    + DAYS_F.map(function(day) {
+        var entry = null;
+        for (var i=0; i<(cfg.schedule||[]).length; i++) {
+          if (cfg.schedule[i].days.indexOf(day) !== -1) { entry = cfg.schedule[i]; break; }
+        }
+        var rh = (entry && entry.requiredHours !== undefined) ? entry.requiredHours : cfg.requiredHours;
+        if (rh === undefined) return '<div class="sched-cell empty">\u2014</div>';
+        return '<div class="sched-cell any">' + rh + 'h</div>';
+      }).join("");
+
   var schedHTML = '<div class="sched-section">'
     + '<div class="sched-section-label">weekly schedule</div>'
-    + '<div class="schedule-grid">' + headerRow + dataRow + '</div>'
+    + '<div class="schedule-grid">' + headerRow + dataRow + reqRow + '</div>'
     + '</div>';
 
   return '<div class="flip-card-back-inner">'
@@ -715,6 +726,8 @@ function parseConfigYaml(yaml) {
         currentEntry.start = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g,"").split("#")[0].trim();
       else if (trimmed.indexOf("preferred_window_end:")===0)
         currentEntry.end = trimmed.split(":").slice(1).join(":").trim().replace(/['"]/g,"").split("#")[0].trim();
+      else if (trimmed.indexOf("required_hours:")===0)
+        currentEntry.requiredHours = parseFloat(trimmed.split(":")[1].trim());
     } else if (indent<=2 && trimmed && trimmed[0]!=="#" && currentProfile && inSchedule) {
       if (trimmed.indexOf("-")!==0 && trimmed.indexOf("schedule:")!==0) inSchedule=false;
     }

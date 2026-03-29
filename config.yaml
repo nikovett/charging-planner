@@ -16,15 +16,17 @@ charging:
     max_price_cents_kwh: null           # Price ceiling in c€/kWh — skip slots above this (null = no limit)
     preferred_window_start: "21:00"     # Quoted — would parse as 22 minutes without quotes
     preferred_window_end: "06:30"
-    schedule:                           # Optional: day-specific window overrides
+    schedule:                           # Optional: day-specific overrides for window and/or required hours
                                         # Each entry describes the window for that target day.
                                         # Overnight windows (21:00–06:30) start the evening before.
       - days: [monday, tuesday, wednesday, thursday, friday]
         preferred_window_start: "21:00"
         preferred_window_end: "06:30"
+        required_hours: 1.5             # Optional: override required_hours for these days
       - days: [saturday, sunday]
         preferred_window_start: any     # any + any = no window constraint — pick cheapest slots from all available prices
         preferred_window_end: any
+        required_hours: 4.5             # Optional: longer charge on weekends
     deliveries:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
         enabled: true 

@@ -10,7 +10,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Zero hardware required.** Runs as a GitHub Actions cron job — no server, no hub, no Raspberry Pi. Day-ahead prices publish on a predictable schedule, making this a natural fit for a cloud cron. Local cron works too if preferred.
 
-**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file, configured per day of the week.
+**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file. The preferred charging window can be configured per day of the week within each profile.
 
 **Globally optimal scheduling.** Continuous mode finds the cheapest unbroken block ending at departure time. Split mode uses dynamic programming — not a greedy approximation. The result is often non-obvious: three 30-minute windows at 01:00, 03:30 and 05:15 can be significantly cheaper than one 90-minute block at the same total cost.
 
@@ -85,9 +85,11 @@ charging:
       - days: [monday, tuesday, wednesday, thursday, friday]
         preferred_window_start: "22:00"
         preferred_window_end: "06:30"
+        required_hours: 1.5
       - days: [saturday, sunday]
         preferred_window_start: any     # any start + any end = no window constraint
         preferred_window_end: any
+        required_hours: 4.5
     deliveries:
       - handler: chargeamps
         charge_point_id: CHARGER_ID_1
@@ -126,7 +128,7 @@ charging:
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling |
 | `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or `any`. `any` start = use all slots from script run time. `any` + `HH:MM` end = charge anytime until departure time. Both `any` = no constraint. |
 | `charging.preferred_window_end` | `any` | End of preferred charging window (`HH:MM`), or `any`. If earlier than `preferred_window_start` the window wraps midnight. Use `23:45` for end of day. `HH:MM` start + `any` end = charge from that time until last available price. Both `any` = no constraint. |
-| `charging.schedule` | `[]` | Optional list of day-specific window overrides. Each entry has a `days` list (`monday`–`sunday`) and `preferred_window_start` / `preferred_window_end` (both `any` or omitted = no window constraint, picks cheapest from all available prices). Each entry names the target day — the day being planned. The script always reads tomorrow's schedule entry. The first matching entry for the target day is used; falls back to top-level window if none match |
+| `charging.schedule` | `[]` | Optional list of day-specific overrides. Each entry has a `days` list (`monday`–`sunday`) and optionally `preferred_window_start`, `preferred_window_end`, and `required_hours`. Any of these can be omitted to fall back to the top-level value. The first matching entry for the target day is used. |
 
 ### Preferred window behaviour
 
