@@ -28,6 +28,20 @@ DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast disp
 Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring, gap merge removal, algorithm correctness fixes.
 
 
+### Session 10 — 2026-03-29 (evening)
+
+**retained_hours compounding fix**: several iterations to arrive at the correct formula for `_load_retained_minutes`. The invariant: total_minutes in the new plan should never exceed total_minutes from the previous plan when all slots are still future (i.e. script runs multiple times before charging starts).
+
+Final formula:
+- If previous JSON has `retained_hours`: `min(future_minutes, int(retained_hours * 60))` — caps carry-over at the previously retained amount, never grows it
+- If previous JSON lacks `retained_hours` (old format): `min(future_minutes, required_minutes)` — safe fallback, future_minutes is typically 0 for completed plans
+
+`retained_hours` is always written to new JSONs (0.0 when nothing was retained), so the fallback branch is only relevant for old JSONs already in `data/` until the next successful run replaces them.
+
+**optimal calculation fix**: `optimal_required = p.required_minutes + p.retained_minutes` so the optimal set covers the same total as scheduled. Previously optimal used only `required_minutes`, causing retained slots to appear as suboptimal bars.
+
+**Verified in production**: retained hours working correctly across multiple manual runs — no compounding, stable total_minutes across re-runs when charging hasn't started yet.
+
 ### Session 9 — 2026-03-29
 
 **Per-day required_hours in schedule entries**: `required_hours` can now be overridden per day within a `schedule` entry, independently of the window override. `_resolve_schedule_window` updated to return a third value — `required_minutes_override` (None when not specified). `_plan_one_profile` uses `base_required = sched_required_minutes or cfg.required_minutes` before adding retained minutes. Validation added for `required_hours` in schedule entries. Tests updated to unpack three values from `_resolve_schedule_window`.
