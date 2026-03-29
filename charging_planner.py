@@ -2024,15 +2024,19 @@ def _load_retained_minutes(output_dir: str, profile_name: str, now_utc: datetime
         try:
             with open(candidate) as f:
                 prev = _json.load(f)
-            minutes = sum(
+            future_minutes = sum(
                 s.get("duration_minutes", 15)
                 for s in prev.get("price_slots", [])
                 if s.get("charging") and not s.get("forecasted")
                 and datetime.fromisoformat(s["start_utc"]) > now_utc
             )
+            # Subtract previously retained hours to avoid compounding across runs
+            prev_retained = int(prev.get("retained_hours", 0) * 60)
+            minutes = max(0, future_minutes - prev_retained)
             if minutes:
-                log.info("Profile '%s': %d min of future charging retained from %s.",
-                         profile_name, minutes, candidate)
+                log.info("Profile '%s': %d min of future charging retained from %s "
+                         "(total future: %d min, prev retained: %d min).",
+                         profile_name, minutes, candidate, future_minutes, prev_retained)
             return minutes
         except Exception as e:
             log.warning("Could not load previous plan for '%s' from %s: %s",
