@@ -2032,13 +2032,19 @@ def _load_retained_minutes(output_dir: str, profile_name: str, now_utc: datetime
                 if s.get("charging") and not s.get("forecasted")
                 and datetime.fromisoformat(s["start_utc"]) > now_utc
             )
-            # Subtract previously retained hours to avoid compounding across runs
-            prev_retained = int(prev.get("retained_hours", 0) * 60)
-            minutes = max(0, future_minutes - prev_retained)
+            # Cap carry-over at the previously retained amount to prevent compounding
+            # when the script runs multiple times before charging starts.
+            # retained_hours is always present in new JSONs (0.0 when nothing was retained).
+            # For old JSONs without the field, fall back to required_minutes — safe since
+            # future_minutes will typically be 0 for completed plans.
+            if "retained_hours" in prev:
+                minutes = min(future_minutes, int(prev["retained_hours"] * 60))
+            else:
+                minutes = min(future_minutes, prev.get("required_minutes", 0))
             if minutes:
                 log.info("Profile '%s': %d min of future charging retained from %s "
-                         "(total future: %d min, prev retained: %d min).",
-                         profile_name, minutes, candidate, future_minutes, prev_retained)
+                         "(future slots: %d min).",
+                         profile_name, minutes, candidate, future_minutes)
             return minutes
         except Exception as e:
             log.warning("Could not load previous plan for '%s' from %s: %s",
