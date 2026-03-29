@@ -42,7 +42,7 @@ Full dashboard redesign (hero price theme), light/dark theming, bar hover intera
 
 **min_gap_minutes**: new config parameter separating gap constraint from block length. `min_slot_minutes` now only controls minimum block length; `min_gap_minutes` (default 15, divisible by 15, can be 0) controls minimum gap between blocks independently.
 
-**retained_hours**: each run reads the previous plan JSON, counts future `charging: true` minutes, and adds them to `required_hours` before running the DP. The scheduler covers the full combined need with proper gap enforcement — no special merging, no OCPP complications. `retained_hours` written to plan JSON (converted from minutes). Dashboard hero shows `scheduled 2h + 30m carried over` in accent2 color when non-zero. End-to-end tests updated to use `tempfile.TemporaryDirectory` for output dir to prevent retained minutes leaking between test runs.
+**retained_hours**: each run reads the previous plan JSON, counts future `charging: true` minutes, and adds them to `required_hours` before running the DP. The scheduler covers the full combined need with proper gap enforcement — no special merging, no OCPP complications. `retained_hours` written to plan JSON (converted from minutes). Dashboard hero shows `scheduled 3h (1h30m carried over)` in accent2 color when non-zero. End-to-end tests updated to use `tempfile.TemporaryDirectory` for output dir to prevent retained minutes leaking between test runs.
 
 **ntfy removed**: GHA is the primary run environment. Delivery failures already exit non-zero. Forecast warning visible on dashboard. `_send_delivery_ntfy` and `skipped_profiles` logic removed from `deliver.py`. `NTFY_TOPIC` removed from `schedule.yml`. `ntfy:` block removed from `config.yaml`. `test_deliver.py` removed entirely (covered ntfy logic only) — test count drops from 186 to 156.
 
@@ -375,7 +375,7 @@ ntfy was originally used to notify on delivery failures, forecast prices, and sk
 
 Each plan run reads `data/plan-{name}.json` (or the local output dir), counts future `charging: true` minutes (`retained_minutes`), and adds them to `required_hours` before running the DP scheduler. This means the new plan always schedules `required_hours + retained_hours` total, with full gap enforcement and optimal slot selection. If the DP picks the same slots as last time, fine. If it finds cheaper ones, even better.
 
-`retained_hours` is written to the plan JSON (converted from minutes). The dashboard hero shows `scheduled 2h + 30m carried over` in accent2 color when `retained_hours > 0`. No special bar styling or `retained: true` flags needed — the DP handles everything cleanly.
+`retained_hours` is written to the plan JSON (converted from minutes). The dashboard hero shows `scheduled 3h (1h30m carried over)` in accent2 color when `retained_hours > 0`. No special bar styling or `retained: true` flags needed — the DP handles everything cleanly.
 
 The charger API is an alternative source for retained slot data but reading from `data/` is preferred — simpler, no external dependency, guaranteed to match what was delivered.
 
