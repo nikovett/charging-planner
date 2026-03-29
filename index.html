@@ -546,8 +546,8 @@ function renderProfile(plan) {
   }
 
   // Hero left: avg scheduled
-  var retainedStr = (plan.retained_hours > 0)
-    ? ' <span style="color:var(--accent2)">(' + fmtDuration(Math.round(plan.retained_hours * 60)) + ' carried over)</span>'
+  var retainedStr = (plan.retained_minutes > 0)
+    ? ' <span style="color:var(--accent2)">(' + fmtDuration(plan.retained_minutes) + ' carried over)</span>'
     : '';
   var heroL = '<div class="hero">'
     + '<div class="hero-label" id="avg-label-' + plan.profile + '">avg scheduled</div>'

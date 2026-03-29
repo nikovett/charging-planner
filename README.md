@@ -281,7 +281,7 @@ One `plan-{name}.json` file is written per profile:
     "avg_cents_kwh": 3.14
   },
   "required_minutes": 360,
-  "retained_hours": 0.5,
+  "retained_minutes": 30,
   "total_minutes": 390,
   "avg_price_cents_kwh": 0.91,
   "avg_optimal_price_cents_kwh": 0.91,
@@ -312,7 +312,7 @@ One `plan-{name}.json` file is written per profile:
 
 `price_slots` contains all available price slots from the previous evening onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `continuous_only` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. `price_stats` (min/avg/max) reflects the full range of slots available to the scheduler at run time — the basis for the "vs market" percentage shown on the dashboard.
 
-`retained_hours` is the number of future charging hours carried forward from the previous plan. When non-zero, `total_minutes` will exceed `required_minutes` by the equivalent amount.
+`retained_minutes` is the number of future charging minutes carried forward from the previous plan. When non-zero, `total_minutes` will exceed `required_minutes` by the same amount.
 
 Slots with `"forecasted": true` are display-only — they extend the histogram beyond the last real price slot. They are never used for slot selection or optimal calculation.
 

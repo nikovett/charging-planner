@@ -1557,7 +1557,7 @@ def build_plan(p: PlanParams) -> dict:
         ),
         "price_stats":            price_stats,
         "required_minutes":       p.required_minutes,
-        "retained_hours":         round(p.retained_minutes / 60, 4),
+        "retained_minutes":       p.retained_minutes,
         "total_minutes":          total_min,
         "avg_price_cents_kwh":    round(overall_avg, 4),
         "avg_optimal_price_cents_kwh": avg_optimal,
@@ -2034,10 +2034,13 @@ def _load_retained_minutes(output_dir: str, profile_name: str, now_utc: datetime
             )
             # Cap carry-over at the previously retained amount to prevent compounding
             # when the script runs multiple times before charging starts.
-            # retained_hours is always present in new JSONs (0.0 when nothing was retained).
-            # For old JSONs without the field, fall back to required_minutes — safe since
+            # retained_minutes is always present in new JSONs (0 when nothing was retained).
+            # For old JSONs with retained_hours (float), convert to minutes.
+            # For old JSONs without either field, fall back to required_minutes — safe since
             # future_minutes will typically be 0 for completed plans.
-            if "retained_hours" in prev:
+            if "retained_minutes" in prev:
+                minutes = min(future_minutes, prev["retained_minutes"])
+            elif "retained_hours" in prev:
                 minutes = min(future_minutes, int(prev["retained_hours"] * 60))
             else:
                 minutes = min(future_minutes, prev.get("required_minutes", 0))
