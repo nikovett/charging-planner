@@ -523,6 +523,16 @@ function renderProfile(plan) {
   var savClass = sav !== null && sav > 0 ? "good" : "warn";
   var incomplete = plan.total_minutes < plan.required_minutes;
 
+  // vs optimal — only show when there are suboptimal charging slots in the plan
+  var optStr = "";
+  var hasSuboptimal = (plan.price_slots || []).some(function(s) { return s.charging && !s.optimal && !s.forecasted; });
+  if (hasSuboptimal && plan.avg_optimal_price_cents_kwh && plan.avg_price_cents_kwh) {
+    var optDiff = ((plan.avg_price_cents_kwh - plan.avg_optimal_price_cents_kwh) / plan.avg_optimal_price_cents_kwh * 100);
+    var optSign = optDiff > 0 ? "\u2191" : "\u2193";
+    var optClass = optDiff > 0 ? "warn" : "good";
+    optStr = '<div class="hero-det">vs optimal <span class="' + optClass + '">' + optSign + Math.abs(optDiff).toFixed(0) + '%</span></div>';
+  }
+
   // Charge period
   var chargePeriod = plan.date;
   if (plan.window_starts_utc && plan.window_starts_utc.length) {
@@ -555,6 +565,7 @@ function renderProfile(plan) {
     + '<div class="hero-details">'
     + '<div class="hero-det">scheduled <strong>' + fmtDuration(plan.total_minutes) + (incomplete ? '&thinsp;of&thinsp;' + fmtDuration(plan.required_minutes) : '') + '</strong>' + retainedStr + '</div>'
     + '<div class="hero-det">vs market <span class="' + savClass + '">' + savStr + '</span></div>'
+    + optStr
     + '</div></div>';
 
   // Hero right: now + market stats
