@@ -28,6 +28,16 @@ DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast disp
 Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring, gap merge removal, algorithm correctness fixes.
 
 
+### Session 11 — 2026-03-30
+
+**retained_minutes rename**: `retained_hours` in JSON output renamed to `retained_minutes` to be consistent with `required_minutes` and `total_minutes`. No conversion needed — stored as integer minutes. `_load_retained_minutes` now checks for `retained_minutes` first, then `retained_hours` (transitional fallback for old JSONs), then `required_minutes` (pre-feature fallback). `index.html` updated to read `retained_minutes` directly without conversion.
+
+**vs optimal in hero**: when a plan has any suboptimal charging slots, the hero now shows `vs optimal ↑N%` alongside `vs market`. Uses `avg_optimal_price_cents_kwh` from the JSON directly. Condition mirrors the suboptimal legend — only shown when suboptimal slots actually exist in the plan. Optimal is calculated with the same mode and constraints as scheduled (continuous_only respected) so the percentage purely reflects the cost of the window constraint, nothing else.
+
+**cron timing**: GHA consistently fires ~1h after the scheduled UTC time. After DST to EEST (UTC+3), changed cron from `30 12 * * *` to `30 10 * * *` to target ~14:30 EEST. Confirmed firing at 14:30 on 2026-03-30. Will evaluate if `30 11 * * *` (safer — 30min buffer after ENTSO-E publication at ~11:00 UTC) is more appropriate.
+
+**schedule.yml** currently set to `30 10 * * *` pending tomorrow's confirmation.
+
 ### Session 10 — 2026-03-29 (evening)
 
 **retained_hours compounding fix**: several iterations to arrive at the correct formula for `_load_retained_minutes`. The invariant: total_minutes in the new plan should never exceed total_minutes from the previous plan when all slots are still future (i.e. script runs multiple times before charging starts).
@@ -92,6 +102,16 @@ DST transition day. Several bugs found and fixed stemming from adding historical
 
 ### Session 6 — 2026-03-27 (afternoon)
 Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow (catches partial/stale responses during maintenance). Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots. Forecast display augmentation now always runs after a real-price fetch (not just when slots don't reach tomorrow noon) and cap extended from 12h to 24h — ensures histogram right edge is always filled. Histogram range snapped to 15-minute slot boundaries (floor rangeStart, ceil rangeEnd) to eliminate sub-slot gaps at histogram edges. Two-mode histogram window: Mode 1 (charging far away) anchors on now-1h and extends to cover all charging slots+1h; Mode 2 (charging midpoint within 11h of now) centers on charging midpoint ±12h. Ensures now is always visible and charging slots are always visible, with now drifting toward center as charging approaches.
+
+---
+
+## Charge Amps integration — how it was built
+
+The official Charge Amps external API (`eapi.charge.space`) does not support scheduling — confirmed by inspecting the Swagger docs at `https://eapi.charge.space/swagger/v5/swagger.json`. It exposes charger control but not the time-period scheduling needed to deliver a charging plan.
+
+To work around this, we reverse engineered the internal API used by the Charge Amps web portal (`my.charge.space`). By logging in with credentials and inspecting network traffic in browser dev tools, we identified the full flow: email/password authentication returning a bearer token and a separate entitlements token (containing the org UUID needed for subsequent calls), the scheduling endpoint, and the exact payload structure — time periods expressed as `from`/`to` integer offsets in seconds from the window start, a unique string `id` per period, and `maxCurrent`.
+
+`deliver_chargeamps.py` is a headless implementation of this internal API — functionally identical to what the web portal does when a user schedules charging manually, but driven programmatically from the plan JSON.
 
 ---
 
