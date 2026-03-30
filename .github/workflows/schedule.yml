@@ -3,8 +3,9 @@ name: Charging Planner
 on:
   schedule:
     - cron: '30 10 * * *'   # 10:30 UTC = 13:30 EEST (summer) / 12:30 EET (winter)
-                            # GHA typically delays ~1h, landing at ~14:30 EEST (summer)
-                            # Prices publish ~12:00 UTC so this always lands after publication.
+                            # GHA consistently delays ~1h, landing at ~14:30 EEST (summer).
+                            # Prices publish at ~11:00 UTC so this always lands after
+                            # publication even without GHA delay.
   workflow_dispatch:
 
 permissions:
