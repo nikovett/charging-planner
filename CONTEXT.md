@@ -57,7 +57,7 @@ DST transition day. PlanParams refactor: renamed `all_prices` → `display_price
 
 **vs optimal in hero**: when a plan has any suboptimal charging slots, hero shows `vs optimal ↑N%` alongside `vs market`. Uses `avg_optimal_price_cents_kwh` from JSON. Condition mirrors the suboptimal legend — only shown when suboptimal slots actually exist. Optimal uses the same mode and constraints as scheduled (continuous_only respected) so the percentage purely reflects the cost of the window constraint.
 
-**cron timing**: GHA consistently fires ~1h after the scheduled UTC time. After DST to EEST (UTC+3), cron changed to `30 10 * * *` to target ~14:30 EEST. Confirmed firing at 14:30 on 2026-03-30. `30 11 * * *` identified as safer alternative (30min buffer after ENTSO-E publication at ~11:00 UTC) — will evaluate after tomorrow's run.
+**cron timing**: GHA consistently fires ~1h after the scheduled UTC time. After DST to EEST (UTC+3), cron set to `30 10 * * *`. Confirmed firing at ~14:30 EEST on both 2026-03-30 and 2026-03-31 — settled. Safe: even without GHA delay, 10:30 UTC lands before ENTSO-E publication at ~11:00 UTC and the fallback chain handles it.
 
 ---
 
