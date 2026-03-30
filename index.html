@@ -352,7 +352,12 @@ function renderTimeline(plan, profileName, nowPrice) {
   if (cLm.length) {
     var mid        = (Math.min.apply(null,cLm) + Math.max.apply(null,cLm)) / 2;
     var lastSlotLm = Math.max.apply(null,cLm) + 15; // end of last charging slot
-    if (mid - 12*60 <= nowLm - 60) {
+    if (nowLm >= mid) {
+      // Mode 3: now-centered ±12h. Now has reached or passed the charging midpoint —
+      // window tracks now, revealing forecast bars to the right as time progresses.
+      rangeStart = nowLm - 12*60;
+      rangeEnd   = nowLm + 12*60;
+    } else if (mid - 12*60 <= nowLm - 60) {
       // Mode 2: charge-centered ±12h (now is within the window naturally)
       rangeStart = mid - 12*60;
       rangeEnd   = mid + 12*60;
@@ -362,8 +367,9 @@ function renderTimeline(plan, profileName, nowPrice) {
       rangeEnd   = Math.max(rangeStart + 24*60, lastSlotLm + 60);
     }
   } else {
-    rangeStart = nowLm - 60;
-    rangeEnd   = rangeStart + 24*60;
+    // No charging slots — now-centered ±12h (same as Mode 3)
+    rangeStart = nowLm - 12*60;
+    rangeEnd   = nowLm + 12*60;
   }
   rangeStart = Math.max(rangeStart, Math.min.apply(null,allLm));
   // Snap to 15-minute slot boundaries so bars fill edge to edge

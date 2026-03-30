@@ -28,7 +28,7 @@ DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast disp
 Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring (failure-only channel), gap merge removal, algorithm correctness fixes.
 
 ### Session 6 — 2026-03-27 (afternoon)
-Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow. Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots. Two-mode histogram window introduced. Forecast augmentation always runs after real-price fetch, cap extended to 24h.
+Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow. Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots. Two-mode histogram window introduced. Forecast augmentation always runs after real-price fetch, capped at 12h beyond the last real slot.
 
 ### Session 7 — 2026-03-28
 DST transition day. PlanParams refactor: renamed `all_prices` → `display_prices`, added `future_prices` (real slots from now onwards). Three clearly named price pools prevent historical/forecast data leaking into calculations. price_stats and optimal calculation fixed to use `future_prices` only. min_gap_minutes introduced as separate config parameter. Config pills redesigned. avg line z-order fixed.
@@ -51,6 +51,14 @@ DST transition day. PlanParams refactor: renamed `all_prices` → `display_price
 **retained_minutes compounding fix**: the invariant — `total_minutes` in the new plan should never exceed `total_minutes` from the previous plan when all slots are still future. Final formula: `min(future_minutes, prev_retained_minutes)`. Three-level fallback in `_load_retained_minutes`: `retained_minutes` → `retained_hours` (transitional) → `required_minutes` (pre-feature).
 
 **optimal calculation fix**: `optimal_required = p.required_minutes + p.retained_minutes` so optimal covers the same total as scheduled.
+
+### Session 12 — 2026-03-31
+
+**Histogram Mode 3**: when now reaches or passes the charging midpoint, the window switches from charge-centered to now-centered (now-12h → now+12h). The window then tracks now in real time, revealing forecast bars to the right as time progresses. Also applied to the no-charging-slots fallback — now-centered ±12h makes more sense than the old now-1h → now+23h since there's nothing to anchor on.
+
+**cron confirmed**: `30 10 * * *` fires consistently at ~14:30 EEST. Settled.
+
+**forecast augmentation cap corrected**: 12h beyond last real slot (not 24h as previously noted).
 
 ### Session 11 — 2026-03-30
 **retained_minutes rename**: `retained_hours` in JSON output renamed to `retained_minutes` — consistent with `required_minutes` and `total_minutes`. Integer minutes, no conversion. `index.html` updated to read `retained_minutes` directly.
@@ -92,7 +100,7 @@ config.yaml                  # Configuration (committed with empty secrets)
 2. **Sähkötin** (`sahkotin.fi/api`) — actual Nord Pool 15-min prices, FI only, no API key. Used transparently.
 3. **nordpool-predict-fi** — ML forecast blended with realized prices. FI only. Tagged `price_source: "forecast"` in plan JSON; triggers dashboard warning.
 
-Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch, up to 24h of forecast slots are always fetched beyond the last real slot for display only — grey diagonal bars in the histogram, never used for selection.
+Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch, up to 12h of forecast slots are fetched beyond the last real slot for display only — grey diagonal bars in the histogram, never used for selection.
 
 ---
 
@@ -206,10 +214,10 @@ Light/dark with OS preference default and manual toggle persisted in `localStora
 
 **Legend items** are all conditional — each only appears when that bar type is visible. Labels: optimal, suboptimal, missed, forecast.
 
-**Histogram window:** Two-mode logic, snapped to 15-minute boundaries:
+**Histogram window:** Three-mode logic, snapped to 15-minute boundaries:
 - **Mode 1** (charging midpoint > 11h away): rangeStart = now-1h, rangeEnd = max(now+23h, last charging slot+1h)
-- **Mode 2** (charging midpoint ≤ 11h away): rangeStart = mid-12h, rangeEnd = mid+12h
-- Fallback (no charging slots): now-1h → now+23h
+- **Mode 2** (charging midpoint ≤ 11h away, now before midpoint): rangeStart = mid-12h, rangeEnd = mid+12h
+- **Mode 3** (now ≥ charging midpoint, or no charging slots): rangeStart = now-12h, rangeEnd = now+12h — window tracks now, forecast bars slide into view to the right as time progresses
 
 **Responsive ticks:** 4h intervals on screens <520px, 2h on wider screens.
 
