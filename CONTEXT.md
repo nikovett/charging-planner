@@ -6,7 +6,7 @@ This document captures the full development history, decisions, and current stat
 
 ## What it does
 
-Fetches day-ahead electricity prices and schedules EV charging for the cheapest available hours, automatically, every day. Delivers the schedule to one or more chargers via the Charge Amps API or OCPP WebSocket. Publishes a GitHub Pages dashboard showing the current plan.
+Fetches day-ahead electricity prices and schedules EV charging for the cheapest available hours, automatically, every day. Delivers the schedule to one or more chargers via the Charge Amps internal API. Publishes a GitHub Pages dashboard showing the current plan.
 
 ---
 
@@ -25,83 +25,39 @@ Bug fixes, algorithm improvements, histogram visualization, optimal slot compari
 DP slot selection algorithm, gap constraints, Sähkötin fallback, forecast display augmentation, histogram redesign, dashboard theme exploration.
 
 ### Session 5 — 2026-03-27 (morning)
-Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring, gap merge removal, algorithm correctness fixes.
-
-
-### Session 11 — 2026-03-30
-
-**retained_minutes rename**: `retained_hours` in JSON output renamed to `retained_minutes` to be consistent with `required_minutes` and `total_minutes`. No conversion needed — stored as integer minutes. `_load_retained_minutes` now checks for `retained_minutes` first, then `retained_hours` (transitional fallback for old JSONs), then `required_minutes` (pre-feature fallback). `index.html` updated to read `retained_minutes` directly without conversion.
-
-**vs optimal in hero**: when a plan has any suboptimal charging slots, the hero now shows `vs optimal ↑N%` alongside `vs market`. Uses `avg_optimal_price_cents_kwh` from the JSON directly. Condition mirrors the suboptimal legend — only shown when suboptimal slots actually exist in the plan. Optimal is calculated with the same mode and constraints as scheduled (continuous_only respected) so the percentage purely reflects the cost of the window constraint, nothing else.
-
-**cron timing**: GHA consistently fires ~1h after the scheduled UTC time. After DST to EEST (UTC+3), changed cron from `30 12 * * *` to `30 10 * * *` to target ~14:30 EEST. Confirmed firing at 14:30 on 2026-03-30. Will evaluate if `30 11 * * *` (safer — 30min buffer after ENTSO-E publication at ~11:00 UTC) is more appropriate.
-
-**schedule.yml** currently set to `30 10 * * *` pending tomorrow's confirmation.
-
-### Session 10 — 2026-03-29 (evening)
-
-**retained_hours compounding fix**: several iterations to arrive at the correct formula for `_load_retained_minutes`. The invariant: total_minutes in the new plan should never exceed total_minutes from the previous plan when all slots are still future (i.e. script runs multiple times before charging starts).
-
-Final formula:
-- If previous JSON has `retained_minutes`: `min(future_minutes, retained_minutes)` — caps carry-over at the previously retained amount, never grows it
-- If previous JSON has `retained_hours` (transitional format): `min(future_minutes, int(retained_hours * 60))` — handles JSONs produced before the rename
-- If previous JSON has neither (old format): `min(future_minutes, required_minutes)` — safe fallback, future_minutes is typically 0 for completed plans
-
-`retained_minutes` is always written to new JSONs (0 when nothing was retained). The `retained_hours` fallback branch handles old JSONs already in `data/` until the next successful run replaces them.
-
-**optimal calculation fix**: `optimal_required = p.required_minutes + p.retained_minutes` so the optimal set covers the same total as scheduled. Previously optimal used only `required_minutes`, causing retained slots to appear as suboptimal bars.
-
-**Verified in production**: retained hours working correctly across multiple manual runs — no compounding, stable total_minutes across re-runs when charging hasn't started yet.
-
-### Session 9 — 2026-03-29
-
-**Per-day required_hours in schedule entries**: `required_hours` can now be overridden per day within a `schedule` entry, independently of the window override. `_resolve_schedule_window` updated to return a third value — `required_minutes_override` (None when not specified). `_plan_one_profile` uses `base_required = sched_required_minutes or cfg.required_minutes` before adding retained minutes. Validation added for `required_hours` in schedule entries. Tests updated to unpack three values from `_resolve_schedule_window`.
-
-**Back card updated**: "required" pill removed from config pills. Weekly schedule grid now has two rows — "window" and "required". Required hours row shows per-day override when present, falls back to top-level value otherwise. Config grid column count reduced from 5 to 4 (desktop) and 3 to 2 (mobile) to remove the empty gray cell left by removing the required pill.
-
-**OCPP delivery handler removed**: `deliver_ocpp.py` removed. OCPP requires direct WebSocket access — incompatible with GHA-first architecture. `websockets` dependency removed. OCPP ChargingProfile remains in the plan JSON output. `config.yaml` OCPP example block removed.
-
-**README**: "What makes this different" now leads with the schedule-once architecture as the opening statement. Per-day required_hours documented. Config example updated to show required_hours in schedule entries.
-
-### Session 8 — 2026-03-28 (afternoon)
-
-**min_gap_minutes**: new config parameter separating gap constraint from block length. `min_slot_minutes` now only controls minimum block length; `min_gap_minutes` (default 15, divisible by 15, can be 0) controls minimum gap between blocks independently.
-
-**retained_hours**: each run reads the previous plan JSON, counts future `charging: true` minutes, and adds them to `required_hours` before running the DP. The scheduler covers the full combined need with proper gap enforcement — no special merging, no OCPP complications. `retained_minutes` written to plan JSON (integer minutes, consistent with `required_minutes` and `total_minutes`). Dashboard hero shows `scheduled 3h (1h30m carried over)` in accent2 color when non-zero. End-to-end tests updated to use `tempfile.TemporaryDirectory` for output dir to prevent retained minutes leaking between test runs.
-
-**ntfy removed**: GHA is the primary run environment. Delivery failures already exit non-zero. Forecast warning visible on dashboard. `_send_delivery_ntfy` and `skipped_profiles` logic removed from `deliver.py`. `NTFY_TOPIC` removed from `schedule.yml`. `ntfy:` block removed from `config.yaml`. `test_deliver.py` removed entirely (covered ntfy logic only) — test count drops from 186 to 156.
-
-**Responsive histogram ticks**: 4h intervals on screens narrower than 520px (phone portrait), 2h on wider screens.
-
-**Schedule cell centering**: profile name cell in the config back-card weekly schedule now uses flex centering to match the "any" cells.
-
-**OCPP_ENDPOINT_URL removed from GHA**: OCPP delivery requires direct network access to the charger — not applicable to GHA runs. Removed from `schedule.yml` and README secrets table. `websockets` dependency moved to a separate "Optional — local OCPP delivery only" section in README requirements.
-
-**README rewritten**: "What makes this different" section expanded and tightened — zero hardware, fits any setup (3.7 kW vs 22 kW example), globally optimal scheduling, realistic charger behaviour, retained hours, three-level fallback, modular delivery. Config parameter names removed from the feature pitch; concrete examples added to each bullet. ntfy section removed throughout.
-
-### Session 7 — 2026-03-28
-DST transition day. Several bugs found and fixed stemming from adding historical slots for histogram display without auditing all downstream uses of `all_prices`.
-
-**PlanParams refactor**: renamed `all_prices` → `display_prices`, added `future_prices` (real slots from now onwards). Three clearly named pools now: `display_prices` (all real slots incl. historical — histogram output only), `future_prices` (future real slots — stats, optimal, scheduler), `forecast_slots` (predicted slots — display only, never used in calculations).
-
-**price_stats fix**: min/avg/max and "vs market %" now use `future_prices` only, so historical price spikes don't distort the displayed market stats.
-
-**optimal fix**: optimal slot calculation now uses `future_prices` — same pool as the scheduler, no window constraint, no historical or forecast slots.
-
-**ENTSO-E fallback fix**: raises `PricesNotYetAvailable` when returned slots don't reach tomorrow (catches maintenance/stale responses). Triggers Sähkötin fallback correctly.
-
-**Forecast augmentation**: always runs after any real-price fetch (removed the `tomorrow_noon` condition). Ensures histogram right edge is always filled.
-
-**min_gap_minutes**: new config parameter separating gap constraint from block length constraint. `min_slot_minutes` now only controls minimum block length; `min_gap_minutes` (default 15, divisible by 15, can be 0) controls minimum gap between blocks. Allows e.g. 2h blocks with 30-minute gaps without forcing 2h gaps.
-
-**Config pills**: all five back-card config fields now use pills consistently — teal for active values, grey for negative/absent (none, off, —).
-
-**avg line z-order**: moved behind bars so playhead and price bars render in front.
-
-**Tests**: 186 tests passing (3 skipped). `test_charging_planner.py` updated to use new `display_prices`/`future_prices` field names in `PlanParams`.
+Full dashboard redesign (hero price theme), light/dark theming, bar hover interaction, touch support, ntfy refactoring (failure-only channel), gap merge removal, algorithm correctness fixes.
 
 ### Session 6 — 2026-03-27 (afternoon)
-Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow (catches partial/stale responses during maintenance). Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots. Forecast display augmentation now always runs after a real-price fetch (not just when slots don't reach tomorrow noon) and cap extended from 12h to 24h — ensures histogram right edge is always filled. Histogram range snapped to 15-minute slot boundaries (floor rangeStart, ceil rangeEnd) to eliminate sub-slot gaps at histogram edges. Two-mode histogram window: Mode 1 (charging far away) anchors on now-1h and extends to cover all charging slots+1h; Mode 2 (charging midpoint within 11h of now) centers on charging midpoint ±12h. Ensures now is always visible and charging slots are always visible, with now drifting toward center as charging approaches.
+Histogram fix: ENTSO-E now returns historical slots like Sähkötin, so histogram can center on charging slot midpoint. ENTSO-E fallback fix: raises PricesNotYetAvailable when slots don't reach tomorrow. Dashboard legend: all items now conditional on visible slots; "scheduled" renamed to "optimal"; added "suboptimal" entry for charging-but-not-optimal slots. Two-mode histogram window introduced. Forecast augmentation always runs after real-price fetch, cap extended to 24h.
+
+### Session 7 — 2026-03-28
+DST transition day. PlanParams refactor: renamed `all_prices` → `display_prices`, added `future_prices` (real slots from now onwards). Three clearly named price pools prevent historical/forecast data leaking into calculations. price_stats and optimal calculation fixed to use `future_prices` only. min_gap_minutes introduced as separate config parameter. Config pills redesigned. avg line z-order fixed.
+
+### Session 8 — 2026-03-28 (afternoon)
+**retained_minutes**: each run reads the previous plan JSON, counts future `charging: true` minutes, adds them to `required_hours` before DP. Dashboard hero shows carried-over time. End-to-end tests use `tempfile.TemporaryDirectory` to prevent leaking between runs.
+
+**ntfy removed**: GHA is the primary run environment. Delivery failures exit non-zero → GHA emails. Forecast warning visible on dashboard. `_send_delivery_ntfy` removed from `deliver.py`. `NTFY_TOPIC` removed from `schedule.yml`. `ntfy:` block removed from `config.yaml`. `test_deliver.py` removed entirely — test count drops from 186 to 156.
+
+**OCPP delivery handler removed**: `deliver_ocpp.py` removed. Requires direct WebSocket access — incompatible with GHA-first architecture. OCPP ChargingProfile remains in plan JSON output.
+
+**min_gap_minutes**: separated from `min_slot_minutes` — block length and gap constraints now independent.
+
+**Responsive histogram ticks**: 4h intervals on screens <520px, 2h on wider screens.
+
+### Session 9 — 2026-03-29
+**Per-day required_hours**: `required_hours` can be overridden per day within `schedule` entries. `_resolve_schedule_window` returns a third value — `required_minutes_override`. Weekly schedule grid on back card gains a "required" row showing per-day override or top-level fallback.
+
+### Session 10 — 2026-03-29 (evening)
+**retained_minutes compounding fix**: the invariant — `total_minutes` in the new plan should never exceed `total_minutes` from the previous plan when all slots are still future. Final formula: `min(future_minutes, prev_retained_minutes)`. Three-level fallback in `_load_retained_minutes`: `retained_minutes` → `retained_hours` (transitional) → `required_minutes` (pre-feature).
+
+**optimal calculation fix**: `optimal_required = p.required_minutes + p.retained_minutes` so optimal covers the same total as scheduled.
+
+### Session 11 — 2026-03-30
+**retained_minutes rename**: `retained_hours` in JSON output renamed to `retained_minutes` — consistent with `required_minutes` and `total_minutes`. Integer minutes, no conversion. `index.html` updated to read `retained_minutes` directly.
+
+**vs optimal in hero**: when a plan has any suboptimal charging slots, hero shows `vs optimal ↑N%` alongside `vs market`. Uses `avg_optimal_price_cents_kwh` from JSON. Condition mirrors the suboptimal legend — only shown when suboptimal slots actually exist. Optimal uses the same mode and constraints as scheduled (continuous_only respected) so the percentage purely reflects the cost of the window constraint.
+
+**cron timing**: GHA consistently fires ~1h after the scheduled UTC time. After DST to EEST (UTC+3), cron changed to `30 10 * * *` to target ~14:30 EEST. Confirmed firing at 14:30 on 2026-03-30. `30 11 * * *` identified as safer alternative (30min buffer after ENTSO-E publication at ~11:00 UTC) — will evaluate after tomorrow's run.
 
 ---
 
@@ -120,9 +76,8 @@ To work around this, we reverse engineered the internal API used by the Charge A
 ```
 charging_planner.py          # Core planner — price fetch, slot selection, plan building
 delivery/
-  deliver.py                 # Dispatcher — reads config, calls handlers, sends ntfy
-  deliver_chargeamps.py      # Charge Amps API handler
-  deliver_ocpp.py            # OCPP WebSocket handler
+  deliver.py                 # Dispatcher — reads config, calls handlers
+  deliver_chargeamps.py      # Charge Amps internal API handler
 index.html                   # GitHub Pages dashboard
 config.yaml                  # Configuration (committed with empty secrets)
 .github/workflows/
@@ -137,7 +92,7 @@ config.yaml                  # Configuration (committed with empty secrets)
 2. **Sähkötin** (`sahkotin.fi/api`) — actual Nord Pool 15-min prices, FI only, no API key. Used transparently.
 3. **nordpool-predict-fi** — ML forecast blended with realized prices. FI only. Tagged `price_source: "forecast"` in plan JSON; triggers dashboard warning.
 
-Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch (ENTSO-E or Sähkötin), up to 24h of forecast slots are always fetched beyond the last real slot for display only — grey diagonal bars in the histogram, never used for selection. This ensures the histogram right edge is always filled even when charging slots fall late the next day.
+Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch, up to 24h of forecast slots are always fetched beyond the last real slot for display only — grey diagonal bars in the histogram, never used for selection.
 
 ---
 
@@ -152,17 +107,32 @@ Dynamic programming: finds the globally cheapest combination of blocks covering 
 **DP formulation:**
 - State: `dp[i][r]` = minimum cost to schedule `r` more slots from position `i` onwards
 - Transitions: skip slot `i`, or start a block of length `k ≥ min_slots_per_block`
-- Gap constraint: next block can't start within `min_slots_per_block` slots of previous block end
+- Gap constraint: next block can't start within `min_gap_slots` slots of previous block end
 - Reconstruction: forward scan finding the **latest** valid block at each step (latest-preferred tiebreaker for equal-price ties)
 - Globally optimal — no greedy approximation
 
-**`min_slot_minutes`** controls the minimum individual block length — the charger should not run for less than this duration.
+**`min_slot_minutes`** controls the minimum individual block length.
 
-**`min_gap_minutes`** controls the minimum gap between blocks (default 15 min, must be divisible by 15, can be 0). Prevents the charger toggling off and straight back on. Kept separate from `min_slot_minutes` so e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 30-minute gaps rather than forcing 2h gaps too.
+**`min_gap_minutes`** controls the minimum gap between blocks (default 15, divisible by 15, can be 0). Kept separate from `min_slot_minutes` so e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps rather than forcing 2h gaps.
 
-**Gap merge removed:** The old `close_gap_merge` post-selection patch was removed. Short gaps between blocks are now impossible by construction — the DP enforces gap constraints at selection time.
+**Spillover:** When the preferred window doesn't have enough slots, the planner fills the deficit from outside the window (never past `preferred_window_end`).
 
-**Spillover:** When the preferred window doesn't have enough slots, the planner fills the deficit from outside the window (never past `preferred_window_end`). Spillover uses `min_slot_minutes=slot_dur` (15 min) since spillover slots extend existing blocks.
+---
+
+## Retained minutes
+
+Each run reads `data/plan-{name}.json`, counts future `charging: true` minutes, and adds them to `required_hours` before running the DP. This ensures committed charging is never lost if a new plan is built before the previous one completes.
+
+**Invariant:** `total_minutes` in the new plan should never exceed `total_minutes` from the previous plan when all slots are still future (script runs multiple times before charging starts).
+
+**Formula:** `min(future_minutes, prev_retained_minutes)` — caps carry-over at the previously retained amount, never grows it.
+
+**Three-level fallback in `_load_retained_minutes`:**
+- JSON has `retained_minutes` → use directly (normal case)
+- JSON has `retained_hours` (transitional float field) → convert to minutes
+- JSON has neither (pre-feature) → fall back to `min(future, required_minutes)`
+
+`retained_minutes` is always written to new JSONs (0 when nothing retained). Optimal calculation uses `required_minutes + retained_minutes` so the optimal set covers the same total as scheduled.
 
 ---
 
@@ -171,37 +141,38 @@ Dynamic programming: finds the globally cheapest combination of blocks covering 
 ```json
 {
   "version": 1,
-  "date": "2026-03-27",
+  "date": "2026-03-30",
   "area": "FI",
   "price_source": "ENTSO-E",
   "timezone": "Europe/Helsinki",
-  "utc_offset_hours": 2,
-  "price_stats": { "min_cents_kwh": 1.81, "avg_cents_kwh": 3.23, "max_cents_kwh": 6.90 },
-  "required_minutes": 120,
-  "total_minutes": 120,
-  "avg_price_cents_kwh": 1.99,
-  "avg_optimal_price_cents_kwh": 1.99,
+  "utc_offset_hours": 3,
+  "price_stats": { "min_cents_kwh": 0.45, "avg_cents_kwh": 1.92, "max_cents_kwh": 4.99 },
+  "required_minutes": 270,
+  "retained_minutes": 0,
+  "total_minutes": 270,
+  "avg_price_cents_kwh": 0.70,
+  "avg_optimal_price_cents_kwh": 0.56,
   "preferred_window_start": "21:00",
   "preferred_window_end": "06:30",
   "windows": [
-    { "start": "14:45", "end": "16:15", "duration_minutes": 90, "avg_price_cents_kwh": 1.96 }
+    { "start": "22:45", "end": "06:30", "duration_minutes": 270, "avg_price_cents_kwh": 0.70 }
   ],
-  "window_starts_utc": ["2026-03-27T12:45:00+00:00"],
-  "window_ends_utc":   ["2026-03-27T14:15:00+00:00"],
+  "window_starts_utc": ["2026-03-29T19:45:00+00:00"],
+  "window_ends_utc":   ["2026-03-30T03:30:00+00:00"],
   "price_slots": [
-    { "start_utc": "...", "price_cents_kwh": 2.17, "charging": true, "optimal": true },
-    { "start_utc": "...", "price_cents_kwh": 2.08, "charging": false, "optimal": false, "forecasted": true }
+    { "start_utc": "...", "price_cents_kwh": 0.45, "charging": true, "optimal": true },
+    { "start_utc": "...", "price_cents_kwh": 2.05, "charging": false, "optimal": false, "forecasted": true }
   ],
   "ocpp_charging_profile": { ... }
 }
 ```
 
 Key fields:
-- `price_source`: `"ENTSO-E"` | `"Sähkötin"` | `"forecast"`
-- `price_slots[].charging`: true if this slot is in the scheduled plan
-- `price_slots[].optimal`: true if this slot is in the globally cheapest solution (ignoring window constraints)
-- `price_slots[].forecasted`: true for display-only forecast augmentation slots (never charging/optimal)
-- `avg_optimal_price_cents_kwh`: average price of the globally optimal slots
+- `required_minutes` + `retained_minutes` = `total_minutes`
+- `price_slots[].charging`: true if scheduled
+- `price_slots[].optimal`: true if in the globally cheapest solution (ignoring window constraint)
+- `price_slots[].forecasted`: display-only, never charging/optimal
+- `avg_optimal_price_cents_kwh`: average price of optimal slots — used by dashboard for `vs optimal` display
 
 ---
 
@@ -210,18 +181,20 @@ Key fields:
 GitHub Pages dashboard. Fetches plan JSONs and config.yaml directly from the repository — no backend.
 
 ### Theme
-Light/dark with OS preference default (`@media (prefers-color-scheme: dark)`) and manual toggle persisted in `localStorage`. Toggle button in the header.
+Light/dark with OS preference default and manual toggle persisted in `localStorage`.
 
 **Light:** warm cream background (`#F7F4EF`), white cards, teal accent.
 **Dark:** near-black background (`#0D0D0D`), dark cards, same teal accent.
 
 ### Front card layout
 
-**Card header:** profile name + charge period ("charges Fri, Mar 27 → Sat, Mar 28")
+**Card header:** profile name + charge period ("charges Mon, Mar 30 → Tue, Mar 31")
 
 **Heroes (two side by side):**
-- Left: `avg scheduled` — large teal price, `scheduled Xh` and `vs market ↓XX%` underneath
+- Left: `avg scheduled` — large teal price, `scheduled Xh (Ym carried over)` and `vs market ↓XX%` and `vs optimal ↑N%` (suboptimal only) underneath
 - Right: `now` — large white/dark price, `min / avg / max` underneath in teal/white/amber
+
+`vs optimal` only shown when there are suboptimal charging slots in the plan — mirrors the suboptimal legend item.
 
 **Histogram (single row):**
 - Solid teal bars = optimal scheduled slots (`charging && optimal`)
@@ -229,47 +202,32 @@ Light/dark with OS preference default (`@media (prefers-color-scheme: dark)`) an
 - Teal outline bars = missed optimal slots (`!charging && optimal`)
 - Grey diagonal stripe bars = forecast augmentation slots (display only)
 - Playhead triangle above current bar = now position
-- Dashed avg line
-- No bar labels — all numbers live in the hero area
+- Dashed avg line behind bars
 
-**Legend items** are all conditional — each only appears when that bar type is visible in the histogram. Labels: optimal, suboptimal, missed, forecast.
+**Legend items** are all conditional — each only appears when that bar type is visible. Labels: optimal, suboptimal, missed, forecast.
 
-**Histogram window:** Two-mode logic, always snapped to 15-minute slot boundaries (floor/ceil):
-- **Mode 1** (charging midpoint > 11h away): rangeStart = now-1h, rangeEnd = max(now+23h, last_charging_slot_end+1h). Now is always 1h from the left edge; charging slots visible to the right. Window may exceed 24h if charging is far away.
-- **Mode 2** (charging midpoint ≤ 11h away): rangeStart = mid-12h, rangeEnd = mid+12h. Charging centered; now floats naturally within the window since charging is nearby.
-- Fallback (no charging slots): now-1h → now+23h.
+**Histogram window:** Two-mode logic, snapped to 15-minute boundaries:
+- **Mode 1** (charging midpoint > 11h away): rangeStart = now-1h, rangeEnd = max(now+23h, last charging slot+1h)
+- **Mode 2** (charging midpoint ≤ 11h away): rangeStart = mid-12h, rangeEnd = mid+12h
+- Fallback (no charging slots): now-1h → now+23h
+
+**Responsive ticks:** 4h intervals on screens <520px, 2h on wider screens.
 
 **Hover/touch interaction:**
 - Hovering any bar → right hero shows that slot's price and time
-- Hovering a charging bar → left hero shows the window's avg price and time range (e.g. "14:45–16:15")
-- Touch drag across bars works via `touchmove` + `elementFromPoint`
+- Hovering a charging bar → left hero shows the window's avg price and time range
+- Touch drag works via `touchmove` + `elementFromPoint`
 - `stopPropagation` prevents bar touches from flipping the card
 
 **Window pills:** time range, avg price, duration
 
 ### Back card layout
-- Config grid: required, mode, min slot, ceiling, delivery — all values shown as pills. Teal pill for active/positive values (hours, mode, min slot, ceiling, ✓ on). Grey pill for negative/absent values (none, off, —)
-- Weekly schedule grid: days × start/end times, today highlighted in teal, "any" slots centered
+- Config grid (4 cols desktop, 2 mobile): required, mode, min slot, ceiling, delivery — teal pills for active values, grey for absent/off
+- Weekly schedule grid: days × window start/end + required hours row (per-day override or top-level fallback); today highlighted in teal
 
-### Warnings (banners)
-- Staleness: plan data is more than 1 day old
+### Warnings
+- Staleness: plan data more than 1 day old
 - Forecast: `price_source === "forecast"` — "prices sourced from forecast — real-time data was unavailable"
-
----
-
-## ntfy notifications
-
-Notifications fire only when action is needed — successful deliveries with real prices are silent.
-
-**Fires when:**
-- Any delivery to a charger fails → title: "⚠ Delivery failed — {date}"
-- `price_source === "forecast"` (both ENTSO-E and Sähkötin failed) → title: "⚠ Forecast prices used — {date}"
-- A profile was skipped
-
-**Also fires from the planner** (before delivery) when no plan could be built at all:
-- All three price sources failed
-- Price data doesn't cover any configured window
-- Message: "No price data — charging could not be scheduled."
 
 ---
 
@@ -279,28 +237,34 @@ Notifications fire only when action is needed — successful deliveries with rea
 The greedy algorithm made locally optimal choices that prevented globally optimal combinations. The DP guarantees the cheapest valid solution. Reconstruction uses a latest-preferred tiebreaker for equal-price ties.
 
 ### Gap merge removed
-`close_gap_merge` would bridge short gaps by including expensive gap slots, overriding price optimisation. The DP enforces gap constraints at selection time — gaps between blocks are a direct consequence of price optimisation, not something to patch.
+`close_gap_merge` would bridge short gaps by including expensive gap slots, overriding price optimisation. The DP enforces gap constraints at selection time.
 
 ### `min_slot_minutes` and `min_gap_minutes` are separate constraints
-`min_slot_minutes` controls minimum block length; `min_gap_minutes` controls minimum gap between blocks (default 15). They were previously the same value which forced unnecessarily long gaps when `min_slot_minutes` was set to e.g. 2h.
+Previously both used the same value, forcing unnecessarily long gaps when `min_slot_minutes` was set to e.g. 2h.
 
 ### Forecast augmentation is display-only (unless it's the only source)
-When real prices are available (ENTSO-E or Sähkötin), forecast slots in `price_slots` are never passed to the selection algorithm or optimal calculation — they exist solely to fill the histogram's right side. However, when both real sources fail, `fetch_forecast_prices` is used as a last resort and those slots ARE used for selection. In that case no display augmentation is fetched on top (the `price_source != "forecast"` guard prevents it).
-
-### Historical slots included in price_slots
-Both ENTSO-E and Sähkötin return slots from the previous evening onwards (not just future slots). This gives the histogram enough data to center properly on the charging slot midpoint without being clamped to "now".
+When real prices are available, forecast slots are never passed to the selection algorithm or optimal calculation. When both real sources fail, forecast IS used for selection — but no display augmentation is fetched on top.
 
 ### PlanParams price pool separation
-`PlanParams` has three explicitly named price pools to prevent historical/forecast data leaking into calculations:
-- `display_prices` — all real slots including historical. Used only for building `price_slots` in the JSON output.
-- `future_prices` — real slots from now onwards. Used for `price_stats` (min/avg/max), optimal calculation, and print summary.
-- `forecast_slots` — predicted slots. Appended to `price_slots` after real slots, never used in any calculation.
+Three explicitly named pools prevent historical/forecast data leaking into calculations:
+- `display_prices` — all real slots including historical. Used only for `price_slots` JSON output.
+- `future_prices` — real slots from now onwards. Used for `price_stats`, optimal calculation, scheduler.
+- `forecast_slots` — predicted slots. Appended to `price_slots`, never used in calculations.
 
-### Hero price replaces stat grid
-The old 4-column stats row (scheduled / avg price / vs market / vs optimal) was replaced with two large hero numbers. The "vs optimal" percentage is replaced by visual outline bars in the histogram — if scheduled and optimal slots overlap completely, no outlines appear.
+### Retained minutes never compound
+`min(future_minutes, prev_retained_minutes)` ensures the retained portion never grows when the script runs multiple times before charging starts.
 
-### ntfy is a failure channel only
-The old behaviour sent a success notification after every delivery. Now ntfy only fires on failures, forecast fallback, or skipped profiles — eliminating noise on the happy path.
+### ntfy removed — GHA is the primary run environment
+ntfy was originally used to notify on delivery failures, forecast prices, and skipped profiles. Removed because:
+- Forecast warning is already visible on the dashboard
+- Delivery failures exit non-zero → GHA emails the operator
+- GHA is the primary run environment; local cron is secondary
+
+### OCPP delivery handler removed
+Requires direct WebSocket access to the charger — fundamentally incompatible with GHA-first architecture. The OCPP `ChargingProfile` object remains in the plan JSON output for any downstream system that wants it.
+
+### Charge Amps uses internal web portal API
+The official external API doesn't support scheduling. We reverse engineered the internal API from browser dev tools network traffic. See "Charge Amps integration" section.
 
 ---
 
@@ -314,39 +278,37 @@ entsoe:
 
 charging:
   - name: topup
-    required_hours: 2
+    required_hours: 1.5
     continuous_only: false
-    min_slot_minutes: 30       # Min block length
-    min_gap_minutes: 15        # Min gap between blocks (independent of min_slot_minutes)
+    min_slot_minutes: 30
+    min_gap_minutes: 15
     max_price_cents_kwh: null
     preferred_window_start: "21:00"
     preferred_window_end: "06:30"
     schedule:
+      - days: [monday, tuesday, wednesday, thursday, friday]
+        preferred_window_start: "21:00"
+        preferred_window_end: "06:30"
+        required_hours: 1.5
       - days: [saturday, sunday]
         preferred_window_start: any
         preferred_window_end: any
+        required_hours: 4.5
     deliveries:
       - handler: chargeamps
         charge_point_id: CHARGER_ID_1
         connector_id: 1
         max_charging_rate: 16.0
         restore_mode: false
-
-ntfy:
-  enabled: true
-  topic: ""              # Injected via NTFY_TOPIC secret
 ```
 
 ---
 
 ## Test suite
 
-186 tests across three files:
-- `test_charging_planner.py` — price parsing, window selection, DP algorithm, gap constraint, spillover, plan building, schedule resolution
-- `test_deliver.py` — ntfy message content, silence-on-success, fire-on-failure/forecast/skipped
-- `test_deliver_chargeamps.py` — Charge Amps delivery handler
-
-3 skipped (OCPP schema validation requiring external files).
+156 tests, 3 skipped:
+- `test/test_charging_planner.py` — price parsing, window selection, DP algorithm, gap constraint, spillover, plan building, schedule resolution, retained minutes
+- `test/test_deliver_chargeamps.py` — Charge Amps delivery handler (login/cache, connector mode, period fields, period timing)
 
 ---
 
@@ -355,17 +317,16 @@ ntfy:
 | File | Description |
 |---|---|
 | `charging_planner.py` | Core planner |
-| `deliver.py` | Delivery dispatcher + ntfy |
-| `deliver_chargeamps.py` | Charge Amps handler |
-| `deliver_ocpp.py` | OCPP handler |
+| `delivery/deliver.py` | Delivery dispatcher |
+| `delivery/deliver_chargeamps.py` | Charge Amps handler |
 | `index.html` | GitHub Pages dashboard |
 | `config.yaml` | Configuration template |
-| `schedule.yml` | GHA workflow |
-| `test_charging_planner.py` | Planner tests |
-| `test_deliver.py` | Delivery + ntfy tests |
-| `test_deliver_chargeamps.py` | Charge Amps tests |
+| `.github/workflows/schedule.yml` | GHA workflow |
+| `test/test_charging_planner.py` | Planner tests |
+| `test/test_deliver_chargeamps.py` | Charge Amps tests |
 | `README.md` | Project documentation |
 | `CONTEXT.md` | This file |
+
 ---
 
 ## Theme candidates
@@ -381,39 +342,15 @@ Seven color pairs considered as alternative themes for the dashboard. Each pair 
 | 5 | Icy blue / Gunmetal | `#EEF5FF` | `#35393C` | `#35393C` | `#A4D8FF` |
 | 6 | Raspberry red / Deep space blue | `#FFF0F5` | `#EE005A` | `#012641` | `#EE005A` |
 | 7 | Lime cream / Vintage grape | `#DDEA78` | `#433455` | `#433455` | `#DDEA78` |
----
-
-## Decisions
-
-### OCPP delivery handler removed
-
-`delivery/deliver_ocpp.py` removed. OCPP requires direct WebSocket access to the charger — fundamentally incompatible with GHA-first architecture. The `websockets` dependency was the only reason for the optional local dependency section in README.
-
-The OCPP `ChargingProfile` object remains in the plan JSON output — ready-to-use for any downstream system that wants it. The delivery handler on top of it is gone.
-
-`config.yaml` OCPP example block removed. README delivery table now shows only the Charge Amps handler.
-
-### ntfy removed — GHA is the primary run environment
-
-ntfy was originally used to notify on delivery failures, forecast prices, and skipped profiles. Removed because:
-- Forecast warning is already visible on the dashboard
-- Delivery failures now exit non-zero → GHA emails the operator and flags the workflow as failed
-- GHA is the primary run environment; local cron is a secondary use case
-
-`deliver.py` already exited non-zero on delivery failure — no change needed there. `schedule.yml` and `config.yaml` updated to remove all ntfy references. `_send_delivery_ntfy` and `skipped_profiles` logic removed from `deliver.py`.
 
 ---
 
 ## Future work
 
-### Retain already-committed future charging slots across plan runs — IMPLEMENTED
+### SoC-derived required_hours
 
-Each plan run reads `data/plan-{name}.json` (or the local output dir), counts future `charging: true` minutes (`retained_minutes`), and adds them to `required_hours` before running the DP scheduler. This means the new plan always schedules `required_hours + retained_hours` total, with full gap enforcement and optimal slot selection. If the DP picks the same slots as last time, fine. If it finds cheaper ones, even better.
+Currently `required_hours` is a static config value set conservatively for the worst case. The goal is to derive it dynamically at plan-build time from the car's current state of charge and target SoC, read from the charger via OCPP 2.0.1 or 2.1.
 
-`retained_minutes` is written to the plan JSON (integer minutes, consistent with `required_minutes` and `total_minutes`). The dashboard hero shows `scheduled 3h (1h30m carried over)` in accent2 color when `retained_minutes > 0`. No special bar styling or `retained: true` flags needed — the DP handles everything cleanly.
+**Trigger:** Charge Amps LUNA firmware update to OCPP 2.0.1 or 2.1 — these versions provide reliable SoC measurand reporting. OCPP 1.6 has a SoC measurand but availability varies by charger/car combination.
 
-The charger API is an alternative source for retained slot data but reading from `data/` is preferred — simpler, no external dependency, guaranteed to match what was delivered.
-
-Test note: end-to-end tests use `tempfile.TemporaryDirectory` for `output_dir` to prevent retained minutes from previous test runs leaking into subsequent runs.
-
-"vs market" calculation is also correct by design — since the DP schedules `required_minutes + retained_minutes` as a single combined requirement, the avg price covers all scheduled slots together. No special handling needed.
+`required_hours` will remain as a config fallback for when the car is not plugged in at plan-build time or SoC data is unavailable.
