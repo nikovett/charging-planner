@@ -4,7 +4,7 @@ Charging Planner
 ================
 Fetches day-ahead electricity prices from the ENTSO-E Transparency Platform,
 selects the cheapest charging windows for each configured profile, and writes
-a plan to JSON for review and downstream use (e.g. OCPP smart charging).
+a plan to JSON and delivers it to configured chargers.
 
 Usage:
     python charging_planner.py [--config config.yaml] [--output-dir .]
@@ -93,12 +93,6 @@ DEFAULT_CONFIG = {
     # One or more charging profiles. A bare dict is treated as a single profile.
     "charging": [CHARGING_DEFAULTS.copy()],
 
-    # Push notifications via ntfy.sh (optional — omit or set enabled: false to disable)
-    "ntfy": {
-        "enabled": False,
-        "topic":   "",   # never commit — use environment variable NTFY_TOPIC
-    },
-
 }
 
 
@@ -139,9 +133,6 @@ def load_config(path: str) -> dict:
     # without modifying config.yaml (safe for public repos)
     if api_key := os.environ.get("ENTSOE_API_KEY"):
         config["entsoe"]["api_key"] = api_key
-    if ntfy_topic := os.environ.get("NTFY_TOPIC"):
-        config.setdefault("ntfy", {})["topic"] = ntfy_topic
-
     return config
 
 
@@ -2207,30 +2198,6 @@ def _write_run_outputs(plans: "list[dict]") -> None:
 
 
 
-def _notify_prices_unavailable(ntfy_cfg: dict) -> None:
-    """Send an ntfy notification when no charging plan could be scheduled."""
-    if not ntfy_cfg.get("enabled", False):
-        return
-    topic = os.environ.get("NTFY_TOPIC") or ntfy_cfg.get("topic", "")
-    if not topic:
-        return
-    try:
-        import urllib.request as _ur
-        req = _ur.Request(
-            f"https://ntfy.sh/{topic}",
-            data="No price data — charging could not be scheduled.".encode(),
-            method="POST",
-            headers={
-                "Title":    "Charging plan unavailable",
-                "Priority": "default",
-            },
-        )
-        _ur.urlopen(req, timeout=10)
-        log.info("ntfy: prices unavailable notification sent.")
-    except Exception as exc:
-        log.warning("ntfy prices unavailable notification failed: %s", exc)
-
-
 def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     """Fetch all available prices once, run selection for each profile."""
     try:
@@ -2264,7 +2231,6 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                 log.info("Using forecast prices as last resort fallback.")
             except PricesNotYetAvailable as exc3:
                 log.warning("%s", exc3)
-                _notify_prices_unavailable(raw_config.get("ntfy", {}))
                 sys.exit(1)
 
     plans = []
@@ -2299,7 +2265,6 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
             "No profiles could be planned — prices not yet available for any window. "
             "ENTSO-E publishes next-day prices at ~12:00 UTC."
         )
-        _notify_prices_unavailable(raw_config.get("ntfy", {}))
         sys.exit(0)
 
     if skipped:

@@ -20,12 +20,6 @@ Deliveries are configured inside each charging profile in config.yaml:
             connector_id: 1
             max_charging_rate: 16.0
 
-          - handler: ocpp               # → delivery/deliver_ocpp.py
-            charge_point_id:            # list — same plan sent to both chargers
-              - CHARGER_ID_2
-              - CHARGER_ID_3
-            endpoint_url_env: OCPP_ENDPOINT_URL
-            ocpp_version: "1.6"         # Quoted — would parse as float without quotes
 
 Timezone is taken from the charging profile and passed to handlers directly —
 it does not need to be repeated inside delivery entries.
