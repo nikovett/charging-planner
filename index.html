@@ -446,7 +446,7 @@ function renderTimeline(plan, profileName, nowPrice) {
   for (var pi = 0; pi <= 3; pi++) {
     var pVal = minP + pStep * pi;
     var pH = (100 - (10 + (pVal - minP) / rangeP * 80)).toFixed(1);
-    priceTickHTML += '<span style="position:absolute;right:2px;top:' + pH + '%;transform:translateY(-50%);font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1;pointer-events:none">' + pVal.toFixed(1) + '</span>';
+    priceTickHTML += '<span style="position:absolute;left:0;right:0;top:' + pH + '%;transform:translateY(-50%);font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1;pointer-events:none;text-align:left">' + pVal.toFixed(1) + '</span>';
   }
 
   // Legend
@@ -463,10 +463,15 @@ function renderTimeline(plan, profileName, nowPrice) {
 
   return '<div class="timeline-wrap">'
        + '<div class="timeline-label-row"><span>charging slots</span>' + legendHTML + '</div>'
+       + '<div style="display:flex;gap:4px">'
+       + '<div style="flex:1;min-width:0">'
        + '<div class="histogram" style="-webkit-user-select:none;user-select:none;touch-action:pan-y" ontouchmove="histoTouchMove(event,\'' + profileName + '\')" ontouchend="unhoverBar(\'' + profileName + '\')" ontouchcancel="unhoverBar(\'' + profileName + '\')">'
-       + avgLine + barsHTML + priceTickHTML
+       + avgLine + barsHTML
        + '</div>'
        + '<div class="timeline-ticks">' + tickHTML + '</div>'
+       + '</div>'
+       + '<div style="position:relative;width:26px;flex-shrink:0;height:56px">' + priceTickHTML + '</div>'
+       + '</div>'
        + '</div>';
 }
 
