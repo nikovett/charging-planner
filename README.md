@@ -78,7 +78,7 @@ entsoe:
 
 charging:
   - name: topup
-    required_hours: 2
+    required_hours: 1.5
     continuous_only: false
     min_slot_minutes: 30
     min_gap_minutes: 15
@@ -160,7 +160,7 @@ Days not listed in `schedule` use the top-level preferred window.
 
 ## Charger delivery
 
-Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` block inside each charging profile and dispatches each plan to the correct handler. Two handlers are included:
+Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` block inside each charging profile and dispatches each plan to the correct handler. A Charge Amps handler is included out of the box:
 
 | Handler | Script | Description |
 |---|---|---|
@@ -168,7 +168,7 @@ Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` bloc
 
 The `chargeamps` handler supports one additional option: `restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
 
-See [`delivery/README.md`](delivery/README.md) for full handler configuration reference and instructions for adding a new handler. New handlers can be added by creating a `deliver_<name>.py` script with a single `deliver` function — the dispatcher handles the rest.
+New handlers can be added by creating a `deliver_<n>.py` script in the `delivery/` directory with a single `deliver(plan, charge_point_id, entry, timezone) -> bool` function — the dispatcher handles the rest automatically.
 
 ---
 
@@ -199,18 +199,19 @@ A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan
 Features:
 
 - One flip card per profile — front shows the plan, back shows profile configuration and weekly schedule
-- Price histogram with all available slots positioned by actual timestamp. The histogram window uses two modes depending on how far away the charging slots are:
-  - **When charging is more than 11 hours away**: the window starts 1 hour before now and extends to cover all charging slots plus 1 hour, so "now" is always visible and the upcoming charging plan is visible to the right
-  - **When charging is within 11 hours**: the window centers on the charging slot midpoint ±12h, so the charging slots are prominent and now is naturally visible nearby
+- Price histogram with all available slots positioned by actual timestamp. The histogram window uses three modes as the day progresses:
+  - **Charging far away (>11h)**: the window starts 1 hour before now and extends to cover all charging slots — an overview of where in the future the charging slots are
+  - **Charging approaching (midpoint within 11h, not yet reached)**: the window centers on the charging slot midpoint ±12h, so the charging slots become the centerpiece
+  - **During and after charging (now past midpoint)**: the window centers on now ±12h and tracks forward in real time, revealing forecast bars to the right as time progresses
 - Four bar states: solid teal (scheduled + optimal), teal diagonal stripe (scheduled but not optimal), teal outline (optimal but not scheduled/missed), grey diagonal stripe (forecast display-only). Legend items are conditional — each only appears when that bar type is visible
-- Hero shows `scheduled 3h (1h30m carried over)` when hours from the previous plan are carried forward
+- Hero shows `scheduled 3h (1h30m carried over)` when hours from the previous plan are carried forward, and `vs optimal ↑N%` when the window constraint forces suboptimal slots
 - "vs market" percentage shows how much cheaper the scheduled avg price is compared to the average across all slots available to the scheduler at run time
 - Hover/touch any bar to see its price and time in the hero area; hovering a charging bar shows the window avg price
 - Responsive tick intervals — 2h on wide screens, 4h on narrow (phone portrait)
 - Forecast warning banner when `price_source` is `"forecast"`
 - Staleness warning when plan is more than a day old
 - Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")
-- Weekly schedule grid per profile showing configured windows for each day
+- Weekly schedule grid per profile showing configured windows and required hours for each day
 
 To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose `main` and `/ (root)`. The site will be live at `https://<username>.github.io/<repo>/`.
 
@@ -227,7 +228,7 @@ python charging_planner.py
 python charging_planner.py --config my-config.yaml --output-dir /tmp/plans
 python charging_planner.py --debug
 
-# Deliver plans and send notification
+# Deliver plans
 python delivery/deliver.py plan-*.json --config config.yaml
 python delivery/deliver.py plan-*.json --debug
 ```
@@ -250,9 +251,9 @@ Settings → Secrets and variables → Actions → New repository secret
 
 Never commit secrets to the repository. All sensitive values are injected at runtime as environment variables — `config.yaml` keeps only empty placeholders.
 
-The workflow runs daily at 11:30 UTC — after ENTSO-E's ~11:00 UTC price publication, with a 30-minute safety margin even if GHA fires on time. With GHA's typical ~1 hour delay it lands at ~15:30 Helsinki time in summer (EEST) and ~14:30 in winter (EET).
+The workflow runs daily at 10:30 UTC. GHA consistently delays ~1 hour, landing at ~14:30 Helsinki time in summer (EEST, UTC+3). Prices publish at ~11:00 UTC so even without GHA delay the run lands after publication.
 
-Day-ahead prices are published at approximately 12:00 UTC each day. If ENTSO-E is unavailable or prices aren't published yet, the planner automatically tries Sähkötin, then the nordpool-predict-fi forecast. If all sources fail, a push notification is sent and the run exits with a non-zero code. Once prices are available the next scheduled run will succeed.
+If ENTSO-E is unavailable or prices aren't published yet, the planner automatically tries Sähkötin, then the nordpool-predict-fi forecast. If all sources fail, the run exits with a non-zero code — the GHA job is marked as failed and the operator receives an email. Once prices are available the next scheduled run will succeed.
 
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 
