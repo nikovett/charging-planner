@@ -135,10 +135,7 @@ Each run reads `data/plan-{name}.json`, counts future `charging: true` minutes, 
 
 **Formula:** `min(future_minutes, prev_retained_minutes)` — caps carry-over at the previously retained amount, never grows it.
 
-**Three-level fallback in `_load_retained_minutes`:**
-- JSON has `retained_minutes` → use directly (normal case)
-- JSON has `retained_hours` (transitional float field) → convert to minutes
-- JSON has neither (pre-feature) → fall back to `min(future, required_minutes)`
+**`_load_retained_minutes`:** `min(future_minutes, prev.get("retained_minutes", 0))` — simple and direct since only this script writes to `data/` and it always writes `retained_minutes`.
 
 `retained_minutes` is always written to new JSONs (0 when nothing retained). Optimal calculation uses `required_minutes + retained_minutes` so the optimal set covers the same total as scheduled.
 
@@ -214,10 +211,10 @@ Light/dark with OS preference default and manual toggle persisted in `localStora
 
 **Legend items** are all conditional — each only appears when that bar type is visible. Labels: optimal, suboptimal, missed, forecast.
 
-**Histogram window:** Three-mode logic, snapped to 15-minute boundaries:
-- **Mode 1** (charging midpoint > 11h away): rangeStart = now-1h, rangeEnd = max(now+23h, last charging slot+1h)
-- **Mode 2** (charging midpoint ≤ 11h away, now before midpoint): rangeStart = mid-12h, rangeEnd = mid+12h
-- **Mode 3** (now ≥ charging midpoint, or no charging slots): rangeStart = now-12h, rangeEnd = now+12h — window tracks now, forecast bars slide into view to the right as time progresses
+**Histogram window:** Three-mode logic, snapped to 15-minute boundaries, telling a natural story as the day unfolds:
+- **Mode 1** (charging midpoint > 11h away): rangeStart = now-1h, rangeEnd = max(now+23h, last charging slot+1h). Overall view — shows where in the future the charging slots are.
+- **Mode 2** (charging midpoint ≤ 11h away, now before midpoint): rangeStart = mid-12h, rangeEnd = mid+12h. View compresses toward 24h with charging slots as the centerpiece.
+- **Mode 3** (now ≥ charging midpoint, or no charging slots): rangeStart = now-12h, rangeEnd = now+12h. Once charging becomes "a thing in the past" (midpoint reached), now becomes the centerpiece — the histogram acts as a 12h price view into the future, with forecast bars sliding into view to the right as time progresses.
 
 **Responsive ticks:** 4h intervals on screens <520px, 2h on wider screens.
 
@@ -354,6 +351,18 @@ Seven color pairs considered as alternative themes for the dashboard. Each pair 
 ---
 
 ## Future work
+
+### Additional charger delivery handlers
+
+The delivery architecture is designed for easy extension — a new `deliver_<n>.py` with a single `deliver()` function is all that's needed. Candidates researched:
+
+**Easee** — best fit. Official public API (`api.easee.com`), well documented. `set_basic_charge_plan(chargeStartTime, chargeStopTime)` maps directly to our window format. Python library `pyeasee` available on PyPI, or can be implemented with raw `urllib` like the Charge Amps handler. Most popular charger in Norway/Sweden.
+
+**Wallbox** — Python module (`wallbox` on PyPI). Scheduling uses `start`/`stop` as `"HHMM"` strings with a days bitmask — weekly recurring format, not per-night. Less natural fit. API also showing rate limit issues (429) in recent HA reports.
+
+**Zaptec** — official API (`api.zaptec.com`). Scheduling supported on newer chargers. Mix of official and reverse-engineered endpoints. More complex than Easee.
+
+Priority: Easee first, then Zaptec, then Wallbox.
 
 ### SoC-derived required_hours
 
