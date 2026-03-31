@@ -3,7 +3,7 @@
 Charge Amps Schedule Delivery
 ==============================
 Delivers a charging plan to a single Charge Amps charger via the
-my.charge.space internal API.
+my.charge.space API.
 
 Invoked by delivery/deliver.py once per charger ID when handler: chargeamps
 is set inside a charging profile's deliveries in config.yaml.

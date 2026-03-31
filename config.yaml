@@ -29,7 +29,7 @@ charging:
         required_hours: 4.5             # Optional: longer charge on weekends
     deliveries:
       - handler: chargeamps             # → delivery/deliver_chargeamps.py
-        enabled: true 
+        enabled: true
         charge_point_id: CHARGER_ID_1   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
         connector_id: 1                 # typically 1 = type2, 2 = schuko, unless Aura
     #   charging_rate_unit: A           # Charge Amps API accepts only current (A) so no need to configure it here, just an example
@@ -61,7 +61,3 @@ charging:
     #   charging_rate_unit: A           # Charge Amps API accepts only current (A) so no need to configure it here, just an example
         max_charging_rate: 16.0         # amps
         restore_mode: true              # Charge Amps only: delivered schedule always changes the charger mode to "Schedule". Enabling this restores charging mode back to what it was before delivery.
-        
-
-
-
