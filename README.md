@@ -20,7 +20,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Realistic charger behaviour built in.** Independent minimum charging length and minimum gap between charging blocks prevent short on/off cycling — by default the planner won't schedule 15 minutes on, 15 minutes off, on again. The minimum block length and gap are both configurable; the gap can be set to zero if no pause between blocks is needed.
 
-**Previously committed charging is never lost.** Each run reads the previous plan and carries forward any future charging already committed to the charger.
+**Previously committed charging is never lost.** If a new plan is built before all charging slots from the previous plan have taken place, the remaining uncommitted charging time is added on top of the new plan's requirement. The scheduler then finds the cheapest slots for the full combined need — so the charger never loses charging time it was already told to expect.
 
 **Three-level price source fallback for Finland.** ENTSO-E → Sähkötin → nordpool-predict-fi forecast. If ENTSO-E is under maintenance at 14:30, the plan still builds and delivers on time using real Nord Pool prices from Sähkötin. The dashboard warns when the plan is based on forecast rather than confirmed prices.
 
@@ -331,29 +331,5 @@ For a split plan with two windows separated by a gap, the schedule periods alter
 ```
 
 The profile is `TxDefaultProfile` (`Absolute` kind), meaning it applies automatically to any transaction started on the EVSE without needing a transaction ID in advance. OCPP 2.0.1 and 2.1 use `id` instead of `chargingProfileId` — adjust the field name when consuming the profile in your own delivery integration.
-
-## Future work
-
-### Plug & Schedule — SoC-derived required hours
-
-Currently `required_hours` is a static value that must be set conservatively for the worst case (long drive, cold weather, nearly empty battery). This means the planner often schedules more charging than needed, which reduces its ability to find the cheapest windows.
-
-**The goal** is to derive `required_hours` dynamically when the car is plugged in: read the current state of charge and the target SoC from the charger at plan-build time, then calculate the actual energy needed using the car's battery capacity and charging rate. A day with a short commute and 70% remaining SoC would produce a 1h plan; a day starting from 20% would produce a 5h plan. The planner finds the cheapest windows for the actual need — not a worst-case estimate.
-
-The calculation would be approximately:
-
-```
-energy_needed_kwh = (target_soc - current_soc) * battery_capacity_kwh
-charging_rate_kw  = min(max_charging_rate, car_max_charging_rate_kw)
-required_hours    = (energy_needed_kwh / charging_rate_kw) * buffer_factor
-```
-
-The buffer covers charge rate tapering in the upper SoC range, cold-climate derating, and possible load balancing reductions.
-
-`max_charging_rate` is already configured per delivery entry. The only additional static config values needed are `battery_capacity_kwh` and `car_max_charging_rate_kw` — both known per car and set once. The only truly dynamic runtime inputs are `current_soc` and `target_soc`, read from the charger at plan-build time.
-
-**Trigger**: Charge Amps LUNA firmware update to OCPP 2.0.1 or 2.1. These versions provide reliable SoC measurand reporting in `MeterValues` and support the ISO 15118-20 SoC target negotiation between car and charger. OCPP 1.6 has a SoC measurand but its availability depends heavily on the charger and car combination.
-
-`required_hours` will remain as a config fallback for when the car is not plugged in at plan-build time or SoC data is unavailable.
 
 ---

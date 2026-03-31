@@ -443,8 +443,6 @@ def parse_configs(raw: dict) -> "list[Config]":
     return configs
 
 
-
-
 # ===========================================================================
 # ENTSO-E Transparency Platform API
 # ===========================================================================
@@ -1682,7 +1680,6 @@ def _bold(t):   return _c("1",  t)
 def _dim(t):    return _c("2",  t)
 
 
-
 def _window_bar(start_hm: str, end_hm: str, dur_min: int, avg_c: float,
                 min_c: float, max_c: float) -> str:
     """Single-line visual block for a charging window."""
@@ -1754,9 +1751,6 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
 
     print(_bold("  " + "═" * W))
     print()
-
-
-
 
 
 # ===========================================================================
@@ -1884,7 +1878,6 @@ def _check_window_coverage(
 
     log.info("Profile '%s': window coverage %d/%d min (%.0f%%).",
              profile_name, covered_minutes, window_minutes, coverage * 100)
-
 
 
 def _select_slots(
@@ -2025,16 +2018,7 @@ def _load_retained_minutes(output_dir: str, profile_name: str, now_utc: datetime
             )
             # Cap carry-over at the previously retained amount to prevent compounding
             # when the script runs multiple times before charging starts.
-            # retained_minutes is always present in new JSONs (0 when nothing was retained).
-            # For old JSONs with retained_hours (float), convert to minutes.
-            # For old JSONs without either field, fall back to required_minutes — safe since
-            # future_minutes will typically be 0 for completed plans.
-            if "retained_minutes" in prev:
-                minutes = min(future_minutes, prev["retained_minutes"])
-            elif "retained_hours" in prev:
-                minutes = min(future_minutes, int(prev["retained_hours"] * 60))
-            else:
-                minutes = min(future_minutes, prev.get("required_minutes", 0))
+            minutes = min(future_minutes, prev.get("retained_minutes", 0))
             if minutes:
                 log.info("Profile '%s': %d min of future charging retained from %s "
                          "(future slots: %d min).",
@@ -2194,8 +2178,6 @@ def _write_run_outputs(plans: "list[dict]") -> None:
             f.write(f"plan_date={plans[0]['date']}\n")
     except OSError as exc:
         log.warning("Could not write to GITHUB_OUTPUT: %s", exc)
-
-
 
 
 def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
