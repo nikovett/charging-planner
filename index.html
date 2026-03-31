@@ -389,7 +389,7 @@ function renderTimeline(plan, profileName, nowPrice) {
     + visible.map(function(s) {
         var lm      = new Date(s.start_utc).getTime()/60000 + utcOffset;
         var leftPct = ((lm-rangeStart)/totalMins*100).toFixed(4);
-        var h       = (20 + (s.price_cents_kwh-minP)/rangeP*72).toFixed(1);
+        var h       = (10 + (s.price_cents_kwh-minP)/rangeP*80).toFixed(1);
         var isNow   = nowSlot && s.start_utc === nowSlot.start_utc;
         var bg, extra = "";
 
@@ -425,7 +425,7 @@ function renderTimeline(plan, profileName, nowPrice) {
     + '</div>';
 
   // Avg line
-  var avgH = (100 - (plan.price_stats.avg_cents_kwh-minP)/rangeP*72 - 20).toFixed(1);
+  var avgH = (100 - (plan.price_stats.avg_cents_kwh-minP)/rangeP*80 - 10).toFixed(1);
   var avgLine = '<div style="position:absolute;left:0;right:0;top:' + avgH + '%;border-top:1px dashed var(--border2);pointer-events:none"></div>'
               + '<div style="position:absolute;right:4px;bottom:calc(' + (100-parseFloat(avgH)) + '% + 2px);font-family:var(--mono);font-size:7px;color:var(--dim)">avg</div>';
 
@@ -438,6 +438,15 @@ function renderTimeline(plan, profileName, nowPrice) {
     var tpct = ((tm-rangeStart)/totalMins*100).toFixed(2);
     var hh   = Math.floor(((tm%(24*60))+24*60)%(24*60)/60);
     tickHTML += '<span class="tick" style="left:' + tpct + '%">' + String(hh).padStart(2,"0") + ":00</span>";
+  }
+
+  // Price ticks (right edge, 3-4 evenly spaced price labels)
+  var priceTickHTML = "";
+  var pStep = rangeP / 3;
+  for (var pi = 0; pi <= 3; pi++) {
+    var pVal = minP + pStep * pi;
+    var pH = (100 - (10 + (pVal - minP) / rangeP * 80)).toFixed(1);
+    priceTickHTML += '<span style="position:absolute;right:2px;top:' + pH + '%;transform:translateY(-50%);font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1;pointer-events:none">' + pVal.toFixed(1) + '</span>';
   }
 
   // Legend
@@ -455,7 +464,7 @@ function renderTimeline(plan, profileName, nowPrice) {
   return '<div class="timeline-wrap">'
        + '<div class="timeline-label-row"><span>charging slots</span>' + legendHTML + '</div>'
        + '<div class="histogram" style="-webkit-user-select:none;user-select:none;touch-action:pan-y" ontouchmove="histoTouchMove(event,\'' + profileName + '\')" ontouchend="unhoverBar(\'' + profileName + '\')" ontouchcancel="unhoverBar(\'' + profileName + '\')">'
-       + avgLine + barsHTML
+       + avgLine + barsHTML + priceTickHTML
        + '</div>'
        + '<div class="timeline-ticks">' + tickHTML + '</div>'
        + '</div>';
