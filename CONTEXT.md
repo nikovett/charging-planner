@@ -6,7 +6,7 @@ This document captures the full development history, decisions, and current stat
 
 ## What it does
 
-Fetches day-ahead electricity prices and schedules EV charging for the cheapest available hours, automatically, every day. Delivers the schedule to one or more chargers via the Charge Amps internal API. Publishes a GitHub Pages dashboard showing the current plan.
+Fetches day-ahead electricity prices and schedules EV charging for the cheapest available hours, automatically, every day. Delivers the schedule to one or more chargers via the Charge Amps API. Publishes a GitHub Pages dashboard showing the current plan.
 
 ---
 
@@ -52,6 +52,13 @@ DST transition day. PlanParams refactor: renamed `all_prices` → `display_price
 
 **optimal calculation fix**: `optimal_required = p.required_minutes + p.retained_minutes` so optimal covers the same total as scheduled.
 
+### Session 11 — 2026-03-30
+**retained_minutes rename**: `retained_hours` in JSON output renamed to `retained_minutes` — consistent with `required_minutes` and `total_minutes`. Integer minutes, no conversion. `index.html` updated to read `retained_minutes` directly.
+
+**vs optimal in hero**: when a plan has any suboptimal charging slots, hero shows `vs optimal ↑N%` alongside `vs market`. Uses `avg_optimal_price_cents_kwh` from JSON. Condition mirrors the suboptimal legend — only shown when suboptimal slots actually exist. Optimal uses the same mode and constraints as scheduled (continuous_only respected) so the percentage purely reflects the cost of the window constraint.
+
+**cron timing**: GHA consistently fires ~1h after the scheduled UTC time. After DST to EEST (UTC+3), cron set to `30 10 * * *`. Confirmed firing at ~14:30 EEST on both 2026-03-30 and 2026-03-31 — settled. Safe: even without GHA delay, 10:30 UTC lands before ENTSO-E publication at ~11:00 UTC and the fallback chain handles it.
+
 ### Session 12 — 2026-03-31
 
 **Histogram Mode 3**: when now reaches or passes the charging midpoint, the window switches from charge-centered to now-centered (now-12h → now+12h). The window then tracks now in real time, revealing forecast bars to the right as time progresses. Also applied to the no-charging-slots fallback — now-centered ±12h makes more sense than the old now-1h → now+23h since there's nothing to anchor on.
@@ -60,22 +67,11 @@ DST transition day. PlanParams refactor: renamed `all_prices` → `display_price
 
 **forecast augmentation cap corrected**: 12h beyond last real slot (not 24h as previously noted).
 
-### Session 11 — 2026-03-30
-**retained_minutes rename**: `retained_hours` in JSON output renamed to `retained_minutes` — consistent with `required_minutes` and `total_minutes`. Integer minutes, no conversion. `index.html` updated to read `retained_minutes` directly.
-
-**vs optimal in hero**: when a plan has any suboptimal charging slots, hero shows `vs optimal ↑N%` alongside `vs market`. Uses `avg_optimal_price_cents_kwh` from JSON. Condition mirrors the suboptimal legend — only shown when suboptimal slots actually exist. Optimal uses the same mode and constraints as scheduled (continuous_only respected) so the percentage purely reflects the cost of the window constraint.
-
-**cron timing**: GHA consistently fires ~1h after the scheduled UTC time. After DST to EEST (UTC+3), cron set to `30 10 * * *`. Confirmed firing at ~14:30 EEST on both 2026-03-30 and 2026-03-31 — settled. Safe: even without GHA delay, 10:30 UTC lands before ENTSO-E publication at ~11:00 UTC and the fallback chain handles it.
-
 ---
 
-## Charge Amps integration — how it was built
+## Charge Amps integration
 
-The official Charge Amps external API (`eapi.charge.space`) does not support scheduling — confirmed by inspecting the Swagger docs at `https://eapi.charge.space/swagger/v5/swagger.json`. It exposes charger control but not the time-period scheduling needed to deliver a charging plan.
-
-To work around this, we reverse engineered the internal API used by the Charge Amps web portal (`my.charge.space`). By logging in with credentials and inspecting network traffic in browser dev tools, we identified the full flow: email/password authentication returning a bearer token and a separate entitlements token (containing the org UUID needed for subsequent calls), the scheduling endpoint, and the exact payload structure — time periods expressed as `from`/`to` integer offsets in seconds from the window start, a unique string `id` per period, and `maxCurrent`.
-
-`deliver_chargeamps.py` is a headless implementation of this internal API — functionally identical to what the web portal does when a user schedules charging manually, but driven programmatically from the plan JSON.
+The official Charge Amps external API does not support scheduling. `deliver_chargeamps.py` uses the same API as the Charge Amps web portal, authenticating with the user's own credentials and delivering the charging schedule on their behalf.
 
 ---
 
@@ -85,7 +81,7 @@ To work around this, we reverse engineered the internal API used by the Charge A
 charging_planner.py          # Core planner — price fetch, slot selection, plan building
 delivery/
   deliver.py                 # Dispatcher — reads config, calls handlers
-  deliver_chargeamps.py      # Charge Amps internal API handler
+  deliver_chargeamps.py      # Charge Amps API handler
 index.html                   # GitHub Pages dashboard
 config.yaml                  # Configuration (committed with empty secrets)
 .github/workflows/
@@ -268,8 +264,8 @@ ntfy was originally used to notify on delivery failures, forecast prices, and sk
 ### OCPP delivery handler removed
 Requires direct WebSocket access to the charger — fundamentally incompatible with GHA-first architecture. The OCPP `ChargingProfile` object remains in the plan JSON output for any downstream system that wants it.
 
-### Charge Amps uses internal web portal API
-The official external API doesn't support scheduling. We reverse engineered the internal API from browser dev tools network traffic. See "Charge Amps integration" section.
+### Charge Amps uses web portal API
+The official external API doesn't support scheduling. `deliver_chargeamps.py` authenticates with the user's own credentials and delivers schedules the same way the web portal does.
 
 ---
 
