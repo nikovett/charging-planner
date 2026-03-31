@@ -1733,11 +1733,37 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     print()
 
     # Charging summary
+    def _fmt_dur(minutes: int) -> str:
+        h, m = divmod(minutes, 60)
+        return f"{h}h{m:02d}min" if m else f"{h}h"
+
+    indent = "             "  # aligns under the value after "  Scheduled  " and "  Avg price  "
+    retained = plan.get("retained_minutes", 0)
     savings_pct = (1 - avg / ps["avg_cents_kwh"]) * 100 if ps["avg_cents_kwh"] else 0
-    sav_str = (_green(f"  ↓ {savings_pct:.0f}% below market avg") if savings_pct > 5
-               else _dim(f"  ≈ near market avg"))
-    print(f"  {_bold('Scheduled')}  {tot} min of {req} min required{sav_str}")
+
+    # Scheduled line
+    sched_str = _fmt_dur(tot)
+    if tot < req:
+        sched_str += _yellow(f" of {_fmt_dur(req)} required")
+    print(f"  {_bold('Scheduled')}  {sched_str}")
+    if retained:
+        print(f"{indent}{_dim(_fmt_dur(retained) + ' carried over')}")
+    warning = plan.get("plan_warning")
+    if warning:
+        reason = warning.replace("partial plan — ", "")
+        print(f"{indent}{_yellow(reason)}")
+
+    # Avg price line
     print(f"  {_bold('Avg price')}  {_yellow(f'{avg:.2f} c€/kWh')}")
+    if savings_pct > 5:
+        print(f"{indent}{_green(f'↓ {savings_pct:.0f}% below market avg')}")
+    else:
+        print(f"{indent}{_dim('≈ near market avg')}")
+    avg_opt = plan.get("avg_optimal_price_cents_kwh")
+    if avg_opt and avg_opt > 0 and avg > avg_opt:
+        opt_pct = (avg / avg_opt - 1) * 100
+        print(f"{indent}{_dim(f'vs optimal ↑{opt_pct:.0f}%')}")
+
     print()
 
     if wins:

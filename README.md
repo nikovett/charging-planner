@@ -34,8 +34,9 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
   Market prices   0.47 min  1.64 avg  4.27 max  c€/kWh
 
-  Scheduled  4h of 4h required  ↓ 62% below market avg
+  Scheduled  4h
   Avg price  0.62 c€/kWh
+             ↓ 62% below market avg
 
   Charging windows (1):
     03:00–07:00  ████████████████  0.62 c€/kWh  4h00m

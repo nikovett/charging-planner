@@ -59,10 +59,6 @@ DST transition day. PlanParams refactor: renamed `all_prices` → `display_price
 
 **cron timing**: GHA consistently fires ~1h after the scheduled UTC time. After DST to EEST (UTC+3), cron set to `30 10 * * *`. Confirmed firing at ~14:30 EEST on both 2026-03-30 and 2026-03-31 — settled. Safe: even without GHA delay, 10:30 UTC lands before ENTSO-E publication at ~11:00 UTC and the fallback chain handles it.
 
-### Session 13 — 2026-04-01
-
-**Partial window coverage fix**: previously if real prices covered less than 90% of the charging window (e.g. ENTSO-E under maintenance, Sähkötin fallback but prices not yet published), the profile was skipped and no plan was delivered that day. Now the planner supplements the candidate prices with forecast slots to fill the window gap and builds a plan anyway. `price_source` is set to `"forecast"` when forecast slots were used for selection, triggering the dashboard warning. `fetch_forecast_display_slots` cap extended from 12h to 24h to ensure enough forecast coverage for a full overnight window. `_check_window_coverage` now returns `bool` instead of raising — `False` triggers supplementation rather than skipping.
-
 ### Session 12 — 2026-03-31
 
 **Histogram Mode 3**: when now reaches or passes the charging midpoint, the window switches from charge-centered to now-centered (now-12h → now+12h). The window then tracks now in real time, revealing forecast bars to the right as time progresses. Also applied to the no-charging-slots fallback — now-centered ±12h makes more sense than the old now-1h → now+23h since there's nothing to anchor on.
@@ -70,6 +66,37 @@ DST transition day. PlanParams refactor: renamed `all_prices` → `display_price
 **cron confirmed**: `30 10 * * *` fires consistently at ~14:30 EEST. Settled.
 
 **forecast augmentation cap**: confirmed 12h at this point. Extended to 24h in Session 13 to cover full overnight windows when supplementing with forecast.
+
+### Session 13 — 2026-04-01
+
+**v1.0.0 released** — first public release tagged on 2026-04-01. Charge Amps handler tested and supported. See RELEASE_NOTES.md.
+
+**Forecast supplementation for partial window coverage** (major feature): previously if real prices covered less than 90% of the charging window the profile was skipped entirely — no plan, no delivery that day. Root cause: ENTSO-E or Sähkötin only has today's prices when the script runs before Nord Pool publishes (~11:00–12:00 UTC), which can happen on exception days.
+
+Fix: instead of skipping, the planner now supplements candidate prices with forecast slots to fill the window gap and builds a plan on the best available data. `price_source` is set to `"forecast"` when forecast slots were used for selection, triggering the dashboard warning banner. This is the same source used for the full forecast fallback — just applied at the window level rather than the global price fetch level.
+
+`_check_window_coverage` changed from raising `PricesNotYetAvailable` to returning `bool` — `False` triggers supplementation, still raises if no forecast slots are available either. `fetch_forecast_display_slots` cap extended from 12h to 24h to ensure full overnight window coverage (~16h from 14:30 to 06:30).
+
+**`plan_warning` field**: when `total_minutes < required_minutes` the JSON includes a human-readable reason. Two root causes: (1) price ceiling — detected by running a shadow plan without the ceiling; if shadow succeeds, ceiling was the cause → `"partial plan — price limit X c€/kWh"`. (2) data shortage — shadow also fails, or no ceiling set → `"partial plan — required hours exceed boundaries"`. "Boundaries" covers both `preferred_window_end` (the hard spillover limit) and the forecast horizon for `any:any`. Dashboard shows the reason in amber in brackets next to the scheduled hours — no warning emoji since the amber colour already signals the issue.
+
+**Partial plan reasoning**: `preferred_window_end` is the final frontier — spillover fills from outside the window inward but never past the end. Shadow plan uses the same window + slot constraints as the real plan, just removes `max_price_eur`. Symmetric with optimal: optimal removes the window constraint but keeps the ceiling; shadow removes the ceiling but keeps the window.
+
+**Forecast horizon**: nordpool-predict-fi covers ~35h ahead. Display fetch capped at 24h beyond last real slot — enough to cover any overnight window. With `any:any` window the horizon is the only limit.
+
+**GHA failure notifications**: verified — plan cannot be built exits non-zero (`sys.exit(1)`), delivery failure exits non-zero (`sys.exit(0 if ok else 1)`). Both trigger GHA email to operator.
+
+**Bar height scaling**: min price at 10% height, max at 90% (`h = 10 + x*80`). Reverted price ticks experiment — added visual noise without meaningful new information, avg line is sufficient reference.
+
+**Console output updated**: `print_plan_summary` now shows all plan details in an indented layout. Detail lines align under the value at a fixed indent column. Scheduled block shows: duration (with "of Xh required" when partial), carried over minutes, plan warning reason. Avg price block shows: price, savings vs market avg, vs optimal when suboptimal. Example full output:
+
+```
+  Scheduled  1h30m of 2h required
+             30min carried over
+             price limit 2.50 c€/kWh
+  Avg price  1.20 c€/kWh
+             ↓ 40% below market avg
+             vs optimal ↑8%
+```
 
 ---
 
