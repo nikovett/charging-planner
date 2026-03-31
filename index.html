@@ -389,7 +389,7 @@ function renderTimeline(plan, profileName, nowPrice) {
     + visible.map(function(s) {
         var lm      = new Date(s.start_utc).getTime()/60000 + utcOffset;
         var leftPct = ((lm-rangeStart)/totalMins*100).toFixed(4);
-        var h       = (20 + (s.price_cents_kwh-minP)/rangeP*72).toFixed(1);
+        var h       = (10 + (s.price_cents_kwh-minP)/rangeP*80).toFixed(1);
         var isNow   = nowSlot && s.start_utc === nowSlot.start_utc;
         var bg, extra = "";
 
@@ -425,7 +425,7 @@ function renderTimeline(plan, profileName, nowPrice) {
     + '</div>';
 
   // Avg line
-  var avgH = (100 - (plan.price_stats.avg_cents_kwh-minP)/rangeP*72 - 20).toFixed(1);
+  var avgH = (100 - (plan.price_stats.avg_cents_kwh-minP)/rangeP*80 - 10).toFixed(1);
   var avgLine = '<div style="position:absolute;left:0;right:0;top:' + avgH + '%;border-top:1px dashed var(--border2);pointer-events:none"></div>'
               + '<div style="position:absolute;right:4px;bottom:calc(' + (100-parseFloat(avgH)) + '% + 2px);font-family:var(--mono);font-size:7px;color:var(--dim)">avg</div>';
 
