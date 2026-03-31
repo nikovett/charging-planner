@@ -358,7 +358,9 @@ The delivery architecture is designed for easy extension — a new `deliver_<n>.
 
 **Zaptec** — official API (`api.zaptec.com`). Scheduling supported on newer chargers. Mix of official and reverse-engineered endpoints. More complex than Easee.
 
-Priority: Easee first, then Zaptec, then Wallbox.
+**go-e** — has both a local HTTP API (direct to charger IP) and a cloud API (`{serial}.api.v3.go-e.io`) authenticated with a token from the app. Cloud API works from GHA — no local network needed. Scheduling API uses key-value pairs set via GET parameters. V2 API scheduler format needs investigation to confirm it can express arbitrary time windows cleanly. Potential good fit if scheduler keys map well.
+
+Priority: Easee first, then go-e, then Zaptec, then Wallbox.
 
 ### SoC-derived required_hours
 
