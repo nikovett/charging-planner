@@ -642,14 +642,14 @@ def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot
 
     Used to extend the histogram when real price data doesn't yet cover
     tomorrow (i.e. Nord Pool hasn't published yet). Only available for FI.
-    Fetches at most 12 hours beyond `after` — enough to fill the histogram
-    right edge regardless of where the charging midpoint lands.
+    Fetches at most 24 hours beyond `after` — enough to fill the histogram
+    right edge and cover a full overnight window when real prices aren't yet published.
     Returns slots with 15-min resolution, ex-VAT, same structure as real slots.
     Returns empty list on any failure — display augmentation is best-effort.
     """
     if area.upper() not in ("FI", "10YFI-1--------U"):
         return []
-    cap = after + timedelta(hours=12)
+    cap = after + timedelta(hours=24)
     log.info("Fetching forecast display slots after %s (cap %s)",
              after.strftime("%Y-%m-%d %H:%M UTC"), cap.strftime("%H:%M UTC"))
     req = urllib.request.Request(FORECAST_URL, headers={"Accept": "application/json"})
@@ -1855,29 +1855,31 @@ def _check_window_coverage(
     win_start_utc: datetime,
     win_end_utc: datetime,
     profile_name: str,
-) -> None:
-    """Raise PricesNotYetAvailable if fetched prices do not cover the window.
+) -> bool:
+    """Check if fetched prices cover the window. Returns True if coverage is sufficient.
 
     Compares the duration of slots available inside the window against the
     full window length. If coverage is below 90%, prices for this window have
-    not been published yet. The caller handles the exception per-profile so
-    other profiles are not affected.
+    not been published yet — returns False so the caller can supplement with
+    forecast slots rather than skipping the profile entirely.
     """
     window_minutes  = int((win_end_utc - win_start_utc).total_seconds() / 60)
     covered_minutes = sum(s.duration_minutes for s in inside)
     coverage        = covered_minutes / window_minutes if window_minutes else 0.0
 
     if coverage < 0.90:
-        raise PricesNotYetAvailable(
-            f"Profile '{profile_name}': only {covered_minutes} of {window_minutes} min "
-            f"covered in window {win_start_utc.strftime('%H:%M UTC')}–"
-            f"{win_end_utc.strftime('%H:%M UTC')} "
-            f"({coverage*100:.0f}% — prices not yet published). "
-            f"ENTSO-E publishes next-day prices at ~12:00 UTC."
+        log.warning(
+            "Profile '%s': only %d of %d min covered in window %s–%s "
+            "(%d%% — prices not yet fully published). Will supplement with forecast slots.",
+            profile_name, covered_minutes, window_minutes,
+            win_start_utc.strftime("%H:%M UTC"), win_end_utc.strftime("%H:%M UTC"),
+            coverage * 100,
         )
+        return False
 
     log.info("Profile '%s': window coverage %d/%d min (%.0f%%).",
              profile_name, covered_minutes, window_minutes, coverage * 100)
+    return True
 
 
 def _select_slots(
@@ -1888,12 +1890,13 @@ def _select_slots(
     win_start_str:    str,
     win_end_str:      str,
     required_minutes_override: int = None,
-) -> tuple[list[Slot], set]:
-    """Run the full slot-selection pipeline and return selected slots.
+    forecast_slots:   list = None,
+) -> tuple[list[Slot], set, bool]:
+    """Run the full slot-selection pipeline and return (selected, optimal_set, used_forecast).
 
     Pipeline:
-      filter preferred window → greedy cheapest select → spillover fill
-      → gap-merge (if enabled) → coverage warning
+      filter preferred window → check coverage (supplement with forecast if partial)
+      → cheapest select → spillover fill
     """
     inside, outside = filter_preferred_window(
         candidate_prices,
@@ -1903,7 +1906,29 @@ def _select_slots(
         window_end_local=win_end_str,
     )
 
-    _check_window_coverage(inside, win_start_utc, win_end_utc, cfg.name)
+    used_forecast = False
+    if not _check_window_coverage(inside, win_start_utc, win_end_utc, cfg.name):
+        if forecast_slots:
+            # Supplement candidate_prices with forecast slots and re-filter
+            forecast_in_window = [
+                s for s in forecast_slots
+                if s.start >= win_start_utc and s.start < win_end_utc
+            ]
+            log.info("Profile '%s': supplementing with %d forecast slots.",
+                     cfg.name, len(forecast_in_window))
+            combined = candidate_prices + forecast_in_window
+            inside, outside = filter_preferred_window(
+                combined,
+                win_start_utc=win_start_utc,
+                win_end_utc=win_end_utc,
+                window_start_local=win_start_str,
+                window_end_local=win_end_str,
+            )
+            used_forecast = True
+        else:
+            raise PricesNotYetAvailable(
+                f"Profile '{cfg.name}': window not fully covered and no forecast slots available."
+            )
 
     req_min = required_minutes_override if required_minutes_override is not None else cfg.required_minutes
 
@@ -1946,7 +1971,7 @@ def _select_slots(
                 cfg.name, scheduled_min, req_min,
             )
 
-    return selected
+    return selected, used_forecast
 
 
 # ---------------------------------------------------------------------------
@@ -2132,8 +2157,15 @@ def _plan_one_profile(
     base_required = sched_required_minutes if sched_required_minutes is not None else cfg.required_minutes
     effective_required = base_required + retained_minutes
 
-    selected = _select_slots(cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str,
-                             required_minutes_override=effective_required)
+    selected, used_forecast = _select_slots(
+        cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str,
+        required_minutes_override=effective_required,
+        forecast_slots=forecast_display_slots,
+    )
+    if used_forecast and price_source != "forecast":
+        log.warning("Profile '%s': plan built using forecast slots to fill window gap — "
+                    "marking price_source as forecast.", cfg.name)
+        price_source = "forecast"
     windows = merge_continuous_slots(selected)
 
     future_prices = [s for s in display_prices if s.start >= now_utc_plan]
@@ -2218,10 +2250,29 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     plans = []
     skipped = []
 
-    # Check if real prices cover tomorrow — if not, fetch forecast slots for display
-    # This is data-driven: if the last real slot is before (today+1) 12:00 UTC,
-    # Nord Pool hasn't published tomorrow's prices yet and the histogram would
-    # look truncated. Forecast slots are display-only and never used for selection.
+    # If real prices don't reach tomorrow noon UTC, fall through to forecast as price source.
+    # This handles the case where ENTSO-E/Sähkötin fetch succeeded but prices aren't yet
+    # published for tomorrow (e.g. delayed publication after 12:00 UTC).
+    if price_source != "forecast" and all_prices:
+        tomorrow_noon = (datetime.now(tz=timezone.utc).date() + timedelta(days=1))
+        tomorrow_noon_utc = datetime(tomorrow_noon.year, tomorrow_noon.month, tomorrow_noon.day,
+                                     12, 0, tzinfo=timezone.utc)
+        last_slot_start = max(s.start for s in all_prices)
+        if last_slot_start < tomorrow_noon_utc:
+            log.warning(
+                "Real prices only reach %s — tomorrow's prices not yet published. "
+                "Falling through to forecast prices.",
+                last_slot_start.strftime("%Y-%m-%d %H:%M UTC")
+            )
+            try:
+                all_prices = fetch_forecast_prices(cfg0.area)
+                price_source = "forecast"
+                log.info("Using forecast prices as last resort fallback.")
+            except PricesNotYetAvailable as exc:
+                log.warning("%s", exc)
+                sys.exit(1)
+
+    # Fetch forecast slots for histogram display augmentation
     forecast_display_slots: list = []
     if price_source != "forecast" and all_prices:
         last_slot_start = max(s.start for s in all_prices)
@@ -2247,7 +2298,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
             "No profiles could be planned — prices not yet available for any window. "
             "ENTSO-E publishes next-day prices at ~12:00 UTC."
         )
-        sys.exit(0)
+        sys.exit(1)
 
     if skipped:
         log.warning("Skipped profiles (prices not yet available): %s", ", ".join(skipped))

@@ -59,13 +59,17 @@ DST transition day. PlanParams refactor: renamed `all_prices` → `display_price
 
 **cron timing**: GHA consistently fires ~1h after the scheduled UTC time. After DST to EEST (UTC+3), cron set to `30 10 * * *`. Confirmed firing at ~14:30 EEST on both 2026-03-30 and 2026-03-31 — settled. Safe: even without GHA delay, 10:30 UTC lands before ENTSO-E publication at ~11:00 UTC and the fallback chain handles it.
 
+### Session 13 — 2026-04-01
+
+**Partial window coverage fix**: previously if real prices covered less than 90% of the charging window (e.g. ENTSO-E under maintenance, Sähkötin fallback but prices not yet published), the profile was skipped and no plan was delivered that day. Now the planner supplements the candidate prices with forecast slots to fill the window gap and builds a plan anyway. `price_source` is set to `"forecast"` when forecast slots were used for selection, triggering the dashboard warning. `fetch_forecast_display_slots` cap extended from 12h to 24h to ensure enough forecast coverage for a full overnight window. `_check_window_coverage` now returns `bool` instead of raising — `False` triggers supplementation rather than skipping.
+
 ### Session 12 — 2026-03-31
 
 **Histogram Mode 3**: when now reaches or passes the charging midpoint, the window switches from charge-centered to now-centered (now-12h → now+12h). The window then tracks now in real time, revealing forecast bars to the right as time progresses. Also applied to the no-charging-slots fallback — now-centered ±12h makes more sense than the old now-1h → now+23h since there's nothing to anchor on.
 
 **cron confirmed**: `30 10 * * *` fires consistently at ~14:30 EEST. Settled.
 
-**forecast augmentation cap corrected**: 12h beyond last real slot (not 24h as previously noted).
+**forecast augmentation cap**: confirmed 12h at this point. Extended to 24h in Session 13 to cover full overnight windows when supplementing with forecast.
 
 ---
 
@@ -96,7 +100,7 @@ config.yaml                  # Configuration (committed with empty secrets)
 2. **Sähkötin** (`sahkotin.fi/api`) — actual Nord Pool 15-min prices, FI only, no API key. Used transparently.
 3. **nordpool-predict-fi** — ML forecast blended with realized prices. FI only. Tagged `price_source: "forecast"` in plan JSON; triggers dashboard warning.
 
-Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch, up to 12h of forecast slots are fetched beyond the last real slot for display only — grey diagonal bars in the histogram, never used for selection.
+Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch, up to 24h of forecast slots are fetched beyond the last real slot. Primarily display-only (grey diagonal bars in the histogram), but also used for selection when real prices don't fully cover the charging window — in that case `price_source` is set to `"forecast"` and the dashboard warning is shown.
 
 ---
 

@@ -1104,20 +1104,18 @@ class TestSelectWithMinBlock(unittest.TestCase):
         # Should not raise SystemExit
         _check_window_coverage(slots, ws, we, "test")
 
-    def test_empty_slots_raises(self):
+    def test_empty_slots_returns_false(self):
         ws, we = self._window()
-        from charging_planner import _check_window_coverage, PricesNotYetAvailable
-        with self.assertRaises(PricesNotYetAvailable):
-            _check_window_coverage([], ws, we, "test")
+        from charging_planner import _check_window_coverage
+        self.assertFalse(_check_window_coverage([], ws, we, "test"))
 
-    def test_partial_coverage_below_threshold_raises(self):
+    def test_partial_coverage_below_threshold_returns_false(self):
         ws, we = self._window()
         # Only cover 50% of the window
         window_min = int((we - ws).total_seconds() // 60)
         slots = slots_from(ws, window_min // 30)  # half the slots
-        from charging_planner import _check_window_coverage, PricesNotYetAvailable
-        with self.assertRaises(PricesNotYetAvailable):
-            _check_window_coverage(slots, ws, we, "test")
+        from charging_planner import _check_window_coverage
+        self.assertFalse(_check_window_coverage(slots, ws, we, "test"))
 
     def test_coverage_above_threshold_does_not_exit(self):
         ws, we = self._window()
@@ -1145,7 +1143,7 @@ class TestSelectWithMinBlock(unittest.TestCase):
                         "preferred_window_end": "06:30",
                     }],
                 }, output_dir="/tmp")
-        self.assertEqual(ctx.exception.code, 0)
+        self.assertEqual(ctx.exception.code, 1)
 
 # ===========================================================================
 # 10. End-to-end pipeline
