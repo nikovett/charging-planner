@@ -565,10 +565,6 @@ function renderProfile(plan) {
   var retainedStr = (plan.retained_minutes > 0)
     ? ' <span style="color:var(--accent2)">(' + fmtDuration(plan.retained_minutes) + ' carried over)</span>'
     : '';
-  var heroL = '<div class="hero">'
-    + '<div class="hero-label" id="avg-label-' + plan.profile + '">avg scheduled</div>'
-    + '<div class="hero-price accent" id="avg-price-' + plan.profile + '">' + plan.avg_price_cents_kwh.toFixed(2) + ' <span class="hero-unit">c\u20ac/kWh</span></div>'
-    + '<div class="hero-details">'
   var warningStr = '';
   if (plan.plan_warning) {
     var shortWarn = plan.plan_warning.indexOf('price limit') !== -1
@@ -576,6 +572,10 @@ function renderProfile(plan) {
       : 'required hours exceed boundaries';
     warningStr = ' <span style="color:var(--warn)">(' + shortWarn + ')</span>';
   }
+  var heroL = '<div class="hero">'
+    + '<div class="hero-label" id="avg-label-' + plan.profile + '">avg scheduled</div>'
+    + '<div class="hero-price accent" id="avg-price-' + plan.profile + '">' + plan.avg_price_cents_kwh.toFixed(2) + ' <span class="hero-unit">c\u20ac/kWh</span></div>'
+    + '<div class="hero-details">'
     + '<div class="hero-det">scheduled <strong>' + fmtDuration(plan.total_minutes) + (incomplete ? '&thinsp;of&thinsp;' + fmtDuration(plan.required_minutes) : '') + '</strong>' + retainedStr + warningStr + '</div>'
     + '<div class="hero-det">vs market <span class="' + savClass + '">' + savStr + '</span></div>'
     + optStr
