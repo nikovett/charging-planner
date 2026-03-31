@@ -316,6 +316,8 @@ One `plan-{name}.json` file is written per profile:
 
 `retained_minutes` is the number of future charging minutes carried forward from the previous plan. When non-zero, `total_minutes` will exceed `required_minutes` by the same amount.
 
+`plan_warning` is `null` when the plan is complete. When `total_minutes < required_minutes` it contains a human-readable reason: `"partial plan — price limit X c€/kWh"` when `max_price_cents_kwh` is the cause, or `"partial plan — required hours exceed boundaries"` otherwise. The dashboard shows the reason in amber next to the scheduled hours.
+
 Slots with `"forecasted": true` are display-only — they extend the histogram beyond the last real price slot. They are never used for slot selection or optimal calculation.
 
 ### OCPP smart charging

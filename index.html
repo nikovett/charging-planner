@@ -569,7 +569,14 @@ function renderProfile(plan) {
     + '<div class="hero-label" id="avg-label-' + plan.profile + '">avg scheduled</div>'
     + '<div class="hero-price accent" id="avg-price-' + plan.profile + '">' + plan.avg_price_cents_kwh.toFixed(2) + ' <span class="hero-unit">c\u20ac/kWh</span></div>'
     + '<div class="hero-details">'
-    + '<div class="hero-det">scheduled <strong>' + fmtDuration(plan.total_minutes) + (incomplete ? '&thinsp;of&thinsp;' + fmtDuration(plan.required_minutes) : '') + '</strong>' + retainedStr + '</div>'
+  var warningStr = '';
+  if (plan.plan_warning) {
+    var shortWarn = plan.plan_warning.indexOf('price limit') !== -1
+      ? plan.plan_warning.replace('partial plan \u2014 ', '')
+      : 'required hours exceed boundaries';
+    warningStr = ' <span style="color:var(--warn)">(' + shortWarn + ')</span>';
+  }
+    + '<div class="hero-det">scheduled <strong>' + fmtDuration(plan.total_minutes) + (incomplete ? '&thinsp;of&thinsp;' + fmtDuration(plan.required_minutes) : '') + '</strong>' + retainedStr + warningStr + '</div>'
     + '<div class="hero-det">vs market <span class="' + savClass + '">' + savStr + '</span></div>'
     + optStr
     + '</div></div>';

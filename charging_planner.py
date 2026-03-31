@@ -1435,6 +1435,7 @@ class PlanParams:
     continuous_only:        bool            = False
     forecast_slots:         list            = None  # display-only, not used for selection
     retained_minutes:       int             = 0     # future charging minutes carried over from previous plan
+    plan_warning:           Optional[str]   = None  # human-readable reason when total_minutes < required_minutes
 
 
 def build_plan(p: PlanParams) -> dict:
@@ -1556,6 +1557,7 @@ def build_plan(p: PlanParams) -> dict:
         "window_starts_utc":      [w[0].isoformat() for w in p.windows],
         "window_ends_utc":        [w[1].isoformat() for w in p.windows],
         "price_slots":            price_slots,
+        "plan_warning":           p.plan_warning,
         "ocpp_charging_profile":  build_ocpp_charging_profile(
             {"window_starts_utc": [w[0].isoformat() for w in p.windows],
              "window_ends_utc":   [w[1].isoformat() for w in p.windows]},
@@ -2166,6 +2168,34 @@ def _plan_one_profile(
         log.warning("Profile '%s': plan built using forecast slots to fill window gap — "
                     "marking price_source as forecast.", cfg.name)
         price_source = "forecast"
+
+    # Determine plan_warning if scheduled minutes fall short of required
+    total_scheduled = sum(s.duration_minutes for s in selected)
+    plan_warning = None
+    if total_scheduled < effective_required:
+        if cfg.max_price_eur is None:
+            # No price ceiling — shortage is purely due to insufficient price data
+            plan_warning = "partial plan — required hours exceed boundaries"
+            log.warning("Profile '%s': %s", cfg.name, plan_warning)
+        else:
+            # Price ceiling is set — run shadow plan without ceiling to determine cause
+            shadow = select_charging_windows(
+                [s for s in candidate_prices if s.start >= win_start_utc and s.start < win_end_utc],
+                required_minutes=effective_required,
+                continuous_only=cfg.continuous_only,
+                max_price=None,
+                min_slot_minutes=cfg.min_slot_minutes,
+                min_gap_minutes=cfg.min_gap_minutes,
+            )
+            shadow_min = sum(s.duration_minutes for s in shadow)
+            if shadow_min >= effective_required:
+                plan_warning = (
+                    f"partial plan — price limit {cfg.max_price_eur * 100:.2f} c\u20ac/kWh"
+                )
+            else:
+                plan_warning = "partial plan — required hours exceed boundaries"
+            log.warning("Profile '%s': %s", cfg.name, plan_warning)
+
     windows = merge_continuous_slots(selected)
 
     future_prices = [s for s in display_prices if s.start >= now_utc_plan]
@@ -2189,6 +2219,7 @@ def _plan_one_profile(
         min_gap_minutes=cfg.min_gap_minutes,
         continuous_only=cfg.continuous_only,
         forecast_slots=forecast_display_slots,
+        plan_warning=plan_warning,
     ))
     plan["profile"] = cfg.name
 
