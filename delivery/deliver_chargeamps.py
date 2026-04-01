@@ -9,7 +9,7 @@ Invoked by delivery/deliver.py once per charger ID when handler: chargeamps
 is set inside a charging profile's deliveries in config.yaml.
 
 Environment variables:
-    CHARGER_EMAIL       my.charge.space login email
+    CHARGER_USERNAME       my.charge.space login username (email)
     CHARGER_PASSWORD    my.charge.space login password
 
 config.yaml delivery entry:
@@ -130,17 +130,17 @@ def _ca_login() -> tuple[str, str]:
     if "token" in _token_cache and "ent_token" in _token_cache:
         return _token_cache["token"], _token_cache["ent_token"]
 
-    email    = os.environ.get("CHARGER_EMAIL", "")
+    username = os.environ.get("CHARGER_USERNAME", "")
     password = os.environ.get("CHARGER_PASSWORD", "")
-    if not email or not password:
+    if not username or not password:
         raise RuntimeError(
-            "CHARGER_EMAIL and CHARGER_PASSWORD environment variables must be set."
+            "CHARGER_USERNAME and CHARGER_PASSWORD environment variables must be set."
         )
 
     resp = _ca_request(
         "/auth/login",
         method="POST",
-        body={"email": email, "password": password, "hostName": "my.charge.space"},
+        body={"email": username, "password": password, "hostName": "my.charge.space"},
     )
     token = resp.get("token", "")
     if not token:

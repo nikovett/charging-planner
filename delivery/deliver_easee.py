@@ -9,7 +9,7 @@ Invoked by delivery/deliver.py once per charger ID when handler: easee
 is set inside a charging profile's deliveries in config.yaml.
 
 Environment variables:
-    CHARGER_EMAIL       Easee account username (email or phone with country code)
+    CHARGER_USERNAME       Easee account username (email or phone with country code)
     CHARGER_PASSWORD    Easee account password
 
 config.yaml delivery entry:
@@ -126,11 +126,11 @@ def _easee_login() -> str:
     if "token" in _token_cache:
         return _token_cache["token"]
 
-    username = os.environ.get("CHARGER_EMAIL", "")
+    username = os.environ.get("CHARGER_USERNAME", "")
     password = os.environ.get("CHARGER_PASSWORD", "")
     if not username or not password:
         raise RuntimeError(
-            "CHARGER_EMAIL and CHARGER_PASSWORD environment variables must be set."
+            "CHARGER_USERNAME and CHARGER_PASSWORD environment variables must be set."
         )
 
     resp = _easee_request(

@@ -246,7 +246,7 @@ Settings → Secrets and variables → Actions → New repository secret
 | Secret | Value |
 |---|---|
 | `ENTSOE_API_KEY` | Your ENTSO-E security token |
-| `CHARGER_EMAIL` | Charge Amps login email |
+| `CHARGER_USERNAME` | Charge Amps login username (email) |
 | `CHARGER_PASSWORD` | Charge Amps login password |
 | `CHARGER_ID_1` | First charger ID |
 | `CHARGER_ID_2` | Second charger ID (if applicable) |
