@@ -247,6 +247,46 @@ def _ca_get_connector_mode(chargepoint: dict, connector_id: int) -> str | None:
     return None
 
 
+def _ca_is_connector_charging(chargepoint: dict, connector_id: int) -> bool:
+    """Return True if the connector is currently in an active charging session.
+
+    Uses the connector-level `isCharging` boolean field confirmed from the
+    Charge Amps API. Additional diagnostic fields available on the connector:
+      - onBySchedule / offBySchedule: whether schedule is enabling/blocking
+      - ocppStatus: "Charging", "Available", etc.
+      - enabled: whether charger is currently allowed to charge
+    """
+    connectors = chargepoint.get("connectors", [])
+    for c in connectors:
+        if c.get("connectorId") == connector_id:
+            return bool(c.get("isCharging", False))
+    return False
+
+
+def _ca_schedule_override(
+    charge_point_id: str,
+    connector_id: int,
+    token: str,
+    entitlements_token: str,
+) -> None:
+    """Activate schedule override — allows charging outside scheduled windows.
+
+    Used when the charger is actively charging at delivery time and we don't
+    want the newly delivered schedule to interrupt the current session.
+    Equivalent to the "Override" button in the Charge Amps web portal.
+    """
+    _ca_request(
+        f"/chargepoints/{charge_point_id}/{connector_id}/schedule/override",
+        method="PUT",
+        token=token,
+        entitlements_token=entitlements_token,
+    )
+    log.info(
+        "Schedule override activated: charger=%s connector=%s — current session will continue.",
+        charge_point_id, connector_id,
+    )
+
+
 def _ca_set_connector_mode(
     chargepoint: dict,
     connector_id: int,
@@ -338,10 +378,15 @@ def _ca_put_schedule(
 def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> bool:
     """Deliver a plan to a single Charge Amps charger.
 
-    Reads the connector mode before delivering the schedule and restores it
-    afterwards if it was not already "Schedule". This prevents the delivery
-    from silently switching the charger into schedule mode when the user had
-    it set to "On" or "Off".
+    Always reads connector state before delivery. Two behaviours follow:
+
+    - If the car is actively charging (isCharging=true), activates schedule
+      override after delivery so the current session is not interrupted by
+      the newly delivered schedule.
+
+    - If restore_mode=true and the mode was not already "Schedule", restores
+      the original mode (On/Off) after delivery so the charger returns to its
+      previous behaviour outside of scheduled windows.
 
     Args:
         plan:             Plan dict as produced by charging_planner.py.
@@ -362,20 +407,22 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
         log.error("Charge Amps login failed: %s", exc)
         return False
 
-    # Read current connector mode before touching the schedule (if restore enabled)
-    original_mode = None
-    chargepoint   = None
-    if restore_mode:
-        try:
-            chargepoint   = _ca_get_chargepoint(charge_point_id, token, ent_token)
-            original_mode = _ca_get_connector_mode(chargepoint, connector_id)
-            log.info(
-                "Connector mode before delivery: charger=%s connector=%s  mode=%s",
-                charge_point_id, connector_id, original_mode,
-            )
-        except Exception as exc:
-            log.error("Failed to read charger state for '%s': %s", charge_point_id, exc)
-            return False
+    # Read current connector state before touching the schedule.
+    # Always needed — to detect active charging for override, and for mode restore if enabled.
+    original_mode  = None
+    was_charging   = False
+    chargepoint    = None
+    try:
+        chargepoint   = _ca_get_chargepoint(charge_point_id, token, ent_token)
+        original_mode = _ca_get_connector_mode(chargepoint, connector_id)
+        was_charging  = _ca_is_connector_charging(chargepoint, connector_id)
+        log.info(
+            "Connector state before delivery: charger=%s connector=%s  mode=%s  charging=%s",
+            charge_point_id, connector_id, original_mode, was_charging,
+        )
+    except Exception as exc:
+        log.error("Failed to read charger state for '%s': %s", charge_point_id, exc)
+        return False
 
     # Deliver the schedule
     try:
@@ -405,5 +452,17 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
                 "Mode already 'Schedule' for charger=%s connector=%s — no restore needed.",
                 charge_point_id, connector_id,
             )
+
+    # If the car was actively charging when we delivered, activate schedule override
+    # so the current session is not interrupted by the newly delivered schedule.
+    if was_charging:
+        try:
+            _ca_schedule_override(charge_point_id, connector_id, token, ent_token)
+        except Exception as exc:
+            log.warning(
+                "Schedule delivered but override activation failed for charger '%s': %s",
+                charge_point_id, exc,
+            )
+            # Schedule was delivered successfully — still return True
 
     return True
