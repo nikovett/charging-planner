@@ -247,6 +247,61 @@ def _ca_get_connector_mode(chargepoint: dict, connector_id: int) -> str | None:
     return None
 
 
+def _ca_is_connector_charging(chargepoint: dict, connector_id: int) -> bool:
+    """Return True if the connector is currently in an active charging session.
+
+    Uses the connector-level `isCharging` boolean field from the Charge Amps API.
+    """
+    connectors = chargepoint.get("connectors", [])
+    for c in connectors:
+        if c.get("connectorId") == connector_id:
+            return bool(c.get("isCharging", False))
+    return False
+
+
+def _ca_schedule_override(
+    charge_point_id: str,
+    connector_id: int,
+    token: str,
+    entitlements_token: str,
+) -> None:
+    """Activate schedule override — allows charging outside scheduled windows.
+
+    Used when the charger is actively charging at delivery time and we don't
+    want the newly delivered schedule to interrupt the current session.
+    Equivalent to the "Override" button in the Charge Amps web portal.
+
+    Known 400 responses treated as success:
+    - OverridingScheduleExists: override already active, session protected
+    - NoScheduleForConnector: no active schedule to override (isActive=false case)
+    """
+    try:
+        _ca_request(
+            f"/chargepoints/{charge_point_id}/{connector_id}/schedule/override",
+            method="PUT",
+            token=token,
+            entitlements_token=entitlements_token,
+        )
+        log.info(
+            "Schedule override activated: charger=%s connector=%s — current session will continue.",
+            charge_point_id, connector_id,
+        )
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        if e.code == 400 and "OverridingScheduleExists" in body:
+            log.info(
+                "Schedule override already active: charger=%s connector=%s — session unaffected.",
+                charge_point_id, connector_id,
+            )
+        elif e.code == 400 and "NoScheduleForConnector" in body:
+            log.info(
+                "No active schedule on charger=%s connector=%s — override not needed.",
+                charge_point_id, connector_id,
+            )
+        else:
+            raise
+
+
 def _ca_set_connector_mode(
     chargepoint: dict,
     connector_id: int,
@@ -307,7 +362,7 @@ def _ca_put_schedule(
         "validTo":         None,
         "defaultCurrent":  0.0,
         "schedulePeriods": periods,
-        "isActive":        False,
+        "isActive":        True,
         "isSynced":        False,
         "timeZone":        tz_name,
         "startOfSchedule": anchor_iso,
@@ -338,14 +393,18 @@ def _ca_put_schedule(
 def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> bool:
     """Deliver a plan to a single Charge Amps charger.
 
-    If restore_mode=true, reads the connector mode before delivery and restores
-    it afterwards if it was not already "Schedule". This prevents the delivery
-    from silently leaving the charger in schedule mode when the user had it set
-    to "On" or "Off".
+    Always reads connector state before delivery. Two post-delivery actions:
 
-    The schedule is delivered with isActive=false so the windows are stored but
-    not immediately enforced — the charger mode still switches to Schedule, but
-    any active charging session is not interrupted.
+    1. If the car is actively charging (isCharging=true), activates schedule
+       override so the current session is not interrupted by the newly delivered
+       schedule. Override expires automatically when the cable is disconnected.
+
+    2. If restore_mode=true and the original mode was not "Schedule", restores
+       the mode (On/Off) after delivery.
+
+    The schedule is delivered with isActive=true so windows are enforced
+    immediately. Confirmed: isActive=false causes the schedule to be ignored
+    entirely — charger behaves as always-on regardless of windows.
 
     Args:
         plan:             Plan dict as produced by charging_planner.py.
@@ -366,20 +425,21 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
         log.error("Charge Amps login failed: %s", exc)
         return False
 
-    # Read current connector mode before touching the schedule (if restore enabled)
+    # Always read connector state — needed for override detection and mode restore.
     original_mode = None
+    was_charging  = False
     chargepoint   = None
-    if restore_mode:
-        try:
-            chargepoint   = _ca_get_chargepoint(charge_point_id, token, ent_token)
-            original_mode = _ca_get_connector_mode(chargepoint, connector_id)
-            log.info(
-                "Connector mode before delivery: charger=%s connector=%s  mode=%s",
-                charge_point_id, connector_id, original_mode,
-            )
-        except Exception as exc:
-            log.error("Failed to read charger state for '%s': %s", charge_point_id, exc)
-            return False
+    try:
+        chargepoint   = _ca_get_chargepoint(charge_point_id, token, ent_token)
+        original_mode = _ca_get_connector_mode(chargepoint, connector_id)
+        was_charging  = _ca_is_connector_charging(chargepoint, connector_id)
+        log.info(
+            "Connector state before delivery: charger=%s connector=%s  mode=%s  charging=%s",
+            charge_point_id, connector_id, original_mode, was_charging,
+        )
+    except Exception as exc:
+        log.error("Failed to read charger state for '%s': %s", charge_point_id, exc)
+        return False
 
     # Deliver the schedule
     try:
@@ -408,6 +468,16 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
             log.info(
                 "Mode already 'Schedule' for charger=%s connector=%s — no restore needed.",
                 charge_point_id, connector_id,
+            )
+
+    # If actively charging at delivery time, activate override to protect current session.
+    if was_charging:
+        try:
+            _ca_schedule_override(charge_point_id, connector_id, token, ent_token)
+        except Exception as exc:
+            log.warning(
+                "Schedule delivered but override activation failed for charger '%s': %s",
+                charge_point_id, exc,
             )
 
     return True
