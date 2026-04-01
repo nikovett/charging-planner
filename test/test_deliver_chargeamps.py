@@ -407,16 +407,14 @@ class TestDeliver(unittest.TestCase):
                 result = deliver(self.PLAN, self.CP_ID, self.ENTRY, self.TZ)
         self.assertTrue(result)
 
-    def test_restore_mode_false_skips_set_but_still_reads(self):
-        """When restore_mode is false, mode is not restored but chargepoint is still
-        read to detect active charging for schedule override."""
+    def test_restore_mode_false_skips_get_and_set(self):
+        """When restore_mode is false, chargepoint should not be fetched and mode not restored."""
         entry = make_entry(connector_id=1, max_charging_rate=16.0, restore_mode=False)
         with self._mock_login(), self._mock_put():
-            with mock.patch("deliver_chargeamps._ca_get_chargepoint",
-                            return_value=_make_chargepoint(mode="On")) as mock_get, \
+            with mock.patch("deliver_chargeamps._ca_get_chargepoint") as mock_get, \
                  mock.patch("deliver_chargeamps._ca_set_connector_mode") as mock_set:
                 result = deliver(self.PLAN, self.CP_ID, entry, self.TZ)
-                mock_get.assert_called_once()
+                mock_get.assert_not_called()
                 mock_set.assert_not_called()
         self.assertTrue(result)
 
