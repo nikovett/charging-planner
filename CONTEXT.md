@@ -71,6 +71,8 @@ DST transition day. PlanParams refactor: renamed `all_prices` → `display_price
 
 **v1.0.0 released** — first public release tagged on 2026-04-01. Charge Amps handler tested and supported. See RELEASE_NOTES.md.
 
+**v1.1.0 released** — forecast supplementation for partial window coverage. See RELEASE_NOTES_v1.1.0.md.
+
 **Forecast supplementation for partial window coverage** (major feature): previously if real prices covered less than 90% of the charging window the profile was skipped entirely — no plan, no delivery that day. Root cause: ENTSO-E or Sähkötin only has today's prices when the script runs before Nord Pool publishes (~11:00–12:00 UTC), which can happen on exception days.
 
 Fix: instead of skipping, the planner now supplements candidate prices with forecast slots to fill the window gap and builds a plan on the best available data. `price_source` is set to `"forecast"` when forecast slots were used for selection, triggering the dashboard warning banner. This is the same source used for the full forecast fallback — just applied at the window level rather than the global price fetch level.
@@ -97,6 +99,24 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
              ↓ 40% below market avg
              vs optimal ↑8%
 ```
+
+### Session 14 — 2026-04-01
+
+**Plan comparisons feature** (v1.2.0): two background comparisons now run on every plan build, documented together as a unified feature.
+
+- **Optimal comparison** (existing but newly documented): finds cheapest slots ignoring preferred window, same price ceiling and slot constraints. Result is `avg_optimal_price_cents_kwh` and `optimal` flag per slot. Dashboard shows `vs optimal ↑N%` when window forced suboptimal choices.
+- **Price ceiling comparison** (new): when plan is partial and price ceiling is set, reruns selection without ceiling. If it succeeds → `plan_warning: "partial plan — price limit X c€/kWh"`. If it also fails or no ceiling → `plan_warning: "partial plan — required hours exceed boundaries"`. Covers both short window and `any:any` hitting forecast horizon. Dashboard shows reason in amber next to scheduled hours.
+- Both comparisons documented in README under "Plan comparisons" section.
+- Terminology: "comparison plan" not "shadow plan" in all external-facing text.
+
+**Console output** (`print_plan_summary`): redesigned to indented layout. Scheduled block: duration, carried over, plan warning. Avg price block: price, vs market, vs optimal. Each detail on its own indented line aligned under the value.
+
+**Histogram bar scaling**: min 10%, max 90% (`h = 10 + x*80`). Reverted price ticks — noise without value.
+
+**SoC-derived required_hours** removed from roadmap — not feasible with this project's cloud API architecture. OCPP SoC data stays inside the charger firmware loop; becoming an OCPP server is out of scope. Documented in future work for completeness.
+
+**v1.2.0 drafted** — covers plan comparisons, console output improvements, histogram scaling.
+
 
 ---
 
@@ -387,16 +407,16 @@ The delivery architecture is designed for easy extension — a new `deliver_<n>.
 
 **Wallbox** — Python module (`wallbox` on PyPI). Scheduling uses `start`/`stop` as `"HHMM"` strings with a days bitmask — weekly recurring format, not per-night. Less natural fit. API also showing rate limit issues (429) in recent HA reports.
 
-**Zaptec** — official API (`api.zaptec.com`). Scheduling supported on newer chargers. Mix of official and reverse-engineered endpoints. More complex than Easee.
+**Zaptec** — official well-documented API (`api.zaptec.com`), OAuth2, no reverse engineering needed. However scheduling is not a native API concept — the integration model is dynamic current control (`AvailableCurrent` via `/api/installation/{id}/update`) rather than delivering discrete on/off windows. Time-based charging would require sending start/stop commands at the right times from an always-on process, which is fundamentally incompatible with the GHA cron architecture. **Not a viable handler for this project.**
 
 **go-e** — has both a local HTTP API (direct to charger IP) and a cloud API (`{serial}.api.v3.go-e.io`) authenticated with a token from the app. Cloud API works from GHA — no local network needed. Scheduling API uses key-value pairs set via GET parameters. V2 API scheduler format needs investigation to confirm it can express arbitrary time windows cleanly. Potential good fit if scheduler keys map well.
 
-Priority: Easee first, then go-e, then Zaptec, then Wallbox.
+Priority: Easee first, then go-e. Zaptec not viable (no native schedule delivery). Wallbox low priority (weekly recurring schedule model, poor fit).
 
 ### SoC-derived required_hours
 
-Currently `required_hours` is a static config value set conservatively for the worst case. The goal is to derive it dynamically at plan-build time from the car's current state of charge and target SoC, read from the charger via OCPP 2.0.1 or 2.1.
+Currently `required_hours` is a static config value set conservatively for the worst case. Deriving it dynamically from the car's actual state of charge would make the planner genuinely autonomous — a short commute day with 70% remaining SoC would produce a 1h plan; starting from 20% would produce a 5h plan.
 
-**Trigger:** Charge Amps LUNA firmware update to OCPP 2.0.1 or 2.1 — these versions provide reliable SoC measurand reporting. OCPP 1.6 has a SoC measurand but availability varies by charger/car combination.
+**Why this is unlikely for this project:** This tool sits outside the charger's firmware loop, using cloud APIs. SoC data from OCPP 2.0.1/2.1 is communicated internally between the car and charger — charger manufacturers are unlikely to expose it via their external API. The alternative would be to pivot to an OCPP server that communicates directly with the charger, but that is not the intention of this project.
 
-`required_hours` will remain as a config fallback for when the car is not plugged in at plan-build time or SoC data is unavailable.
+`required_hours` will remain a static config value. The feature is documented here for completeness but is not on the roadmap.
