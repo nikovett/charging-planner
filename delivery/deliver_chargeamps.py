@@ -274,17 +274,30 @@ def _ca_schedule_override(
     Used when the charger is actively charging at delivery time and we don't
     want the newly delivered schedule to interrupt the current session.
     Equivalent to the "Override" button in the Charge Amps web portal.
+
+    If an override is already active (OverridingScheduleExists), treats it
+    as success — the session is already protected.
     """
-    _ca_request(
-        f"/chargepoints/{charge_point_id}/{connector_id}/schedule/override",
-        method="PUT",
-        token=token,
-        entitlements_token=entitlements_token,
-    )
-    log.info(
-        "Schedule override activated: charger=%s connector=%s — current session will continue.",
-        charge_point_id, connector_id,
-    )
+    try:
+        _ca_request(
+            f"/chargepoints/{charge_point_id}/{connector_id}/schedule/override",
+            method="PUT",
+            token=token,
+            entitlements_token=entitlements_token,
+        )
+        log.info(
+            "Schedule override activated: charger=%s connector=%s — current session will continue.",
+            charge_point_id, connector_id,
+        )
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        if e.code == 400 and "OverridingScheduleExists" in body:
+            log.info(
+                "Schedule override already active: charger=%s connector=%s — session unaffected.",
+                charge_point_id, connector_id,
+            )
+        else:
+            raise
 
 
 def _ca_set_connector_mode(
