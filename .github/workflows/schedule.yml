@@ -35,7 +35,7 @@ jobs:
         if: steps.plan.outputs.prices_available == 'true'
         env:
           # Charge Amps credentials (used by deliver_chargeamps.py)
-          CHARGER_EMAIL:    ${{ secrets.CHARGER_EMAIL }}
+          CHARGER_USERNAME:    ${{ secrets.CHARGER_USERNAME }}
           CHARGER_PASSWORD: ${{ secrets.CHARGER_PASSWORD }}
           # Charger IDs — shared across all handlers; add more as needed
           CHARGER_ID_1:     ${{ secrets.CHARGER_ID_1 }}
