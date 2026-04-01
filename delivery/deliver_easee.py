@@ -190,12 +190,14 @@ def _easee_put_weekly_plan(
     Maps each window to the correct day of the week (0=Monday). Clears all
     other days. The weekly plan uses UTC times in "HH:MMZ" format.
 
-    Limitation: the weekly plan is recurring — it will repeat the same
-    windows every week until changed. For a daily-changing split plan this
-    is less ideal than the basic plan, but it is the only API that supports
-    multiple windows. The next day's run will overwrite it.
+    Replaces the entire weekly schedule — all other days are cleared. This
+    is intentional: the planner owns the full schedule state and daily
+    delivery overwrites the previous plan. Manual adjustments made via the
+    Easee app are valid until the next run. Consistent with the Charge Amps
+    handler which takes the same approach.
 
-    Also note: the weekly plan supports at most 2 ranges per day.
+    The weekly plan is recurring — it repeats until overwritten by the next
+    daily run. At most 2 ranges per day are supported by the API.
     """
     # Build a full 7-day structure with all days empty
     days: list[dict] = [{"dayOfWeek": d, "ranges": []} for d in range(7)]
