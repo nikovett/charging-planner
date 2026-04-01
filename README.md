@@ -192,7 +192,7 @@ If all three sources fail, the script exits with a non-zero code so the GHA run 
 
 Both ENTSO-E and Sähkötin return price slots from the previous evening onwards, including historical prices. This gives the dashboard histogram enough data to the left of "now" for context.
 
-After every successful real-price fetch, the planner always fetches up to 12 hours of forecast data from nordpool-predict-fi beyond the last real price slot. These slots are **display-only** — they are never used for slot selection or optimal calculation. They appear as grey diagonal-striped bars in the histogram with a "forecast" legend entry, making it clear they are estimates rather than confirmed prices. This ensures the right side of the histogram is always filled, even when charging slots fall late the following day.
+After every successful real-price fetch, the planner always fetches up to 24 hours of forecast data from nordpool-predict-fi beyond the last real price slot. These slots are primarily **display-only** — they appear as grey diagonal-striped bars in the histogram. They are also used for slot selection when real prices don't fully cover the charging window (see fallback price sources), in which case `price_source` is set to `"forecast"`.
 
 ## Dashboard
 
@@ -317,9 +317,17 @@ One `plan-{name}.json` file is written per profile:
 
 `retained_minutes` is the number of future charging minutes carried forward from the previous plan. When non-zero, `total_minutes` will exceed `required_minutes` by the same amount.
 
-`plan_warning` is `null` when the plan is complete. When `total_minutes < required_minutes` it contains a human-readable reason: `"partial plan — price limit X c€/kWh"` when `max_price_cents_kwh` is the cause, or `"partial plan — required hours exceed boundaries"` otherwise. The dashboard shows the reason in amber next to the scheduled hours.
+`plan_warning` is `null` when the plan is complete. When `total_minutes < required_minutes` it contains a human-readable reason: `"partial plan — price limit X c€/kWh"` or `"partial plan — required hours exceed boundaries"`. See Plan comparisons for how the cause is determined. The dashboard shows the reason in amber next to the scheduled hours.
 
 Slots with `"forecasted": true` are display-only — they extend the histogram beyond the last real price slot. They are never used for slot selection or optimal calculation.
+
+### Plan comparisons
+
+Every time a plan is built, the planner runs two background comparisons.
+
+**Optimal comparison** — finds the cheapest possible slots ignoring the preferred window constraint, with all other settings (price ceiling, `continuous_only`, `min_slot_minutes`, `min_gap_minutes`) kept intact. The result is `avg_optimal_price_cents_kwh` and the `optimal` flag on each slot in `price_slots`. The dashboard shows `vs optimal ↑N%` when the window constraint forced suboptimal choices — if scheduled and optimal are the same, the window contained the cheapest slots anyway and no comparison is shown.
+
+**Price ceiling comparison** — only runs when the plan is partial (`total_minutes < required_minutes`) and `max_price_cents_kwh` is set. Runs the same plan without the price ceiling. If it succeeds, the ceiling was the limiting factor → `plan_warning: "partial plan — price limit X c€/kWh"`. If it also fails, the shortage is due to insufficient slots in the window → `plan_warning: "partial plan — required hours exceed boundaries"`.
 
 ### OCPP smart charging
 

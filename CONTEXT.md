@@ -79,7 +79,7 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
 
 **`plan_warning` field**: when `total_minutes < required_minutes` the JSON includes a human-readable reason. Two root causes: (1) price ceiling — detected by running a shadow plan without the ceiling; if shadow succeeds, ceiling was the cause → `"partial plan — price limit X c€/kWh"`. (2) data shortage — shadow also fails, or no ceiling set → `"partial plan — required hours exceed boundaries"`. "Boundaries" covers both `preferred_window_end` (the hard spillover limit) and the forecast horizon for `any:any`. Dashboard shows the reason in amber in brackets next to the scheduled hours — no warning emoji since the amber colour already signals the issue.
 
-**Partial plan reasoning**: `preferred_window_end` is the final frontier — spillover fills from outside the window inward but never past the end. Shadow plan uses the same window + slot constraints as the real plan, just removes `max_price_eur`. Symmetric with optimal: optimal removes the window constraint but keeps the ceiling; shadow removes the ceiling but keeps the window.
+**Partial plan reasoning**: `preferred_window_end` is the final frontier — spillover fills from outside the window inward but never past the end. Comparison plan uses the same window + slot constraints, just removes `max_price_eur`. Symmetric with optimal: optimal removes the window constraint but keeps the ceiling; comparison removes the ceiling but keeps the window.
 
 **Forecast horizon**: nordpool-predict-fi covers ~35h ahead. Display fetch capped at 24h beyond last real slot — enough to cover any overnight window. With `any:any` window the horizon is the only limit.
 

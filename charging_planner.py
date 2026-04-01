@@ -2204,8 +2204,8 @@ def _plan_one_profile(
             plan_warning = "partial plan — required hours exceed boundaries"
             log.warning("Profile '%s': %s", cfg.name, plan_warning)
         else:
-            # Price ceiling is set — run shadow plan without ceiling to determine cause
-            shadow = select_charging_windows(
+            # Price ceiling is set — run comparison plan without ceiling to determine cause
+            comparison = select_charging_windows(
                 [s for s in candidate_prices if s.start >= win_start_utc and s.start < win_end_utc],
                 required_minutes=effective_required,
                 continuous_only=cfg.continuous_only,
@@ -2213,8 +2213,8 @@ def _plan_one_profile(
                 min_slot_minutes=cfg.min_slot_minutes,
                 min_gap_minutes=cfg.min_gap_minutes,
             )
-            shadow_min = sum(s.duration_minutes for s in shadow)
-            if shadow_min >= effective_required:
+            comparison_min = sum(s.duration_minutes for s in comparison)
+            if comparison_min >= effective_required:
                 plan_warning = (
                     f"partial plan — price limit {cfg.max_price_eur * 100:.2f} c\u20ac/kWh"
                 )
