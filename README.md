@@ -14,7 +14,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Works with any car.** The planner schedules the charger, not the car. No car integration, no brand-specific API, no pairing required. Swap cars and nothing changes — the charger infrastructure stays the same and the planner keeps working exactly as before.
 
-**Modular charger delivery.** Each charger type is a small handler script with a single deliver function. A Charge Amps handler is included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
+**Modular charger delivery.** Each charger type is a small handler script with a single deliver function. Charge Amps and Easee handlers are included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
 
 **Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging window; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file. Both the preferred charging window and required hours can be configured per day of the week within each profile.
 
@@ -166,9 +166,12 @@ Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` bloc
 
 | Handler | Script | Description |
 |---|---|---|
-| `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API |
+| `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API — tested and supported |
+| `easee` | `delivery/deliver_easee.py` | Delivers via the official Easee API — untested |
 
-The `chargeamps` handler supports one additional option: `restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
+The `chargeamps` handler always reads the connector state before delivery. If the car is actively charging, schedule override is activated after delivery so the current session is not interrupted — the override expires automatically when the cable is disconnected.
+
+`restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
 
 New handlers can be added by creating a `deliver_<n>.py` script in the `delivery/` directory with a single `deliver(plan, charge_point_id, entry, timezone) -> bool` function — the dispatcher handles the rest automatically.
 
@@ -246,8 +249,8 @@ Settings → Secrets and variables → Actions → New repository secret
 | Secret | Value |
 |---|---|
 | `ENTSOE_API_KEY` | Your ENTSO-E security token |
-| `CHARGER_USERNAME` | Charge Amps login username (email) |
-| `CHARGER_PASSWORD` | Charge Amps login password |
+| `CHARGER_USERNAME` | Charge Amps or Easee login username (email or phone number) |
+| `CHARGER_PASSWORD` | Charge Amps or Easee login password |
 | `CHARGER_ID_1` | First charger ID |
 | `CHARGER_ID_2` | Second charger ID (if applicable) |
 

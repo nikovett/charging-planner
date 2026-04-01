@@ -130,7 +130,21 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
 
 ## Charge Amps integration
 
-The official Charge Amps external API does not support scheduling. `deliver_chargeamps.py` uses the same API as the Charge Amps web portal, authenticating with the user's own credentials and delivering the charging schedule on their behalf.
+The official Charge Amps external API (`eapi.charge.space`) does not support scheduling, override control, or connector state reading — it only exposes basic charger control. Everything we use — schedule delivery, mode detection and restore, active charging detection, override activation — is only available via the web portal API (`my.charge.space`), which is the same API the Charge Amps web app uses. `deliver_chargeamps.py` authenticates with the user's own credentials and uses this portal API directly.
+
+Without portal API access none of the sophisticated session protection logic would be possible — the external API simply doesn't expose these capabilities.
+
+**Schedule delivery always switches to Schedule mode.** The schedule PUT switches the charger to Schedule mode regardless of `isActive` value and regardless of what mode it was in before. `isActive: true` → mode switches AND windows are immediately enforced (charging stops if now is outside a window). `isActive: false` → mode switches but windows are NOT enforced — charging continues but tonight's schedule won't fire either. Tested both variants. `isActive: true` is correct. This behaviour is not a bug in our delivery; the web portal is identical (confirmed by network capture).
+
+**Override error codes**: `OverridingScheduleExists` (400) — override already active, treat as success. `NoScheduleForConnector` (400) — schedule was delivered with `isActive: false` or no schedule exists, override not applicable, treat as success.
+
+**Override mechanism.** `deliver_chargeamps.py` always reads the connector state (`isCharging`) before delivery. If the car is actively charging, schedule override is activated after delivery via `PUT /api/chargepoints/{id}/{connector_id}/schedule/override`. This tells the charger to ignore the schedule for the current session. If an override is already active, the API returns `{"error":"OverridingScheduleExists"}` which is treated as success — the session was already protected. Override is automatically cleared when the cable is disconnected, so the next session will follow the schedule normally.
+
+**Connector state fields** (confirmed from live API response):
+- `isCharging` — boolean, true when car is actively charging. Used to decide whether to activate override.
+- `onBySchedule` / `offBySchedule` — whether schedule is currently enabling or blocking charging
+- `mode` — `"On"`, `"Off"`, or `"Schedule"`
+- `ocppStatus` — `"Charging"`, `"Available"`, etc.
 
 ---
 
