@@ -117,6 +117,14 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
 
 **v1.2.0 drafted** — covers plan comparisons, console output improvements, histogram scaling.
 
+**Easee delivery handler** (`deliver_easee.py`): first version written based on official Easee API documentation. No extra dependencies — raw `urllib` like Charge Amps. Auth: POST `/api/accounts/login` with `CHARGER_USERNAME`/`CHARGER_PASSWORD`, returns bearer token cached for process lifetime. Single window → Basic Charge Plan (`/api/chargers/{id}/basic_charge_plan`, `repeat: false`, specific datetime). Multiple windows → Weekly Charge Plan (`/api/chargers/{id}/weekly_charge_plan`, full 7-day replacement, same contract as Charge Amps). Marked untested in docstring. Uses same env vars as Charge Amps (`CHARGER_USERNAME`, `CHARGER_PASSWORD`, `CHARGER_ID_<N>`).
+
+**`CHARGER_EMAIL` → `CHARGER_USERNAME`**: renamed across all files (handlers, tests, schedule.yml, README, delivery README) — more generic, works for both email and phone number login.
+
+**delivery/README.md updated**: OCPP handler removed, Easee handler added with untested warning, `CHARGER_USERNAME` throughout.
+
+**Zaptec assessed as not viable**: official API is well documented but scheduling is not a native concept — dynamic current control only, no discrete on/off windows. Would require an always-on process. Removed from priority list.
+
 
 ---
 
