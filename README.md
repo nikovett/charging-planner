@@ -260,7 +260,7 @@ Never commit secrets to the repository. All sensitive values are injected at run
 
 The workflow runs daily at 10:30 UTC. GHA consistently delays ~1 hour, landing at ~14:30 Helsinki time in summer (EEST, UTC+3). Prices publish at ~11:00 UTC so even without GHA delay the run lands after publication.
 
-If extra certaintty is needed, the running of the workflow can be postponed by adjusting cron to ensure prices are for sure published. Adjust based on when your car is typically home and could already start charging.
+If extra certainty is needed, the running of the workflow can be postponed by adjusting cron to ensure prices are for sure published. Adjust based on when your car is typically home and could already start charging.
 
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 
