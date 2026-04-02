@@ -169,7 +169,7 @@ Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` bloc
 | `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API — tested and supported |
 | `easee` | `delivery/deliver_easee.py` | Delivers via the official Easee API — untested |
 
-Due to the peculiar operation of the `chargeamps` scheduling, there are two extra features implemented for its handler. The pecularity is that `chargeamps` always changes the charger mode to `Schedule` when charging plan is created. It doesn't matter if it is done manually from Web or App UI or programmatically. Even if car is currently charging and the end-user creates a new schedule, the charging is interrupted by the newly active schedule (unless it contains active charging slot "now"). Only way to continue charging session is to activate `schedule override`.
+Due to the peculiar operation of the `chargeamps` scheduling, there are two extra features implemented for its handler. The peculiarity is that `chargeamps` always changes the charger mode to `Schedule` when charging plan is created. It doesn't matter if it is done manually from Web or App UI or programmatically. Even if car is currently charging and the end-user creates a new schedule, the charging is interrupted by the newly active schedule (unless it contains active charging slot "now"). Only way to continue charging session is to activate `schedule override`.
 
 The `chargeamps` handler always reads the connector state before delivery. If the car is actively charging, schedule override is activated after delivery so the current session is not interrupted — the override expires automatically when the cable is disconnected.
 
