@@ -136,8 +136,8 @@ The dispatcher (`deliver.py`) will find and load the script automatically — no
 
 ```bash
 # Dispatch all plans using config.yaml
-python delivery/deliver.py plan-*.json --config config.yaml
+python delivery/deliver.py data/plan-*.json --config config.yaml
 
 # Debug logging
-python delivery/deliver.py plan-*.json --debug
+python delivery/deliver.py data/plan-*.json --debug
 ```
