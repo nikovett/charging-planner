@@ -2098,12 +2098,22 @@ def _plan_one_profile(
     # then re-resolve with day-specific schedule entry if one matches.
     # If top-level window is "any", plan_date = today (tomorrow will be the target).
     def _resolve_any_window(start_str, end_str, anchor_date, tomorrow_date):
-        """Resolve window bounds supporting 'any' on either or both sides."""
+        """Resolve window bounds supporting 'any' on either or both sides.
+
+        The 'any' end is capped at the planning horizon (tomorrow 23:00 UTC) —
+        the same boundary used for ENTSO-E price data. This prevents any:any
+        windows from selecting forecast slots days into the future when the
+        fallback price source provides extended data.
+        """
         s_any = str(start_str).lower() == "any"
         e_any = str(end_str).lower() == "any"
-        now_utc = datetime.now(tz=timezone.utc)
+        now_utc      = datetime.now(tz=timezone.utc)
+        today_date   = now_utc.date()
+        plan_horizon = datetime(today_date.year, today_date.month, today_date.day,
+                                23, 0, tzinfo=timezone.utc) + timedelta(days=1)
         if s_any and e_any:
-            return now_utc, max(s.end for s in all_prices) if all_prices else now_utc
+            last_price = max(s.end for s in all_prices) if all_prices else now_utc
+            return now_utc, min(last_price, plan_horizon)
         elif s_any:
             # any start = from now, fixed end
             _, end_utc = _resolve_window_utc(
@@ -2112,12 +2122,13 @@ def _plan_one_profile(
             )
             return now_utc, end_utc
         elif e_any:
-            # fixed start, any end = from start until last available price
+            # fixed start, any end = capped at planning horizon
             start_utc, _ = _resolve_window_utc(
                 start_str, "23:45", tz.zone,
                 _anchor_date=anchor_date if _is_overnight(start_str, "23:45") else tomorrow_date,
             )
-            return start_utc, max(s.end for s in all_prices) if all_prices else start_utc
+            last_price = max(s.end for s in all_prices) if all_prices else start_utc
+            return start_utc, min(last_price, plan_horizon)
         else:
             if _is_overnight(start_str, end_str):
                 return _resolve_window_utc(start_str, end_str, tz.zone, _anchor_date=anchor_date)
@@ -2125,9 +2136,12 @@ def _plan_one_profile(
                 return _resolve_window_utc(start_str, end_str, tz.zone, _anchor_date=tomorrow_date)
 
     if cfg.preferred_window_any:
-        plan_date = datetime.now(tz=timezone.utc).astimezone(tz.zone).date()
+        plan_date     = datetime.now(tz=timezone.utc).astimezone(tz.zone).date()
         win_start_utc = datetime.now(tz=timezone.utc)
-        win_end_utc   = max(s.end for s in all_prices) if all_prices else win_start_utc
+        _ph = datetime(plan_date.year, plan_date.month, plan_date.day,
+                       23, 0, tzinfo=timezone.utc) + timedelta(days=1)
+        last_price    = max(s.end for s in all_prices) if all_prices else win_start_utc
+        win_end_utc   = min(last_price, _ph)
         win_start_str, win_end_str = "any", "any"
     else:
         win_start_utc, win_end_utc = _resolve_window_utc(
