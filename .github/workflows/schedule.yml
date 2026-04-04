@@ -43,7 +43,7 @@ jobs:
         run: python delivery/deliver.py plan-*.json --config config.yaml
 
       - name: Publish plans to data/ for dashboard
-        if: steps.plan.outputs.prices_available == 'true'
+        if: always() && steps.plan.outputs.prices_available == 'true'
         run: |
           mkdir -p data
           cp plan-*.json data/
