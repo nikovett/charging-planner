@@ -100,6 +100,46 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
              vs optimal ↑8%
 ```
 
+### Session 15 — 2026-04-05
+
+**Charge Amps active session protection** (v1.3.0): handler always reads connector state before delivery. If `isCharging: true`, schedule override is activated after delivery via `PUT /api/chargepoints/{id}/{connector_id}/schedule/override`. Override expires when cable disconnected.
+
+Key findings from live testing:
+- `isActive: true` is correct — confirmed by testing `isActive: false` which causes schedule to be completely ignored (charger behaves as always-on)
+- Schedule PUT always switches charger to Schedule mode regardless of `isActive` value — this is Charge Amps by design, confirmed by web portal network capture
+- Override error codes treated as success: `OverridingScheduleExists` (already active), `NoScheduleForConnector` (no active schedule)
+- Connector state fields confirmed from live API: `isCharging` (boolean), `onBySchedule`/`offBySchedule`, `mode`, `ocppStatus`
+
+**Connector dump script** (`connector_dump.py`): diagnostic tool to read raw connector state from Charge Amps API.
+
+**schedule.yml fix**: publish step now uses `always()` so plan JSONs are saved to `data/` even when delivery fails.
+
+**v1.3.0 released.**
+
+---
+
+### Session 16 — 2026-04-05
+
+**Bug fixes** (v1.3.1):
+
+**`any:any` window 7-day delivery failure**: on Sundays with extended forecast prices, the `any:any` window selected slots on next Monday which exceeded Charge Amps' 604800-second schedule limit. Fix: planning horizon (tomorrow 23:00 UTC) now caps `any:any` window end in `_resolve_any_window` and `preferred_window_any` blocks. The planner never selects slots beyond the next day regardless of how far the forecast extends.
+
+**Forecast display slots not showing in histogram**: two bugs fixed:
+1. Display fetch was skipped when `price_source == "forecast"` — removed the guard so display slots are always fetched regardless of price source.
+2. When real prices are supplemented with forecast (rule 2), the display fetch anchor was computed from `all_prices` (which includes supplement slots) instead of from the horizon-capped real prices — fixed to use horizon-capped boundary.
+
+**Rule 2 supplement fix**: when real prices don't reach tomorrow noon, forecast prices now **supplement** real prices (appended after last real slot) rather than replacing them entirely. `price_source` is still marked as `forecast`. Previously discarded real prices for the day.
+
+**Price source rules — four rules now tested and enforced:**
+1. Real prices reach tomorrow → display forecast appended as `forecasted:true`, `price_source` = real source, display slots never selected for charging
+2. Real prices partial → forecast supplements real prices for planning, `price_source = forecast`
+3. No real prices → full forecast fallback, `price_source = forecast`
+4. Planning horizon caps slot selection; display forecast extends 24h beyond it freely (stored in JSON as `forecasted:true`)
+
+**164 tests** (8 new `TestPriceSourceRules` tests covering all four rules).
+
+---
+
 ### Session 14 — 2026-04-01
 
 **Plan comparisons feature** (v1.2.0): two background comparisons now run on every plan build, documented together as a unified feature.
