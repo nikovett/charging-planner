@@ -29,6 +29,7 @@ from charging_planner import (
     Config,
     ConfigError,
     PlanParams,
+    PricesNotYetAvailable,
     Slot,
     TzInfo,
     _best_continuous_window,
@@ -1489,6 +1490,176 @@ REAL_ENTSOE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 </TimeSeries>
 </Publication_MarketDocument>
 """
+
+
+class TestPriceSourceRules(unittest.TestCase):
+    """Tests for the four price source rules:
+
+    1. Real prices available and reach tomorrow: display forecast always appended,
+       price_source stays as real source, display forecast not used for planning.
+    2. Real prices available but don't reach tomorrow noon: forecast supplements
+       real prices for planning, price_source marked as forecast.
+    3. No real prices available: forecast used for everything, price_source=forecast.
+    4. Planning horizon caps slot selection but not display forecast slots.
+    """
+
+    _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
+
+    RAW_CONFIG = {
+        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
+        "charging": [{
+            "name": "topup",
+            "required_hours": 1,
+            "preferred_window_start": "22:00",
+            "preferred_window_end": "06:30",
+        }],
+    }
+
+    def _make_real_prices(self, hours=48):
+        """Real prices covering `hours` hours from frozen now."""
+        base = datetime(2026, 3, 14, 12, 0, tzinfo=UTC)
+        slots = []
+        for i in range(hours * 4):
+            t = base + timedelta(minutes=15 * i)
+            slots.append(Slot(
+                start=t, end=t + timedelta(minutes=15),
+                duration_minutes=15, price_eur_kwh=0.05, slot=i,
+            ))
+        return slots
+
+    def _make_forecast_prices(self, hours=48):
+        """Forecast prices for `hours` hours starting from frozen now."""
+        # Start from frozen now so they always cover the planning window
+        base = datetime(2026, 3, 14, 12, 0, tzinfo=UTC)
+        slots = []
+        for i in range(hours * 4):
+            t = base + timedelta(minutes=15 * i)
+            slots.append(Slot(
+                start=t, end=t + timedelta(minutes=15),
+                duration_minutes=15, price_eur_kwh=0.03, slot=i,
+            ))
+        return slots
+
+    def _run(self, real_prices, forecast_prices=None, display_slots=None):
+        import charging_planner as cp
+        import tempfile
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return TestPriceSourceRules._FROZEN_NOW if tz is None                     else TestPriceSourceRules._FROZEN_NOW.astimezone(tz)
+
+        forecast_prices = forecast_prices or []
+        display_slots   = display_slots   or []
+
+        with tempfile.TemporaryDirectory() as tmpdir,              mock.patch("charging_planner.datetime", _FrozenDatetime),              mock.patch("charging_planner.fetch_entsoe_prices",
+                        return_value=real_prices),              mock.patch("charging_planner.fetch_forecast_prices",
+                        return_value=forecast_prices),              mock.patch("charging_planner.fetch_forecast_display_slots",
+                        return_value=display_slots):
+            return cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+
+    # ── Rule 1: real prices reach tomorrow ───────────────────────────────────
+
+    def test_rule1_price_source_is_real_when_prices_reach_tomorrow(self):
+        """When real prices cover tomorrow, price_source stays as the real source."""
+        plans = self._run(self._make_real_prices(hours=48))
+        self.assertEqual(plans[0]["price_source"], "ENTSO-E")
+
+    def test_rule1_display_forecast_appended_to_json(self):
+        """Display forecast slots are always appended to price_slots with forecasted=True."""
+        real = self._make_real_prices(hours=48)
+        # Display slots start after real prices end
+        last_real = max(s.start for s in real)
+        base = last_real + timedelta(minutes=15)
+        display = [Slot(start=base + timedelta(minutes=15*i),
+                        end=base + timedelta(minutes=15*(i+1)),
+                        duration_minutes=15, price_eur_kwh=0.03, slot=i)
+                   for i in range(96)]
+        plans = self._run(real, display_slots=display)
+        forecasted = [s for s in plans[0]["price_slots"] if s.get("forecasted")]
+        self.assertGreater(len(forecasted), 0)
+
+    def test_rule1_display_forecast_not_used_for_charging(self):
+        """Display forecast slots must not be selected as charging slots."""
+        real = self._make_real_prices(hours=48)
+        last_real = max(s.start for s in real)
+        base = last_real + timedelta(minutes=15)
+        display = [Slot(start=base + timedelta(minutes=15*i),
+                        end=base + timedelta(minutes=15*(i+1)),
+                        duration_minutes=15, price_eur_kwh=0.03, slot=i)
+                   for i in range(96)]
+        plans = self._run(real, display_slots=display)
+        forecasted_starts = {s["start_utc"] for s in plans[0]["price_slots"] if s.get("forecasted")}
+        charging_starts   = {s["start_utc"] for s in plans[0]["price_slots"] if s.get("charging")}
+        self.assertEqual(forecasted_starts & charging_starts, set())
+
+    # ── Rule 2: real prices don't reach tomorrow noon ────────────────────────
+
+    def test_rule2_price_source_marked_forecast_when_supplemented(self):
+        """When real prices don't reach tomorrow noon, price_source is marked as forecast."""
+        short_real = self._make_real_prices(hours=6)   # only 6h, won't reach tomorrow
+        forecast   = self._make_forecast_prices(hours=24)
+        plans = self._run(short_real, forecast_prices=forecast)
+        self.assertEqual(plans[0]["price_source"], "forecast")
+
+    def test_rule2_forecast_used_for_slot_selection(self):
+        """When supplemented, forecast slots can be selected as charging slots."""
+        short_real = self._make_real_prices(hours=6)
+        forecast   = self._make_forecast_prices(hours=24)
+        plans = self._run(short_real, forecast_prices=forecast)
+        self.assertGreater(plans[0]["total_minutes"], 0)
+
+    # ── Rule 3: no real prices ────────────────────────────────────────────────
+
+    def test_rule3_price_source_forecast_when_no_real_prices(self):
+        """When no real prices, price_source is forecast."""
+        import charging_planner as cp
+        import tempfile
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return TestPriceSourceRules._FROZEN_NOW if tz is None \
+                    else TestPriceSourceRules._FROZEN_NOW.astimezone(tz)
+
+        forecast = self._make_forecast_prices(hours=48)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch("charging_planner.datetime", _FrozenDatetime):
+                with mock.patch("charging_planner.fetch_entsoe_prices",
+                               side_effect=Exception("unavailable")):
+                    with mock.patch("charging_planner.fetch_sahkotin_prices",
+                                   side_effect=PricesNotYetAvailable("unavailable")):
+                        with mock.patch("charging_planner.fetch_forecast_prices",
+                                       return_value=forecast):
+                            with mock.patch("charging_planner.fetch_forecast_display_slots",
+                                           return_value=[]):
+                                plans = cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+        self.assertEqual(plans[0]["price_source"], "forecast")
+
+    # ── Rule 4: horizon caps planning not display ─────────────────────────────
+
+    def test_rule4_display_forecast_extends_beyond_planning_horizon(self):
+        """Display forecast slots extend beyond tomorrow 23:00 UTC horizon."""
+        # Real prices end at horizon; display slots extend 24h beyond
+        display = self._make_forecast_prices(hours=24)
+        plans = self._run(self._make_real_prices(hours=48), display_slots=display)
+        forecasted = [s for s in plans[0]["price_slots"] if s.get("forecasted")]
+        if forecasted:
+            last_forecasted = max(s["start_utc"] for s in forecasted)
+            tomorrow_23 = "2026-03-15T23:00:00"
+            self.assertGreater(last_forecasted, tomorrow_23)
+
+    def test_rule4_charging_slots_within_planning_horizon(self):
+        """Charging slots must not be scheduled beyond the planning horizon."""
+        display = self._make_forecast_prices(hours=24)
+        plans = self._run(self._make_real_prices(hours=48), display_slots=display)
+        tomorrow_23_utc = datetime(2026, 3, 15, 23, 0, tzinfo=UTC)
+        for s in plans[0]["price_slots"]:
+            if s.get("charging"):
+                slot_start = datetime.fromisoformat(s["start_utc"])
+                self.assertLessEqual(slot_start, tomorrow_23_utc,
+                    f"Charging slot {s['start_utc']} exceeds planning horizon")
+
 
 
 class TestRealEntsoEData(unittest.TestCase):

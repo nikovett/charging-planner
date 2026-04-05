@@ -2180,11 +2180,13 @@ def _plan_one_profile(
     # plan_date: the local calendar date the window starts on
     plan_date = win_start_utc.astimezone(tz.zone).date()
 
-    # display_prices: all real price slots — used for the histogram and for
-    # deduplication when appending forecast display slots. Not capped at the
-    # planning horizon so that forecast slots immediately beyond the last real
-    # slot are correctly appended to the JSON for visual padding.
-    display_prices = list(all_prices)
+    # display_prices: slots up to (today+1) 23:00 UTC — the same end boundary as
+    # the ENTSO-E request, so optimal selection always compares against the same
+    # pool of prices regardless of whether the source is ENTSO-E or a fallback.
+    today_utc   = datetime.now(tz=timezone.utc).date()
+    horizon_utc = datetime(today_utc.year, today_utc.month, today_utc.day,
+                           23, 0, tzinfo=timezone.utc) + timedelta(days=1)
+    display_prices = [s for s in all_prices if s.start < horizon_utc]
 
     earliest_useful  = win_start_utc - timedelta(minutes=sched_required_minutes or cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
@@ -2326,32 +2328,43 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
         tomorrow_noon = (datetime.now(tz=timezone.utc).date() + timedelta(days=1))
         tomorrow_noon_utc = datetime(tomorrow_noon.year, tomorrow_noon.month, tomorrow_noon.day,
                                      12, 0, tzinfo=timezone.utc)
-        last_slot_start = max(s.start for s in all_prices)
-        if last_slot_start < tomorrow_noon_utc:
+        last_real_end = max(s.start for s in all_prices)
+        if last_real_end < tomorrow_noon_utc:
             log.warning(
                 "Real prices only reach %s — tomorrow's prices not yet published. "
-                "Falling through to forecast prices.",
-                last_slot_start.strftime("%Y-%m-%d %H:%M UTC")
+                "Supplementing with forecast prices.",
+                last_real_end.strftime("%Y-%m-%d %H:%M UTC")
             )
             try:
-                all_prices = fetch_forecast_prices(cfg0.area)
+                forecast_supplement = fetch_forecast_prices(cfg0.area)
+                # Supplement: append forecast slots that come after the last real slot
+                existing_starts = {s.start for s in all_prices}
+                supplement = [s for s in forecast_supplement if s.start not in existing_starts
+                              and s.start > last_real_end]
+                all_prices = all_prices + supplement
                 price_source = "forecast"
-                log.info("Using forecast prices as last resort fallback.")
+                log.info("Supplemented with %d forecast slots (price_source=forecast).",
+                         len(supplement))
             except PricesNotYetAvailable as exc:
                 log.warning("%s", exc)
                 sys.exit(1)
 
-    # Fetch forecast slots for histogram display augmentation.
-    # Always fetch beyond the last planning slot — regardless of price source —
-    # so the histogram right edge is padded with forecast bars when real prices
-    # don't extend far enough into tomorrow.
+    # Always fetch 24h of forecast display slots beyond the last real price slot,
+    # for visual histogram padding. These are stored in the JSON as forecasted=True
+    # and are never used for charging slot selection. Fetched regardless of
+    # price_source so the histogram is padded even when forecast is the primary source.
+    # Use horizon-capped boundary so supplement slots don't push the fetch too far out.
     forecast_display_slots: list = []
     if all_prices:
-        last_slot_start = max(s.start for s in all_prices)
-        log.info("Prices end at %s — fetching forecast slots for display beyond that.",
-                 last_slot_start.strftime("%Y-%m-%d %H:%M UTC"))
+        _today_utc   = datetime.now(tz=timezone.utc).date()
+        _horizon_utc = datetime(_today_utc.year, _today_utc.month, _today_utc.day,
+                                23, 0, tzinfo=timezone.utc) + timedelta(days=1)
+        _display     = [s for s in all_prices if s.start < _horizon_utc]
+        last_real_slot = max(s.start for s in _display) if _display else max(s.start for s in all_prices)
+        log.info("Real prices end at %s — fetching forecast display slots for histogram padding.",
+                 last_real_slot.strftime("%Y-%m-%d %H:%M UTC"))
         forecast_display_slots = fetch_forecast_display_slots(
-            after=last_slot_start, area=cfg0.area
+            after=last_real_slot, area=cfg0.area
         )
 
     for cfg in configs:
