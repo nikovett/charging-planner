@@ -2180,13 +2180,11 @@ def _plan_one_profile(
     # plan_date: the local calendar date the window starts on
     plan_date = win_start_utc.astimezone(tz.zone).date()
 
-    # display_prices: slots up to (today+1) 23:00 UTC — the same end boundary as
-    # the ENTSO-E request, so optimal selection always compares against the same
-    # pool of prices regardless of whether the source is ENTSO-E or a fallback.
-    today_utc   = datetime.now(tz=timezone.utc).date()
-    horizon_utc = datetime(today_utc.year, today_utc.month, today_utc.day,
-                           23, 0, tzinfo=timezone.utc) + timedelta(days=1)
-    display_prices = [s for s in all_prices if s.start < horizon_utc]
+    # display_prices: all real price slots — used for the histogram and for
+    # deduplication when appending forecast display slots. Not capped at the
+    # planning horizon so that forecast slots immediately beyond the last real
+    # slot are correctly appended to the JSON for visual padding.
+    display_prices = list(all_prices)
 
     earliest_useful  = win_start_utc - timedelta(minutes=sched_required_minutes or cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
@@ -2343,11 +2341,14 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                 log.warning("%s", exc)
                 sys.exit(1)
 
-    # Fetch forecast slots for histogram display augmentation
+    # Fetch forecast slots for histogram display augmentation.
+    # Always fetch beyond the last planning slot — regardless of price source —
+    # so the histogram right edge is padded with forecast bars when real prices
+    # don't extend far enough into tomorrow.
     forecast_display_slots: list = []
-    if price_source != "forecast" and all_prices:
+    if all_prices:
         last_slot_start = max(s.start for s in all_prices)
-        log.info("Real prices end at %s — fetching forecast slots for display.",
+        log.info("Prices end at %s — fetching forecast slots for display beyond that.",
                  last_slot_start.strftime("%Y-%m-%d %H:%M UTC"))
         forecast_display_slots = fetch_forecast_display_slots(
             after=last_slot_start, area=cfg0.area
