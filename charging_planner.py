@@ -1434,6 +1434,7 @@ class PlanParams:
     min_gap_minutes:        int             = 30
     continuous_only:        bool            = False
     forecast_slots:         list            = None  # display-only, not used for selection
+    supplement_starts:      object          = None  # set of starts of forecast supplement slots
     retained_minutes:       int             = 0     # future charging minutes carried over from previous plan
     plan_warning:           Optional[str]   = None  # human-readable reason when total_minutes < required_minutes
 
@@ -1512,12 +1513,14 @@ def build_plan(p: PlanParams) -> dict:
     opt_prices = [s.price_eur_kwh for s in optimal_selected]
     avg_optimal = round(sum(opt_prices) / len(opt_prices) * 100, 4) if opt_prices else 0.0
 
+    _supplement = p.supplement_starts or set()
     price_slots = [
         {
             "start_utc":         s.start.isoformat(),
             "price_cents_kwh":   round(s.price_eur_kwh * 100, 4),
             "charging":          s.start in selected_starts,
             "optimal":           s.start in optimal_starts,
+            **( {"forecasted": True} if s.start in _supplement else {} ),
         }
         for s in sorted(p.display_prices, key=lambda x: x.start)
     ]
@@ -2090,6 +2093,7 @@ def _plan_one_profile(
     price_source:           str,
     output_dir:             str,
     forecast_display_slots: list = None,
+    supplement_starts:      set  = None,
 ) -> dict:
     """Run selection and build a plan dict for a single profile."""
     log.info("=== Profile: %s ===", cfg.name)
@@ -2259,6 +2263,7 @@ def _plan_one_profile(
         min_gap_minutes=cfg.min_gap_minutes,
         continuous_only=cfg.continuous_only,
         forecast_slots=forecast_display_slots,
+        supplement_starts=supplement_starts,
         plan_warning=plan_warning,
     ))
     plan["profile"] = cfg.name
@@ -2320,6 +2325,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
 
     plans = []
     skipped = []
+    supplement_starts: set = set()
 
     # If real prices don't reach tomorrow noon UTC, fall through to forecast as price source.
     # This handles the case where ENTSO-E/Sähkötin fetch succeeded but prices aren't yet
@@ -2342,6 +2348,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                 supplement = [s for s in forecast_supplement if s.start not in existing_starts
                               and s.start > last_real_end]
                 all_prices = all_prices + supplement
+                supplement_starts = {s.start for s in supplement}
                 price_source = "forecast"
                 log.info("Supplemented with %d forecast slots (price_source=forecast).",
                          len(supplement))
@@ -2372,6 +2379,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
             plan = _plan_one_profile(
                 cfg, tz, all_prices, price_source, output_dir,
                 forecast_display_slots=forecast_display_slots,
+                supplement_starts=supplement_starts,
             )
             plans.append(plan)
         except PricesNotYetAvailable as exc:

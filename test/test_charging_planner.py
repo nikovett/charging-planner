@@ -1609,6 +1609,23 @@ class TestPriceSourceRules(unittest.TestCase):
         plans = self._run(short_real, forecast_prices=forecast)
         self.assertGreater(plans[0]["total_minutes"], 0)
 
+    def test_rule2_supplement_slots_tagged_forecasted_in_json(self):
+        """Supplement forecast slots appear as forecasted:true in price_slots JSON."""
+        short_real = self._make_real_prices(hours=6)
+        forecast   = self._make_forecast_prices(hours=48)
+        plans = self._run(short_real, forecast_prices=forecast)
+        slots = plans[0]["price_slots"]
+        # Supplement slots are those beyond the last real slot
+        last_real_start = max(s.start for s in short_real)
+        supplement_slots = [
+            s for s in slots
+            if datetime.fromisoformat(s["start_utc"]).replace(tzinfo=UTC) > last_real_start
+            and not s.get("forecasted")
+        ]
+        # All slots beyond last real should be tagged forecasted
+        self.assertEqual(supplement_slots, [],
+            "Supplement slots beyond real prices should have forecasted:true")
+
     # ── Rule 3: no real prices ────────────────────────────────────────────────
 
     def test_rule3_price_source_forecast_when_no_real_prices(self):
