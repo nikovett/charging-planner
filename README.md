@@ -22,7 +22,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Previously committed charging is never lost.** If a new plan is built before all charging slots from the previous plan have taken place, the remaining uncommitted charging time is added on top of the new plan's requirement. The scheduler then finds the cheapest slots for the full combined need — so the charger never loses charging time it was already told to expect.
 
-**Three-level price source fallback for Finland.** ENTSO-E → Sähkötin → nordpool-predict-fi forecast. If ENTSO-E is under maintenance at 14:30, the plan still builds and delivers on time using real Nord Pool prices from Sähkötin. The dashboard warns when the plan is based on forecast rather than confirmed prices.
+**Four-level price source fallback.** ENTSO-E → Elering → Sähkötin → nordpool-predict-fi forecast. If ENTSO-E is unavailable, the plan still builds using real Nord Pool prices from Elering (FI/EE/LV/LT) or Sähkötin (FI). The dashboard warns when the plan is based on forecast rather than confirmed prices.
 
 
 ```
@@ -181,15 +181,17 @@ New handlers can be added by creating a `deliver_<n>.py` script in the `delivery
 
 ## Fallback price sources
 
-When ENTSO-E is unavailable or returns incomplete data, the planner automatically tries two fallback sources before giving up:
+When ENTSO-E is unavailable or returns incomplete data, the planner automatically tries three fallback sources before giving up:
 
-1. **Sähkötin** (`sahkotin.fi/api`) — actual realized Nord Pool 15-min prices, same data range as ENTSO-E, Finland only. No API key needed. Used transparently — `price_source: "Sähkötin"` in the plan JSON, no dashboard warning.
+1. **Elering** (`dashboard.elering.ee/api`) — actual Nord Pool 15-min prices for Finland, Estonia, Latvia and Lithuania. No API key needed. Used transparently — `price_source: "Elering"` in the plan JSON, no dashboard warning.
 
-2. **nordpool-predict-fi** (`raw.githubusercontent.com/vividfog/nordpool-predict-fi`) — ML forecast blended with realized Sähkötin prices. Hourly data expanded to 15-min slots. By ~14:00–16:00 Helsinki time the forecast transitions to actual market prices, making it nearly as reliable as ENTSO-E once Nord Pool has published. Plans from this source are tagged `price_source: "forecast"` and display a warning banner on the dashboard.
+2. **Sähkötin** (`sahkotin.fi/api`) — actual realized Nord Pool 15-min prices, Finland only. No API key needed. Used transparently — `price_source: "Sähkötin"` in the plan JSON, no dashboard warning.
 
-The ENTSO-E fallback triggers in two cases: network/HTTP errors, and when the returned prices don't extend into tomorrow (e.g. during scheduled maintenance where ENTSO-E returns a valid but stale response with only today's data). In either case the planner falls through to Sähkötin automatically.
+3. **nordpool-predict-fi** (`raw.githubusercontent.com/vividfog/nordpool-predict-fi`) — ML forecast blended with realized prices. Native 15-min slots. By ~14:00–16:00 Helsinki time the forecast transitions to actual market prices, making it nearly as reliable as ENTSO-E once Nord Pool has published. Plans from this source are tagged `price_source: "forecast"` and display a warning banner on the dashboard.
 
-Both fallbacks are only available for area `FI`. For other areas, the script exits with a non-zero code so the GHA run is marked as failed.
+The fallback triggers in two cases: network/HTTP errors, and when the returned prices don't extend into tomorrow (e.g. during scheduled maintenance where ENTSO-E returns a valid but stale response with only today's data).
+
+Elering and Sähkötin cover different areas — Elering handles FI/EE/LV/LT, Sähkötin and nordpool-predict-fi are Finland only. For areas not covered by any fallback source, the script exits with a non-zero code so the GHA run is marked as failed.
 
 If all three sources fail, the script exits with a non-zero code so the GHA run is marked as failed.
 
@@ -260,7 +262,7 @@ Never commit secrets to the repository. All sensitive values are injected at run
 
 The workflow runs daily at 10:30 UTC. GHA consistently delays ~1 hour, landing at ~14:30 Helsinki time in summer (EEST, UTC+3). Prices publish at ~11:00 UTC so even without GHA delay the run lands after publication.
 
-If ENTSO-E is unavailable or prices aren't published yet, the planner automatically tries Sähkötin, then the nordpool-predict-fi forecast. If all sources fail, the run exits with a non-zero code — the GHA job is marked as failed and the operator receives an email. Once prices are available the next scheduled run will succeed.
+If ENTSO-E is unavailable or prices aren't published yet, the planner automatically tries Elering, then Sähkötin, then the nordpool-predict-fi forecast. If all sources fail, the run exits with a non-zero code — the GHA job is marked as failed and the operator receives an email. Once prices are available the next scheduled run will succeed.
 
 To trigger a run manually: **Actions → Charging Planner → Run workflow**.
 

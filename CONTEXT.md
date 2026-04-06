@@ -112,6 +112,8 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
 - 7 new tests in `TestAvgPriceCeiling` covering validation, parsing, and end-to-end behaviour
 - `config.yaml` and README updated
 
+**Elering price source added** (`fetch_elering_prices`): first fallback after ENTSO-E, covers FI/EE/LV/LT. No API key needed. JSON endpoint `https://dashboard.elering.ee/api/nps/price?fields={fi|ee|lv|lt}&start=...&end=...`. Returns hourly data with `timestamp` (Unix seconds UTC) and `price` (EUR/MWh) — expanded to 4×15-min slots, divided by 1000 for EUR/kWh. Fallback chain is now: ENTSO-E → Elering → Sähkötin (FI only) → nordpool-predict-fi (FI only).
+
 **172 tests** passing.
 
 **Dashboard histogram height doubled** (`index.html`): histogram height increased from 56px to 112px for better readability of price differences between slots. Scaling (10–90%) unchanged.

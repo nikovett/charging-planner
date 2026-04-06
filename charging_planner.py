@@ -691,6 +691,95 @@ def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot
     return slots
 
 
+# ---------------------------------------------------------------------------
+# Elering price source — fallback for FI, EE, LV, LT areas
+# ---------------------------------------------------------------------------
+
+ELERING_API  = "https://dashboard.elering.ee/api/nps/price"
+ELERING_AREAS = {
+    "FI":                   "fi",
+    "10YFI-1--------U":     "fi",
+    "EE":                   "ee",
+    "10Y1001A1001A39I":     "ee",
+    "LV":                   "lv",
+    "10YLV-1001A00074":     "lv",
+    "LT":                   "lt",
+    "10YLT-1001A0008Q":     "lt",
+}
+
+
+def fetch_elering_prices(area: str = "FI") -> list[Slot]:
+    """Fetch day-ahead prices from the Elering NPS API (dashboard.elering.ee).
+
+    Covers Finland (FI), Estonia (EE), Latvia (LV) and Lithuania (LT).
+    No API key or registration required.
+
+    Returns native hourly slots expanded to 15-min in €/kWh ex-VAT, same
+    structure as fetch_entsoe_prices — the rest of the pipeline requires no
+    changes.
+
+    Raises PricesNotYetAvailable if the area is unsupported, the fetch fails,
+    or the response contains no usable future data.
+    """
+    elering_field = ELERING_AREAS.get(area.upper())
+    if not elering_field:
+        raise PricesNotYetAvailable(
+            f"Elering fallback is not available for area '{area}'. "
+            f"Supported: FI, EE, LV, LT."
+        )
+
+    now_utc = datetime.now(tz=timezone.utc)
+    today   = now_utc.date()
+    # Wide window: yesterday through day after tomorrow (same as ENTSO-E)
+    start = (today - timedelta(days=1)).strftime("%Y-%m-%dT21:00:00.000Z")
+    end   = (today + timedelta(days=2)).strftime("%Y-%m-%dT22:59:59.999Z")
+    url = f"{ELERING_API}?fields={elering_field}&start={start}&end={end}"
+
+    log.info("Fetching Elering prices: area=%s", area)
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        raw = _http_request_with_retry(req, timeout=20, retries=3, backoff=3.0,
+                                       label="Elering")
+    except Exception as e:
+        raise PricesNotYetAvailable(f"Elering fetch failed: {e}")
+
+    try:
+        data   = json.loads(raw)
+        # Response: {"success": true, "data": {"fi": [...], "ee": [...], ...}}
+        # Returns all available areas regardless of fields param — select by key.
+        # Prices are in c€/kWh (confirmed from live data), 15-min native resolution.
+        entries = data["data"][elering_field]
+    except Exception as e:
+        raise PricesNotYetAvailable(f"Elering JSON parse failed: {e}")
+
+    if not entries:
+        raise PricesNotYetAvailable(f"Elering returned no price data for area '{area}'.")
+
+    # Prices are in c€/kWh — divide by 100 to get €/kWh ex-VAT.
+    # Data is native 15-min resolution, no expansion needed.
+    slots: list[Slot] = []
+    for entry in entries:
+        slot_start    = datetime.fromtimestamp(entry["timestamp"], tz=timezone.utc)
+        slot_end      = slot_start + timedelta(minutes=15)
+        price_eur_kwh = entry["price"] / 100.0
+        slots.append(Slot(
+            start=slot_start,
+            end=slot_end,
+            duration_minutes=15,
+            price_eur_kwh=price_eur_kwh,
+        ))
+
+    if not slots:
+        raise PricesNotYetAvailable("Elering returned no parseable slots.")
+
+    if not any(s.end > now_utc for s in slots):
+        raise PricesNotYetAvailable("Elering returned no usable future slots.")
+
+    return [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
+                 price_eur_kwh=s.price_eur_kwh, slot=i)
+            for i, s in enumerate(sorted(slots, key=lambda x: x.start))]
+
+
 FORECAST_URL = (
     "https://raw.githubusercontent.com/vividfog/nordpool-predict-fi"
     "/main/deploy/prediction.json"
@@ -2330,20 +2419,26 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     try:
         all_prices, price_source = _fetch_prices(cfg0)
     except Exception as exc:
-        log.warning("ENTSO-E unavailable (%s) — trying Sähkötin.", exc)
+        log.warning("ENTSO-E unavailable (%s) — trying Elering.", exc)
         try:
-            all_prices = fetch_sahkotin_prices(cfg0.area)
-            price_source = "Sähkötin"
-            log.info("Using Sähkötin prices.")
+            all_prices = fetch_elering_prices(cfg0.area)
+            price_source = "Elering"
+            log.info("Using Elering prices.")
         except PricesNotYetAvailable as exc2:
-            log.warning("Sähkötin unavailable (%s) — trying forecast fallback.", exc2)
+            log.warning("Elering unavailable (%s) — trying Sähkötin.", exc2)
             try:
-                all_prices = fetch_forecast_prices(cfg0.area)
-                price_source = "forecast"
-                log.info("Using forecast prices as last resort fallback.")
+                all_prices = fetch_sahkotin_prices(cfg0.area)
+                price_source = "Sähkötin"
+                log.info("Using Sähkötin prices.")
             except PricesNotYetAvailable as exc3:
-                log.warning("%s", exc3)
-                sys.exit(1)
+                log.warning("Sähkötin unavailable (%s) — trying forecast fallback.", exc3)
+                try:
+                    all_prices = fetch_forecast_prices(cfg0.area)
+                    price_source = "forecast"
+                    log.info("Using forecast prices as last resort fallback.")
+                except PricesNotYetAvailable as exc4:
+                    log.warning("%s", exc4)
+                    sys.exit(1)
 
     plans = []
     skipped = []
