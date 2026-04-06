@@ -189,6 +189,107 @@ class TestConfigValidation(unittest.TestCase):
         validate_plan_config(self._cfg(max_price_cents_kwh=None))
 
 
+class TestAvgPriceCeiling(unittest.TestCase):
+    """Tests for max_price_cents_kwh: avg dynamic ceiling."""
+
+    # validate_plan_config expects charging as a single dict (not a list)
+    BASE_VALIDATE = {
+        "entsoe": {"api_key": "test", "area": "FI"},
+        "charging": {
+            "required_hours": 1,
+            "preferred_window_start": "22:00",
+            "preferred_window_end": "06:30",
+        },
+    }
+
+    # parse_configs expects charging as a list
+    BASE_PARSE = {
+        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
+        "charging": [{
+            "name": "topup",
+            "required_hours": 1,
+            "preferred_window_start": "22:00",
+            "preferred_window_end": "06:30",
+        }],
+    }
+
+    def _validate_cfg(self, ceil):
+        import copy
+        cfg = copy.deepcopy(self.BASE_VALIDATE)
+        cfg["charging"]["max_price_cents_kwh"] = ceil
+        return cfg
+
+    def _parse_cfg(self, ceil):
+        import copy
+        cfg = copy.deepcopy(self.BASE_PARSE)
+        cfg["charging"][0]["max_price_cents_kwh"] = ceil
+        return cfg
+
+    def test_avg_accepted_in_validation(self):
+        """'avg' is a valid value for max_price_cents_kwh."""
+        validate_plan_config(self._validate_cfg("avg"))  # should not raise
+
+    def test_avg_case_insensitive(self):
+        """'AVG' and 'Avg' are also valid."""
+        for val in ("AVG", "Avg"):
+            validate_plan_config(self._validate_cfg(val))  # should not raise
+
+    def test_numeric_still_valid(self):
+        """Numeric price ceiling still accepted."""
+        validate_plan_config(self._validate_cfg(5.0))  # should not raise
+
+    def test_invalid_string_rejected(self):
+        """Arbitrary strings are rejected."""
+        with self.assertRaises(ConfigError):
+            validate_plan_config(self._validate_cfg("max"))
+
+    def test_avg_sets_max_price_is_avg_flag(self):
+        """Parsing 'avg' sets max_price_is_avg=True and max_price_eur=None."""
+        configs = parse_configs(self._parse_cfg("avg"))
+        self.assertTrue(configs[0].max_price_is_avg)
+        self.assertIsNone(configs[0].max_price_eur)
+
+    def test_numeric_ceiling_leaves_flag_false(self):
+        """Numeric ceiling leaves max_price_is_avg=False."""
+        configs = parse_configs(self._parse_cfg(5.0))
+        self.assertFalse(configs[0].max_price_is_avg)
+        self.assertAlmostEqual(configs[0].max_price_eur, 0.05)
+
+    def test_avg_resolves_to_market_average(self):
+        """When avg ceiling is set, charging slots are at or below market average."""
+        import charging_planner as cp
+        import tempfile
+
+        _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return _FROZEN_NOW if tz is None else _FROZEN_NOW.astimezone(tz)
+
+        # 50 cheap slots at 0.01 EUR, 50 expensive at 0.09 EUR → avg = 0.05 EUR = 5 c€/kWh
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        slots = []
+        for i in range(100):
+            t = base + timedelta(minutes=15 * i)
+            price = 0.01 if i < 50 else 0.09
+            slots.append(Slot(start=t, end=t+timedelta(minutes=15),
+                              duration_minutes=15, price_eur_kwh=price, slot=i))
+
+        cfg = self._parse_cfg("avg")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch("charging_planner.datetime", _FrozenDatetime):
+                with mock.patch("charging_planner.fetch_entsoe_prices", return_value=slots):
+                    with mock.patch("charging_planner.fetch_forecast_display_slots", return_value=[]):
+                        plans = cp.cmd_plan(cfg, output_dir=tmpdir)
+
+        charging = [s for s in plans[0]["price_slots"] if s["charging"]]
+        for s in charging:
+            self.assertLessEqual(s["price_cents_kwh"], 5.0 + 0.001,
+                f"Slot {s['start_utc']} price {s['price_cents_kwh']} exceeds avg ceiling")
+
+
 class TestParseConfigs(unittest.TestCase):
 
     BASE_RAW = {

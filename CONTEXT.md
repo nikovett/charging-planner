@@ -100,6 +100,22 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
              vs optimal ↑8%
 ```
 
+### Session 17 — 2026-04-06
+
+**`max_price_cents_kwh: "avg"` dynamic ceiling** (v1.4.0):
+
+- `"avg"` (case-insensitive) accepted as a valid value alongside positive numbers and `null`
+- `Config` gets `max_price_is_avg: bool = False` field (after `schedule` to avoid dataclass ordering issues)
+- Resolved at plan time in `_plan_one_profile` from `display_prices` (horizon-capped real prices) → `resolved_max_price_eur`
+- `resolved_max_price_eur` passed as `max_price_override` to `_select_slots` and used throughout slot selection and spillover — `cfg.max_price_eur` stays `None`
+- Plan warning shows `"partial plan — price limit avg (X c€/kWh)"` with resolved value when partial
+- 7 new tests in `TestAvgPriceCeiling` covering validation, parsing, and end-to-end behaviour
+- `config.yaml` and README updated
+
+**172 tests** passing.
+
+---
+
 ### Session 15 — 2026-04-05
 
 **Charge Amps active session protection** (v1.3.0): handler always reads connector state before delivery. If `isCharging: true`, schedule override is activated after delivery via `PUT /api/chargepoints/{id}/{connector_id}/schedule/override`. Override expires when cable disconnected.
@@ -136,7 +152,15 @@ Key findings from live testing:
 3. No real prices → full forecast fallback, `price_source = forecast`
 4. Planning horizon caps slot selection; display forecast extends 24h beyond it freely (stored in JSON as `forecasted:true`)
 
-**164 tests** (8 new `TestPriceSourceRules` tests covering all four rules).
+**Supplement slots tagged `forecasted:true` in JSON**: supplement forecast slots (rule 2) previously appeared as plain grey bars in the histogram, indistinguishable from real price slots. Now written to `price_slots` with `forecasted: true` so the dashboard renders them with the hatched grey forecast pattern. Charging slots selected from supplement data remain green/suboptimal as normal. `supplement_starts` set tracked at `cmd_plan` level, passed through `PlanParams`.
+
+**Dashboard fixes** (`index.html`):
+- Forecast legend now appears naturally via `visible.some(s => s.forecasted)` — works correctly now that supplement slots carry `forecasted: true`. No plan-level override needed.
+- Negative price slots rendered at zero bar height (real slots only). Forecast/display slots keep minimum height since they serve as visual context. Histogram scale baseline shifts to 0 when negative prices exist so positive bars remain proportional. Avg line uses same corrected scale.
+
+**165 tests** (8 new `TestPriceSourceRules` + 1 new supplement-tagging test).
+
+**Validated live**: manual run at 09:24 local with tomorrow's prices unavailable confirmed all four rules working — 204 real slots, 96 supplement forecast slots (tagged `forecasted:true`), 96 display forecast slots, all charging slots falling within supplement range and correctly tagged.
 
 ---
 

@@ -242,8 +242,11 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
         errors.append(f"charging.min_gap_minutes={min_gap} must be divisible by 15.")
 
     ceil = ch.get("max_price_cents_kwh")
-    if ceil is not None and (not isinstance(ceil, (int, float)) or ceil <= 0):
-        errors.append(f"charging.max_price_cents_kwh={ceil!r} must be a positive number or null.")
+    if ceil is not None:
+        if isinstance(ceil, str) and ceil.lower() == "avg":
+            pass  # valid — dynamic daily average
+        elif not isinstance(ceil, (int, float)) or ceil <= 0:
+            errors.append(f"charging.max_price_cents_kwh={ceil!r} must be a positive number, \"avg\", or null.")
 
     schedule = ch.get("schedule") or []
     if not isinstance(schedule, list):
@@ -383,6 +386,7 @@ class Config:
     window_start_any:       bool              # True = start is "any" (use now as start)
     window_end_any:         bool              # True = end is "any" (use last available price as end)
     schedule:               list              # day-specific window overrides (may be empty)
+    max_price_is_avg:       bool              = False  # True = ceiling is dynamic daily average
 
 
 def _parse_one_profile(et: dict, ch: dict) -> "Config":
@@ -398,6 +402,7 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
                 f"Check https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
             )
     ceil_cents = ch.get("max_price_cents_kwh")
+    ceil_is_avg = isinstance(ceil_cents, str) and ceil_cents.lower() == "avg"
     return Config(
         api_key=et["api_key"],
         area=et["area"],
@@ -407,7 +412,8 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         continuous_only=bool(ch.get("continuous_only", False)),
         min_slot_minutes=int(ch.get("min_slot_minutes", 30)),
         min_gap_minutes=int(ch.get("min_gap_minutes", 30)),
-        max_price_eur=ceil_cents / 100.0 if ceil_cents is not None else None,
+        max_price_eur=None if (ceil_cents is None or ceil_is_avg) else ceil_cents / 100.0,
+        max_price_is_avg=ceil_is_avg,
         preferred_window_start=ch.get("preferred_window_start", "00:00"),
         preferred_window_end=ch.get("preferred_window_end", "23:45"),
         preferred_window_any=(
@@ -1922,6 +1928,7 @@ def _select_slots(
     win_end_str:      str,
     required_minutes_override: int = None,
     forecast_slots:   list = None,
+    max_price_override: Optional[float] = None,
 ) -> tuple[list[Slot], set, bool]:
     """Run the full slot-selection pipeline and return (selected, optimal_set, used_forecast).
 
@@ -1963,11 +1970,12 @@ def _select_slots(
 
     req_min = required_minutes_override if required_minutes_override is not None else cfg.required_minutes
 
+    _eff_max = max_price_override if max_price_override is not None else cfg.max_price_eur
     selected = select_charging_windows(
         inside,
         required_minutes=req_min,
         continuous_only=cfg.continuous_only,
-        max_price=cfg.max_price_eur,
+        max_price=_eff_max,
         min_slot_minutes=cfg.min_slot_minutes,
         min_gap_minutes=cfg.min_gap_minutes,
     )
@@ -1983,7 +1991,7 @@ def _select_slots(
             win_end_local=win_end_str,
             required_minutes=req_min,
             remaining=remaining,
-            max_price_eur=cfg.max_price_eur,
+            max_price_eur=_eff_max,
             min_slot_minutes=cfg.min_slot_minutes,
             all_prices=candidate_prices,
         )
@@ -2192,6 +2200,14 @@ def _plan_one_profile(
                            23, 0, tzinfo=timezone.utc) + timedelta(days=1)
     display_prices = [s for s in all_prices if s.start < horizon_utc]
 
+    # Resolve dynamic avg price ceiling if configured
+    resolved_max_price_eur = cfg.max_price_eur
+    if cfg.max_price_is_avg and all_prices:
+        prices_eur = [s.price_eur_kwh for s in display_prices or all_prices]
+        resolved_max_price_eur = sum(prices_eur) / len(prices_eur)
+        log.info("Profile '%s': dynamic price ceiling = avg %.4f c\u20ac/kWh",
+                 cfg.name, resolved_max_price_eur * 100)
+
     earliest_useful  = win_start_utc - timedelta(minutes=sched_required_minutes or cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
     if trimmed := len(all_prices) - len(candidate_prices):
@@ -2207,6 +2223,7 @@ def _plan_one_profile(
         cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str,
         required_minutes_override=effective_required,
         forecast_slots=forecast_display_slots,
+        max_price_override=resolved_max_price_eur,
     )
     if used_forecast and price_source != "forecast":
         log.warning("Profile '%s': plan built using forecast slots to fill window gap — "
@@ -2217,7 +2234,7 @@ def _plan_one_profile(
     total_scheduled = sum(s.duration_minutes for s in selected)
     plan_warning = None
     if total_scheduled < effective_required:
-        if cfg.max_price_eur is None:
+        if resolved_max_price_eur is None:
             # No price ceiling — shortage is purely due to insufficient price data
             plan_warning = "partial plan — required hours exceed boundaries"
             log.warning("Profile '%s': %s", cfg.name, plan_warning)
@@ -2233,9 +2250,14 @@ def _plan_one_profile(
             )
             comparison_min = sum(s.duration_minutes for s in comparison)
             if comparison_min >= effective_required:
-                plan_warning = (
-                    f"partial plan — price limit {cfg.max_price_eur * 100:.2f} c\u20ac/kWh"
-                )
+                if cfg.max_price_is_avg:
+                    plan_warning = (
+                        f"partial plan — price limit avg ({resolved_max_price_eur * 100:.2f} c\u20ac/kWh)"
+                    )
+                else:
+                    plan_warning = (
+                        f"partial plan — price limit {resolved_max_price_eur * 100:.2f} c\u20ac/kWh"
+                    )
             else:
                 plan_warning = "partial plan — required hours exceed boundaries"
             log.warning("Profile '%s': %s", cfg.name, plan_warning)
@@ -2258,7 +2280,7 @@ def _plan_one_profile(
         timezone_name=tz.name,
         preferred_window_start=win_start_str,
         preferred_window_end=win_end_str,
-        max_price_eur=cfg.max_price_eur,
+        max_price_eur=resolved_max_price_eur,
         min_slot_minutes=cfg.min_slot_minutes,
         min_gap_minutes=cfg.min_gap_minutes,
         continuous_only=cfg.continuous_only,
