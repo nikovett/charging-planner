@@ -186,7 +186,7 @@
   .legend-item { display: inline-flex; align-items: center; gap: 3px; }
   .legend-swatch { display: inline-block; width: 14px; height: 7px; border-radius: 1px; flex-shrink: 0; }
   .histogram {
-    position: relative; width: 100%; height: 56px;
+    position: relative; width: 100%; height: 112px;
     background: var(--bg3); border: 1px solid var(--border);
     border-radius: 2px; overflow: visible; display: flex; align-items: flex-end;
   }
@@ -389,7 +389,13 @@ function renderTimeline(plan, profileName, nowPrice) {
     + visible.map(function(s) {
         var lm      = new Date(s.start_utc).getTime()/60000 + utcOffset;
         var leftPct = ((lm-rangeStart)/totalMins*100).toFixed(4);
-        var h       = (10 + (s.price_cents_kwh-minP)/rangeP*80).toFixed(1);
+        var effectiveMin = Math.min(minP, 0);
+        var effectiveRange = maxP - effectiveMin || 1;
+        // Negative-price slots: zero height for real slots, minimum height for
+        // forecast display slots (they exist for visual context, not price accuracy).
+        var h = (s.price_cents_kwh <= 0 && !s.forecasted)
+          ? "0"
+          : (10 + (s.price_cents_kwh - effectiveMin) / effectiveRange * 80).toFixed(1);
         var isNow   = nowSlot && s.start_utc === nowSlot.start_utc;
         var bg, extra = "";
 
@@ -425,7 +431,9 @@ function renderTimeline(plan, profileName, nowPrice) {
     + '</div>';
 
   // Avg line
-  var avgH = (100 - (plan.price_stats.avg_cents_kwh-minP)/rangeP*80 - 10).toFixed(1);
+  var _effMin = Math.min(minP, 0);
+  var _effRange = maxP - _effMin || 1;
+  var avgH = (100 - (plan.price_stats.avg_cents_kwh - _effMin) / _effRange * 80 - 10).toFixed(1);
   var avgLine = '<div style="position:absolute;left:0;right:0;top:' + avgH + '%;border-top:1px dashed var(--border2);pointer-events:none"></div>'
               + '<div style="position:absolute;right:4px;bottom:calc(' + (100-parseFloat(avgH)) + '% + 2px);font-family:var(--mono);font-size:7px;color:var(--dim)">avg</div>';
 
