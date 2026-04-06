@@ -114,6 +114,8 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
 
 **172 tests** passing.
 
+**Dashboard histogram height doubled** (`index.html`): histogram height increased from 56px to 112px for better readability of price differences between slots. Scaling (10–90%) unchanged.
+
 ---
 
 ### Session 15 — 2026-04-05
