@@ -34,7 +34,7 @@ charging:
         connector_id: 1                 # typically 1 = type2, 2 = schuko, unless Aura
     #   charging_rate_unit: A           # Charge Amps API accepts only current (A) so no need to configure it here, just an example
         max_charging_rate: 16.0         # amps
-        restore_mode: false             # Charge Amps only: delivered schedule always changes the charger mode to "Schedule". Enabling this restores charging mode back to what it was before delivery.
+        restore_mode: true              # Charge Amps only: delivered schedule always changes the charger mode to "Schedule". Enabling this restores charging mode back to what it was before delivery.
 
   - name: overnight
     required_hours: 4.5                 # Total hours of charging to schedule
