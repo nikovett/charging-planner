@@ -335,7 +335,7 @@ function renderTimeline(plan, profileName, nowPrice) {
   // Nice ceiling: round maxP up to next clean tick value for proportional scale
   // Find smallest nice ceiling above maxP with at most 4 evenly-spaced ticks
   // Zero is the implicit bottom tick, shown ticks are interval, 2x, 3x, 4x
-  var niceSteps = [0.5,1,2,5,10,25,50,100];
+  var niceSteps = [0.5,1,2,5,10,25,50,100,150,200,500,1000];
   var niceInterval = 1, niceCeil = 100;
   for (var ni2 = 0; ni2 < niceSteps.length; ni2++) {
     var step = niceSteps[ni2];
