@@ -445,12 +445,16 @@ function renderTimeline(plan, profileName, nowPrice) {
   var avgLine = '<div style="position:absolute;left:0;right:0;top:' + avgH + '%;border-top:1px dashed var(--border2);pointer-events:none"></div>'
               + '<div style="position:absolute;right:4px;bottom:calc(' + (100-parseFloat(avgH)) + '% + 2px);font-family:var(--mono);font-size:7px;color:var(--dim)">avg</div>';
 
-  // Price ticks on right edge — evenly spaced at niceInterval, from 0 to niceCeil
+  // Price ticks — vertical axis to the right of the histogram
+  // Each tick has a short horizontal line touching the histogram edge and a label
   var _effMin2 = Math.min(minP, 0);
   var priceTicksHTML = '';
   for (var tick = niceInterval; tick <= niceCeil; tick += niceInterval) {
     var tickPct = (100 - (tick - _effMin2) / (niceCeil - _effMin2) * 90).toFixed(1);
-    priceTicksHTML += '<div style="position:absolute;right:4px;top:calc(' + tickPct + '% - 6px);font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1">' + tick + '</div>';
+    priceTicksHTML += '<div style="position:absolute;right:-28px;top:calc(' + tickPct + '% - 5px);display:flex;align-items:center;gap:2px">'
+      + '<div style="width:4px;height:1px;background:var(--dim)"></div>'
+      + '<span style="font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1">' + tick + '</span>'
+      + '</div>';
   }
 
   // Ticks
@@ -478,8 +482,10 @@ function renderTimeline(plan, profileName, nowPrice) {
 
   return '<div class="timeline-wrap">'
        + '<div class="timeline-label-row"><span>charging slots</span>' + legendHTML + '</div>'
-       + '<div class="histogram" style="-webkit-user-select:none;user-select:none;touch-action:pan-y" ontouchmove="histoTouchMove(event,\'' + profileName + '\')" ontouchend="unhoverBar(\'' + profileName + '\')" ontouchcancel="unhoverBar(\'' + profileName + '\')">'
-       + avgLine + priceTicksHTML + barsHTML
+       + '<div style="position:relative;margin-right:32px">'
+       + '<div class="histogram" style="overflow:visible;-webkit-user-select:none;user-select:none;touch-action:pan-y" ontouchmove="histoTouchMove(event,\'' + profileName + '\')" ontouchend="unhoverBar(\'' + profileName + '\')" ontouchcancel="unhoverBar(\'' + profileName + '\')">'
+       + avgLine + barsHTML + priceTicksHTML
+       + '</div>'
        + '</div>'
        + '<div class="timeline-ticks">' + tickHTML + '</div>'
        + '</div>';
