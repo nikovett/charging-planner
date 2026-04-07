@@ -449,6 +449,11 @@ function renderTimeline(plan, profileName, nowPrice) {
   // Each tick has a short horizontal line touching the histogram edge and a label
   var _effMin2 = Math.min(minP, 0);
   var priceTicksHTML = '';
+  // Zero tick at the bottom
+  priceTicksHTML += '<div style="position:absolute;top:calc(100% - 5px);left:0;display:flex;align-items:center;gap:2px;white-space:nowrap">'
+    + '<div style="width:4px;height:1px;background:var(--dim);flex-shrink:0"></div>'
+    + '<span style="font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1">0</span>'
+    + '</div>';
   for (var tick = niceInterval; tick <= niceCeil; tick += niceInterval) {
     var tickPct = (100 - (tick - _effMin2) / (niceCeil - _effMin2) * 90).toFixed(1);
     priceTicksHTML += '<div style="position:absolute;top:calc(' + tickPct + '% - 5px);left:0;display:flex;align-items:center;gap:2px;white-space:nowrap">'
