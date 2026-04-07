@@ -451,8 +451,8 @@ function renderTimeline(plan, profileName, nowPrice) {
   var priceTicksHTML = '';
   for (var tick = niceInterval; tick <= niceCeil; tick += niceInterval) {
     var tickPct = (100 - (tick - _effMin2) / (niceCeil - _effMin2) * 90).toFixed(1);
-    priceTicksHTML += '<div style="position:absolute;right:-28px;top:calc(' + tickPct + '% - 5px);display:flex;align-items:center;gap:2px">'
-      + '<div style="width:4px;height:1px;background:var(--dim)"></div>'
+    priceTicksHTML += '<div style="position:absolute;top:calc(' + tickPct + '% - 5px);left:0;display:flex;align-items:center;gap:2px">'
+      + '<div style="width:4px;height:1px;background:var(--dim);flex-shrink:0"></div>'
       + '<span style="font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1">' + tick + '</span>'
       + '</div>';
   }
@@ -482,10 +482,11 @@ function renderTimeline(plan, profileName, nowPrice) {
 
   return '<div class="timeline-wrap">'
        + '<div class="timeline-label-row"><span>charging slots</span>' + legendHTML + '</div>'
-       + '<div style="position:relative;margin-right:32px">'
-       + '<div class="histogram" style="overflow:visible;-webkit-user-select:none;user-select:none;touch-action:pan-y" ontouchmove="histoTouchMove(event,\'' + profileName + '\')" ontouchend="unhoverBar(\'' + profileName + '\')" ontouchcancel="unhoverBar(\'' + profileName + '\')">'
-       + avgLine + barsHTML + priceTicksHTML
+       + '<div style="display:flex;align-items:stretch;gap:0">'
+       + '<div class="histogram" style="flex:1;-webkit-user-select:none;user-select:none;touch-action:pan-y" ontouchmove="histoTouchMove(event,\'' + profileName + '\')" ontouchend="unhoverBar(\'' + profileName + '\')" ontouchcancel="unhoverBar(\'' + profileName + '\')">'
+       + avgLine + barsHTML
        + '</div>'
+       + '<div style="position:relative;width:28px;flex-shrink:0">' + priceTicksHTML + '</div>'
        + '</div>'
        + '<div class="timeline-ticks">' + tickHTML + '</div>'
        + '</div>';
