@@ -132,6 +132,10 @@ Both follow the same date-based URL pattern and return EUR/kWh — would slot cl
 - Avg line and bar heights use same `niceCeil` scale.
 - Histogram layout: flex row with histogram `flex:1` and tick axis `width: auto` (sized by `calc(6px + digits×6px)`).
 
+**v1.4.1 released** — bug fix only.
+
+**Bug fix: avg price ceiling used wrong slot pool**: `max_price_cents_kwh: "avg"` was computing the average from `display_prices` (all real slots including historical ones from yesterday evening), which skewed the ceiling artificially low. Fixed to use future slots only — same pool the planner selects from — consistent with `price_stats.avg` shown on the dashboard.
+
 **Elering API format confirmed from live data**: prices are in c€/kWh (not EUR/MWh as initially assumed), native 15-min resolution. Response always returns all 4 areas (fi, ee, lv, lt) regardless of `fields` param — correct area selected by key from `data[elering_field]`.
 
 **schedule.yml**: cron updated to `00 11 * * *` (11:00 UTC = 14:00 EEST summer / 13:00 EET winter, GHA delay lands ~14:30 EEST).

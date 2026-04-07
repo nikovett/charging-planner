@@ -2289,10 +2289,13 @@ def _plan_one_profile(
                            23, 0, tzinfo=timezone.utc) + timedelta(days=1)
     display_prices = [s for s in all_prices if s.start < horizon_utc]
 
-    # Resolve dynamic avg price ceiling if configured
+    # Resolve dynamic avg price ceiling if configured.
+    # Use future_prices — the same pool the planner selects from — so historical
+    # slots don't skew the average downward.
     resolved_max_price_eur = cfg.max_price_eur
     if cfg.max_price_is_avg and all_prices:
-        prices_eur = [s.price_eur_kwh for s in display_prices or all_prices]
+        future_prices_for_avg = [s for s in all_prices if s.start >= datetime.now(tz=timezone.utc)]
+        prices_eur = [s.price_eur_kwh for s in future_prices_for_avg or all_prices]
         resolved_max_price_eur = sum(prices_eur) / len(prices_eur)
         log.info("Profile '%s': dynamic price ceiling = avg %.4f c\u20ac/kWh",
                  cfg.name, resolved_max_price_eur * 100)
