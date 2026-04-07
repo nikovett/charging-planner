@@ -216,7 +216,8 @@ Features:
 - Hero shows `scheduled 3h (1h30m carried over)` when hours from the previous plan are carried forward, and `vs optimal ↑N%` when the window constraint forces suboptimal slots
 - "vs market" percentage shows how much cheaper the scheduled avg price is compared to the average across all slots available to the scheduler at run time
 - Hover/touch any bar to see its price and time in the hero area; hovering a charging bar shows the window avg price
-- Responsive tick intervals — 2h on wide screens, 4h on narrow (phone portrait)
+- Price axis on the right side of the histogram with evenly-spaced tick marks. The scale ceiling is the smallest nice number above the day's max price that gives ≤ 4 ticks. Zero is always shown at the bottom. Bars scale proportionally from zero to the ceiling.
+- Responsive time tick intervals — 2h on wide screens, 4h on narrow (phone portrait)
 - Forecast warning banner when `price_source` is `"forecast"`
 - Staleness warning when plan is more than a day old
 - Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")

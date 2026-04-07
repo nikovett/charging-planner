@@ -100,6 +100,23 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
              vs optimal ↑8%
 ```
 
+### Session 18 — 2026-04-07
+
+**Dashboard histogram price axis** (v1.4.0):
+- Scaled ceiling: `niceCeil` computed as smallest nice number above `maxP` that is a multiple of a nice interval and gives ≤ 4 ticks. Zero is the implicit bottom tick. Nice steps: `[0.5, 1, 2, 5, 10, 25, 50, 100, 150, 200, 500, 1000]`.
+- Bars scale from 0 to `niceCeil` (not minP to maxP), so relative prices are visually proportional.
+- Price ticks on right side of histogram — sibling flex div, 4px tick mark + label. Zero tick always shown at bottom. Ticks positioned using `top: calc(pct%)` within the axis div.
+- Avg line and bar heights use same `niceCeil` scale.
+- Histogram layout: flex row with histogram `flex:1` and tick axis `width: auto` (sized by `calc(6px + digits×6px)`).
+
+**Elering API format confirmed from live data**: prices are in c€/kWh (not EUR/MWh as initially assumed), native 15-min resolution. Response always returns all 4 areas (fi, ee, lv, lt) regardless of `fields` param — correct area selected by key from `data[elering_field]`.
+
+**schedule.yml**: cron updated to `00 11 * * *` (11:00 UTC = 14:00 EEST summer / 13:00 EET winter, GHA delay lands ~14:30 EEST).
+
+**config.yaml updated**: topup `required_hours: 2`, `max_price_cents_kwh: avg`, weekday required_hours `1.5`, weekend `4.5`, `min_gap_minutes: 15`; overnight weekend schedule `any:any` added, `min_gap_minutes: 15`.
+
+---
+
 ### Session 17 — 2026-04-06
 
 **`max_price_cents_kwh: "avg"` dynamic ceiling** (v1.4.0):
