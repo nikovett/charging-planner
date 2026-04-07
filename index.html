@@ -340,8 +340,6 @@ function renderTimeline(plan, profileName, nowPrice) {
     if (maxP <= step * 4) { niceInterval = step; break; }
   }
   var niceCeil = Math.ceil(Math.max(maxP, niceInterval) / niceInterval) * niceInterval;
-  // Ensure at least 20% headroom above the tallest bar
-  if (niceCeil < maxP * 1.2) niceCeil += niceInterval;
 
   // Find now slot
   var nowMs = Date.now();
