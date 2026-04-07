@@ -102,6 +102,29 @@ Fix: instead of skipping, the planner now supplements candidate prices with fore
 
 ### Session 18 — 2026-04-07
 
+**Area-based fallback chain dispatch** (not yet implemented):
+
+The fallback chain should be built dynamically based on the configured area rather than being a single fixed sequence. Each source declares which areas it supports and the chain is assembled at runtime:
+
+```
+FI:       ENTSO-E → Elering → Sähkötin → nordpool-predict-fi (forecast)
+EE/LV/LT: ENTSO-E → Elering
+SE1-SE4:  ENTSO-E → elprisetjustnu.se (not yet implemented)
+NO1-NO5:  ENTSO-E → hvakosterstrommen.no (not yet implemented)
+other:    ENTSO-E only
+```
+
+This is cleaner than the current linear chain where non-FI areas silently fall through Sähkötin and forecast. Implementation: each fetch function declares its supported areas; `cmd_plan` builds the chain from the area config at startup.
+
+**Potential fallback sources for SE and NO areas** (not yet implemented):
+
+- **hvakosterstrommen.no** — Norway (NO1–NO5), free, no auth. URL: `https://www.hvakosterstrommen.no/api/v1/prices/{YYYY}/{MM-DD}_{area}.json` (e.g. `_NO1.json`). Returns hourly slots with `NOK_per_kWh` and `EUR_per_kWh` fields. Widely used in Home Assistant integrations.
+- **elprisetjustnu.se** — Sweden (SE1–SE4), free, no auth. URL: `https://www.elprisetjustnu.se/api/v1/prices/{YYYY}/{MM-DD}_{area}.json` (e.g. `_SE3.json`). Returns hourly slots with SEK öre and EUR/kWh fields.
+
+Both follow the same date-based URL pattern and return EUR/kWh — would slot cleanly into a single `fetch_nordpool_prices()` dispatcher function. Neither covers both SE and NO, so the function would dispatch by area prefix. Response format needs live verification before implementation.
+
+### Session 18 — 2026-04-07
+
 **Dashboard histogram price axis** (v1.4.0):
 - Scaled ceiling: `niceCeil` computed as smallest nice number above `maxP` that is a multiple of a nice interval and gives ≤ 4 ticks. Zero is the implicit bottom tick. Nice steps: `[0.5, 1, 2, 5, 10, 25, 50, 100, 150, 200, 500, 1000]`.
 - Bars scale from 0 to `niceCeil` (not minP to maxP), so relative prices are visually proportional.
