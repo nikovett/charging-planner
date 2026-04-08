@@ -1966,6 +1966,52 @@ def write_gha_summary(plans: "list[dict]",
         log.warning("Could not write GitHub Actions summary: %s", exc)
 
 
+# ===========================================================================
+# Area-based fallback chain
+# ===========================================================================
+
+# Area sets for chain assembly. Both short codes and full EIC codes are
+# accepted so the chain is correct regardless of how area is configured.
+_FI_AREAS = {"FI", "10YFI-1--------U"}
+_EE_AREAS = {"EE", "10Y1001A1001A39I"}
+_LV_AREAS = {"LV", "10YLV-1--------W", "10YLV-1001A00074"}
+_LT_AREAS = {"LT", "10YLT-1--------W", "10YLT-1001A0008Q"}
+_ELERING_AREAS = _FI_AREAS | _EE_AREAS | _LV_AREAS | _LT_AREAS
+
+_SOURCE_NAMES = {
+    "fetch_entsoe_prices":   "ENTSO-E",
+    "fetch_elering_prices":  "Elering",
+    "fetch_sahkotin_prices": "Sähkötin",
+    "fetch_forecast_prices": "forecast",
+}
+
+
+def _build_fallback_chain(area: str) -> list[tuple]:
+    """Return the ordered list of (fetch_fn, source_name) pairs for the area.
+
+    The source name is stored alongside the function reference so it is
+    correct even when fetch functions are replaced by mocks in tests.
+
+    Chain by area:
+      FI (or EIC 10YFI-1--------U):
+          ENTSO-E → Elering → Sähkötin → forecast (nordpool-predict-fi)
+      EE / LV / LT (or their EIC codes):
+          ENTSO-E → Elering
+      SE1–SE4 / NO1–NO5:
+          ENTSO-E only  (regional fallbacks not yet implemented)
+      everything else:
+          ENTSO-E only
+    """
+    a = area.upper()
+    chain = [(fetch_entsoe_prices, "ENTSO-E")]
+    if a in _ELERING_AREAS:
+        chain.append((fetch_elering_prices, "Elering"))
+    if a in _FI_AREAS:
+        chain.append((fetch_sahkotin_prices, "Sähkötin"))
+        chain.append((fetch_forecast_prices, "forecast"))
+    return chain
+
+
 # ---------------------------------------------------------------------------
 # cmd_plan helpers — each covers one named phase of the planning pipeline
 # ---------------------------------------------------------------------------
@@ -2419,38 +2465,45 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     log.info("Timezone: %s (UTC%+d)", tz.name,
              int(datetime.now(tz=tz.zone).utcoffset().total_seconds() / 3600))
 
-    try:
-        all_prices, price_source = _fetch_prices(cfg0)
-    except Exception as exc:
-        log.warning("ENTSO-E unavailable (%s) — trying Elering.", exc)
+    all_prices   = None
+    price_source = None
+    chain        = _build_fallback_chain(cfg0.area)
+    # chain[0] is always ENTSO-E (needs api_key via _fetch_prices wrapper);
+    # subsequent entries are called with (area,) only.
+
+    for idx, (fetch_fn, source_name) in enumerate(chain):
+        is_last = idx == len(chain) - 1
         try:
-            all_prices = fetch_elering_prices(cfg0.area)
-            price_source = "Elering"
-            log.info("Using Elering prices.")
-        except PricesNotYetAvailable as exc2:
-            log.warning("Elering unavailable (%s) — trying Sähkötin.", exc2)
-            try:
-                all_prices = fetch_sahkotin_prices(cfg0.area)
-                price_source = "Sähkötin"
-                log.info("Using Sähkötin prices.")
-            except PricesNotYetAvailable as exc3:
-                log.warning("Sähkötin unavailable (%s) — trying forecast fallback.", exc3)
-                try:
-                    all_prices = fetch_forecast_prices(cfg0.area)
-                    price_source = "forecast"
-                    log.info("Using forecast prices as last resort fallback.")
-                except PricesNotYetAvailable as exc4:
-                    log.warning("%s", exc4)
-                    sys.exit(1)
+            if idx == 0:
+                all_prices, price_source = _fetch_prices(cfg0)
+            else:
+                all_prices   = fetch_fn(cfg0.area)
+                price_source = source_name
+            log.info("Using %s prices.", price_source)
+            break
+        except PricesNotYetAvailable as exc:
+            log.warning("%s unavailable (%s)%s.", source_name, exc,
+                        " — trying next source" if not is_last else "")
+        except Exception as exc:
+            log.warning("%s unavailable (%s)%s.", source_name, exc,
+                        " — trying next source" if not is_last else "")
+
+    if all_prices is None:
+        log.warning(
+            "No price source available for area '%s'. "
+            "ENTSO-E publishes next-day prices at ~12:00 UTC.", cfg0.area
+        )
+        sys.exit(1)
 
     plans = []
     skipped = []
     supplement_starts: set = set()
 
-    # If real prices don't reach tomorrow noon UTC, fall through to forecast as price source.
-    # This handles the case where ENTSO-E/Sähkötin fetch succeeded but prices aren't yet
-    # published for tomorrow (e.g. delayed publication after 12:00 UTC).
-    if price_source != "forecast" and all_prices:
+    # If real prices don't reach tomorrow noon UTC, supplement with forecast.
+    # Only attempted when forecast is in the area's chain (FI only).
+    # For other areas, partial price coverage means the run exits — there is
+    # no forecast source available to fill the gap.
+    if price_source != "forecast" and all_prices and cfg0.area.upper() in _FI_AREAS:
         tomorrow_noon = (datetime.now(tz=timezone.utc).date() + timedelta(days=1))
         tomorrow_noon_utc = datetime(tomorrow_noon.year, tomorrow_noon.month, tomorrow_noon.day,
                                      12, 0, tzinfo=timezone.utc)

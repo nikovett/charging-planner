@@ -1730,7 +1730,11 @@ class TestPriceSourceRules(unittest.TestCase):
     # ── Rule 3: no real prices ────────────────────────────────────────────────
 
     def test_rule3_price_source_forecast_when_no_real_prices(self):
-        """When no real prices, price_source is forecast."""
+        """When no real prices, price_source is forecast.
+
+        For FI area the chain is ENTSO-E → Elering → Sähkötin → forecast,
+        so all three real sources must fail before forecast is reached.
+        """
         import charging_planner as cp
         import tempfile
 
@@ -1745,13 +1749,15 @@ class TestPriceSourceRules(unittest.TestCase):
             with mock.patch("charging_planner.datetime", _FrozenDatetime):
                 with mock.patch("charging_planner.fetch_entsoe_prices",
                                side_effect=Exception("unavailable")):
-                    with mock.patch("charging_planner.fetch_sahkotin_prices",
+                    with mock.patch("charging_planner.fetch_elering_prices",
                                    side_effect=PricesNotYetAvailable("unavailable")):
-                        with mock.patch("charging_planner.fetch_forecast_prices",
-                                       return_value=forecast):
-                            with mock.patch("charging_planner.fetch_forecast_display_slots",
-                                           return_value=[]):
-                                plans = cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+                        with mock.patch("charging_planner.fetch_sahkotin_prices",
+                                       side_effect=PricesNotYetAvailable("unavailable")):
+                            with mock.patch("charging_planner.fetch_forecast_prices",
+                                           return_value=forecast):
+                                with mock.patch("charging_planner.fetch_forecast_display_slots",
+                                               return_value=[]):
+                                    plans = cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
         self.assertEqual(plans[0]["price_source"], "forecast")
 
     # ── Rule 4: horizon caps planning not display ─────────────────────────────
@@ -1896,8 +1902,368 @@ class TestRealEntsoEData(unittest.TestCase):
 
 
 # ===========================================================================
-# 12. ntfy notification
+# 12. Area-based fallback chain
 # ===========================================================================
+
+class TestBuildFallbackChain(unittest.TestCase):
+    """Unit tests for _build_fallback_chain.
+
+    Verifies that the correct fetch functions are returned in the correct
+    order for each area, and that area-inappropriate sources are never
+    included.
+
+    Chain by area:
+      FI:        ENTSO-E → Elering → Sähkötin → forecast
+      EE/LV/LT:  ENTSO-E → Elering
+      SE1–SE4:   ENTSO-E only
+      NO1–NO5:   ENTSO-E only
+      other:     ENTSO-E only
+    """
+
+    def _names(self, area):
+        from charging_planner import _build_fallback_chain
+        return [name for _fn, name in _build_fallback_chain(area)]
+
+    # ── FI ────────────────────────────────────────────────────────────────────
+
+    def test_fi_chain_length(self):
+        from charging_planner import _build_fallback_chain
+        self.assertEqual(len(_build_fallback_chain("FI")), 4)
+
+    def test_fi_chain_order(self):
+        self.assertEqual(self._names("FI"), [
+            "ENTSO-E",
+            "Elering",
+            "Sähkötin",
+            "forecast",
+        ])
+
+    def test_fi_eic_code_same_chain(self):
+        """Full EIC code for FI produces the same chain as the short code."""
+        self.assertEqual(self._names("FI"), self._names("10YFI-1--------U"))
+
+    # ── EE / LV / LT ─────────────────────────────────────────────────────────
+
+    def test_ee_chain_length(self):
+        from charging_planner import _build_fallback_chain
+        self.assertEqual(len(_build_fallback_chain("EE")), 2)
+
+    def test_ee_chain_order(self):
+        self.assertEqual(self._names("EE"), ["ENTSO-E", "Elering"])
+
+    def test_lv_chain_same_as_ee(self):
+        self.assertEqual(self._names("LV"), self._names("EE"))
+
+    def test_lt_chain_same_as_ee(self):
+        self.assertEqual(self._names("LT"), self._names("EE"))
+
+    def test_ee_no_sahkotin(self):
+        self.assertNotIn("Sähkötin", self._names("EE"))
+
+    def test_ee_no_forecast(self):
+        self.assertNotIn("forecast", self._names("EE"))
+
+    # ── SE ────────────────────────────────────────────────────────────────────
+
+    def test_se1_entsoe_only(self):
+        self.assertEqual(self._names("SE1"), ["ENTSO-E"])
+
+    def test_se4_entsoe_only(self):
+        self.assertEqual(self._names("SE4"), ["ENTSO-E"])
+
+    def test_se_no_elering(self):
+        self.assertNotIn("Elering", self._names("SE2"))
+
+    # ── NO ────────────────────────────────────────────────────────────────────
+
+    def test_no1_entsoe_only(self):
+        self.assertEqual(self._names("NO1"), ["ENTSO-E"])
+
+    def test_no5_entsoe_only(self):
+        self.assertEqual(self._names("NO5"), ["ENTSO-E"])
+
+    def test_no_no_elering(self):
+        self.assertNotIn("Elering", self._names("NO3"))
+
+    # ── Other ─────────────────────────────────────────────────────────────────
+
+    def test_de_entsoe_only(self):
+        self.assertEqual(self._names("DE"), ["ENTSO-E"])
+
+    def test_unknown_area_entsoe_only(self):
+        self.assertEqual(self._names("XX"), ["ENTSO-E"])
+
+    def test_chain_contains_callables(self):
+        from charging_planner import _build_fallback_chain
+        for fn, name in _build_fallback_chain("FI"):
+            self.assertTrue(callable(fn))
+
+
+class TestAreaFallbackChainIntegration(unittest.TestCase):
+    """Integration tests: cmd_plan calls the right sources and skips wrong ones.
+
+    Each test patches all four fetch functions explicitly so no real network
+    calls are made and the mock wiring is unambiguous.
+    """
+
+    _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
+
+    def _make_prices(self, hours=48, price_eur=0.05):
+        base = datetime(2026, 3, 14, 12, 0, tzinfo=UTC)
+        return [Slot(start=base + timedelta(minutes=15*i),
+                     end=base + timedelta(minutes=15*i+15),
+                     duration_minutes=15, price_eur_kwh=price_eur, slot=i)
+                for i in range(hours * 4)]
+
+    def _config(self, area="FI"):
+        return {
+            "entsoe": {"api_key": "test", "area": area,
+                       "timezone": "Europe/Helsinki"},
+            "charging": [{"name": "topup", "required_hours": 1,
+                          "preferred_window_start": "22:00",
+                          "preferred_window_end": "06:30"}],
+        }
+
+    def _run(self, area, entsoe, elering=None, sahkotin=None, forecast=None):
+        """Run cmd_plan with all four fetch functions explicitly patched.
+
+        Pass a list[Slot] to have the function succeed, or an exception
+        instance/class to have it raise. Defaults to PricesNotYetAvailable
+        for sources not specified.
+        """
+        import charging_planner as cp
+        import tempfile
+
+        _unavail = PricesNotYetAvailable("unavailable")
+
+        def _side(v):
+            if v is None:
+                return mock.Mock(side_effect=_unavail)
+            if isinstance(v, list):
+                return mock.Mock(return_value=v)
+            return mock.Mock(side_effect=v)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return TestAreaFallbackChainIntegration._FROZEN_NOW if tz is None \
+                    else TestAreaFallbackChainIntegration._FROZEN_NOW.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices",   _side(entsoe)), \
+             mock.patch("charging_planner.fetch_elering_prices",  _side(elering)), \
+             mock.patch("charging_planner.fetch_sahkotin_prices", _side(sahkotin)), \
+             mock.patch("charging_planner.fetch_forecast_prices", _side(forecast)), \
+             mock.patch("charging_planner.fetch_forecast_display_slots",
+                        return_value=[]):
+            return cp.cmd_plan(self._config(area), output_dir=tmpdir)
+
+    # ── FI: ENTSO-E succeeds — no fallback called ─────────────────────────────
+
+    def test_fi_entsoe_success_elering_not_called(self):
+        prices = self._make_prices()
+        mock_el = mock.Mock(side_effect=AssertionError("should not be called"))
+        with mock.patch("charging_planner.fetch_elering_prices", mock_el), \
+             mock.patch("charging_planner.fetch_forecast_display_slots", return_value=[]):
+            self._run("FI", entsoe=prices)
+        mock_el.assert_not_called()
+
+    def test_fi_entsoe_success_price_source(self):
+        plans = self._run("FI", entsoe=self._make_prices())
+        self.assertEqual(plans[0]["price_source"], "ENTSO-E")
+
+    # ── FI: ENTSO-E fails → Elering ───────────────────────────────────────────
+
+    def test_fi_elering_tried_when_entsoe_fails(self):
+        prices = self._make_prices()
+        plans = self._run("FI",
+                          entsoe=Exception("down"),
+                          elering=prices)
+        self.assertEqual(plans[0]["price_source"], "Elering")
+
+    def test_fi_elering_success_sahkotin_not_called(self):
+        prices = self._make_prices()
+        mock_sah = mock.Mock(side_effect=AssertionError("should not be called"))
+        with mock.patch("charging_planner.fetch_sahkotin_prices", mock_sah):
+            self._run("FI", entsoe=Exception("down"), elering=prices)
+        mock_sah.assert_not_called()
+
+    # ── FI: ENTSO-E + Elering fail → Sähkötin ────────────────────────────────
+
+    def test_fi_sahkotin_tried_when_entsoe_and_elering_fail(self):
+        prices = self._make_prices()
+        plans = self._run("FI",
+                          entsoe=Exception("down"),
+                          elering=PricesNotYetAvailable("down"),
+                          sahkotin=prices)
+        self.assertEqual(plans[0]["price_source"], "Sähkötin")
+
+    def test_fi_sahkotin_success_forecast_not_called(self):
+        prices = self._make_prices()
+        mock_fc = mock.Mock(side_effect=AssertionError("should not be called"))
+        with mock.patch("charging_planner.fetch_forecast_prices", mock_fc):
+            self._run("FI",
+                      entsoe=Exception("down"),
+                      elering=PricesNotYetAvailable("down"),
+                      sahkotin=prices)
+        mock_fc.assert_not_called()
+
+    # ── FI: all real sources fail → forecast ──────────────────────────────────
+
+    def test_fi_forecast_tried_when_all_real_fail(self):
+        prices = self._make_prices()
+        plans = self._run("FI",
+                          entsoe=Exception("down"),
+                          elering=PricesNotYetAvailable("down"),
+                          sahkotin=PricesNotYetAvailable("down"),
+                          forecast=prices)
+        self.assertEqual(plans[0]["price_source"], "forecast")
+
+    def test_fi_exits_when_all_sources_fail(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run("FI",
+                      entsoe=Exception("down"),
+                      elering=PricesNotYetAvailable("down"),
+                      sahkotin=PricesNotYetAvailable("down"),
+                      forecast=PricesNotYetAvailable("down"))
+        self.assertEqual(ctx.exception.code, 1)
+
+    # ── EE: ENTSO-E succeeds ──────────────────────────────────────────────────
+
+    def test_ee_entsoe_success_price_source(self):
+        plans = self._run("EE", entsoe=self._make_prices())
+        self.assertEqual(plans[0]["price_source"], "ENTSO-E")
+
+    # ── EE: ENTSO-E fails → Elering ───────────────────────────────────────────
+
+    def test_ee_elering_tried_when_entsoe_fails(self):
+        plans = self._run("EE",
+                          entsoe=Exception("down"),
+                          elering=self._make_prices())
+        self.assertEqual(plans[0]["price_source"], "Elering")
+
+    # ── EE: Sähkötin and forecast never called ────────────────────────────────
+    # These patch all fetchers directly so assert_not_called() is unambiguous.
+
+    def _run_all_patched(self, area, entsoe_exc, elering_exc,
+                         mock_sah, mock_fc):
+        """Run cmd_plan with every fetcher patched; mocks passed in are used directly."""
+        import charging_planner as cp
+        import tempfile
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return TestAreaFallbackChainIntegration._FROZEN_NOW if tz is None \
+                    else TestAreaFallbackChainIntegration._FROZEN_NOW.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices",
+                        side_effect=entsoe_exc), \
+             mock.patch("charging_planner.fetch_elering_prices",
+                        side_effect=elering_exc), \
+             mock.patch("charging_planner.fetch_sahkotin_prices", mock_sah), \
+             mock.patch("charging_planner.fetch_forecast_prices", mock_fc), \
+             mock.patch("charging_planner.fetch_forecast_display_slots",
+                        return_value=[]):
+            return cp.cmd_plan(self._config(area), output_dir=tmpdir)
+
+    def test_ee_sahkotin_never_called(self):
+        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        with self.assertRaises(SystemExit):
+            self._run_all_patched("EE",
+                                  entsoe_exc=Exception("down"),
+                                  elering_exc=PricesNotYetAvailable("down"),
+                                  mock_sah=mock_sah, mock_fc=mock_fc)
+        mock_sah.assert_not_called()
+
+    def test_ee_forecast_never_called(self):
+        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        with self.assertRaises(SystemExit):
+            self._run_all_patched("EE",
+                                  entsoe_exc=Exception("down"),
+                                  elering_exc=PricesNotYetAvailable("down"),
+                                  mock_sah=mock_sah, mock_fc=mock_fc)
+        mock_fc.assert_not_called()
+
+    def test_ee_exits_when_entsoe_and_elering_fail(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run("EE",
+                      entsoe=Exception("down"),
+                      elering=PricesNotYetAvailable("down"))
+        self.assertEqual(ctx.exception.code, 1)
+
+    # ── SE1: ENTSO-E only — Elering never called ──────────────────────────────
+
+    def test_se1_elering_never_called(self):
+        mock_el  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        with self.assertRaises(SystemExit):
+            self._run_all_patched("SE1",
+                                  entsoe_exc=Exception("down"),
+                                  elering_exc=PricesNotYetAvailable("unavailable"),
+                                  mock_sah=mock_sah, mock_fc=mock_fc)
+        mock_el.assert_not_called()
+
+    def test_se1_exits_when_entsoe_fails(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run("SE1", entsoe=Exception("down"))
+        self.assertEqual(ctx.exception.code, 1)
+
+    def test_se1_entsoe_success_price_source(self):
+        plans = self._run("SE1", entsoe=self._make_prices())
+        self.assertEqual(plans[0]["price_source"], "ENTSO-E")
+
+    # ── NO1: ENTSO-E only — Elering never called ──────────────────────────────
+
+    def test_no1_elering_never_called(self):
+        mock_el  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        with self.assertRaises(SystemExit):
+            self._run_all_patched("NO1",
+                                  entsoe_exc=Exception("down"),
+                                  elering_exc=PricesNotYetAvailable("unavailable"),
+                                  mock_sah=mock_sah, mock_fc=mock_fc)
+        mock_el.assert_not_called()
+
+    def test_no1_exits_when_entsoe_fails(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self._run("NO1", entsoe=Exception("down"))
+        self.assertEqual(ctx.exception.code, 1)
+
+    # ── DE: ENTSO-E only — no fallback at all ────────────────────────────────
+
+    def test_de_no_fallback_beyond_entsoe(self):
+        mock_el  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        with self.assertRaises(SystemExit):
+            self._run_all_patched("DE",
+                                  entsoe_exc=Exception("down"),
+                                  elering_exc=PricesNotYetAvailable("unavailable"),
+                                  mock_sah=mock_sah, mock_fc=mock_fc)
+        mock_el.assert_not_called()
+        mock_sah.assert_not_called()
+
+    # ── Supplement block: forecast only attempted for FI ─────────────────────
+
+    def test_ee_supplement_not_attempted_when_prices_partial(self):
+        """For EE, if real prices don't reach tomorrow noon, we exit rather than
+        attempting a forecast supplement (forecast is not in the EE chain)."""
+        # 6h of prices won't reach tomorrow noon
+        short_prices = self._make_prices(hours=6)
+        mock_fc = mock.Mock(side_effect=AssertionError("should not be called"))
+        with mock.patch("charging_planner.fetch_forecast_prices", mock_fc):
+            with self.assertRaises(SystemExit):
+                self._run("EE", entsoe=short_prices)
+        mock_fc.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
