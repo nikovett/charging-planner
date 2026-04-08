@@ -133,6 +133,9 @@ Both follow the same date-based URL pattern and return EUR/kWh — would slot cl
 - Histogram layout: flex row with histogram `flex:1` and tick axis `width: auto` (sized by `calc(6px + digits×6px)`).
 
 **v1.4.1 released** — bug fix only.
+**v1.4.2 released** — bug fix only.
+
+**Dashboard JS syntax error** (`index.html`): mismatched quote in the price limit pill render — `"` instead of `'` to close a ternary expression caused `node --check` to report "Invalid regular expression flags". Fixed. Going forward: always run `node --check` on extracted JS after edits to `index.html`.
 
 **Bug fix: avg price ceiling used wrong slot pool**: `max_price_cents_kwh: "avg"` was computing the average from `display_prices` (all real slots including historical ones from yesterday evening), which skewed the ceiling artificially low. Fixed to use future slots only — same pool the planner selects from — consistent with `price_stats.avg` shown on the dashboard.
 
