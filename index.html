@@ -665,7 +665,7 @@ function renderBackFace(profileName) {
   var cfgFields = [
     ["charging slots", cfg.continuous !== undefined ? '<span class="badge on">' + (cfg.continuous ? "continuous" : "split") + '</span>' : '<span class="badge">\u2014</span>'],
     ["min slot", !cfg.continuous && cfg.minSlot ? '<span class="badge on">' + cfg.minSlot + ' min</span>' : '<span class="badge">\u2014</span>'],
-    ["price limit",  cfg.maxPrice != null ? '<span class="badge on">' + cfg.maxPrice.toFixed(2) + ' c\u20ac/kWh</span>' : '<span class="badge">none</span>'],
+    ["price limit",  cfg.maxPrice != null ? '<span class="badge on">' + (cfg.maxPrice === "avg" ? "avg" : cfg.maxPrice.toFixed(2) + ' c\u20ac/kWh') + '</span>' : '<span class="badge">none</span>'],
     ["charger delivery", cfg.handlers && cfg.handlers.length
                    ? (cfg.handlers.some(function(h){return h.enabled;}) ? '<span class="badge on">\u2713 on</span>' : '<span class="badge">off</span>')
                    : '<span class="badge">\u2014</span>'],
@@ -765,7 +765,7 @@ function parseConfigYaml(yaml) {
       currentProfile.minSlot = parseInt(trimmed.split(":")[1].trim(),10);
     } else if (currentProfile && indent===4 && trimmed.indexOf("max_price_cents_kwh:")===0) {
       var mpVal = trimmed.split(":")[1].trim().split("#")[0].trim();
-      currentProfile.maxPrice = mpVal==="null" ? null : parseFloat(mpVal);
+      currentProfile.maxPrice = mpVal==="null" ? null : (mpVal.toLowerCase()==="avg" ? "avg" : parseFloat(mpVal));
     } else if (currentProfile && indent===6 && trimmed.indexOf("- handler:")===0) {
       if (!currentProfile.handlers) currentProfile.handlers=[];
       currentProfile.handlers.push({name:trimmed.split(":")[1].trim().split("#")[0].trim(),enabled:true});
