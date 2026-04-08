@@ -22,7 +22,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Previously committed charging is never lost.** If a new plan is built before all charging slots from the previous plan have taken place, the remaining uncommitted charging time is added on top of the new plan's requirement. The scheduler then finds the cheapest slots for the full combined need — so the charger never loses charging time it was already told to expect.
 
-**Four-level price source fallback.** ENTSO-E → Elering → Sähkötin → nordpool-predict-fi forecast. If ENTSO-E is unavailable, the plan still builds using real Nord Pool prices from Elering (FI/EE/LV/LT) or Sähkötin (FI). The dashboard warns when the plan is based on forecast rather than confirmed prices.
+**Area-aware price source fallback.** The fallback chain is built from the configured area: FI uses ENTSO-E → Elering → Sähkötin → forecast; EE/LV/LT use ENTSO-E → Elering; SE and NO areas use ENTSO-E only (regional fallbacks not yet implemented). Sources outside the area's chain are never tried. The dashboard warns when the plan is based on forecast rather than confirmed prices.
 
 
 ```
@@ -181,25 +181,30 @@ New handlers can be added by creating a `deliver_<n>.py` script in the `delivery
 
 ## Fallback price sources
 
-When ENTSO-E is unavailable or returns incomplete data, the planner automatically tries three fallback sources before giving up:
+The fallback chain is assembled at startup from the configured area — sources outside an area's chain are never called:
+
+| Area | Chain |
+|---|---|
+| `FI` | ENTSO-E → Elering → Sähkötin → forecast |
+| `EE`, `LV`, `LT` | ENTSO-E → Elering |
+| `SE1`–`SE4`, `NO1`–`NO5` | ENTSO-E only |
+| other | ENTSO-E only |
+
+The fallback triggers in two cases: network/HTTP errors, and when the returned prices don't extend into tomorrow (e.g. during scheduled maintenance where ENTSO-E returns a valid but stale response with only today's data).
 
 1. **Elering** (`dashboard.elering.ee/api`) — actual Nord Pool 15-min prices for Finland, Estonia, Latvia and Lithuania. No API key needed. Used transparently — `price_source: "Elering"` in the plan JSON, no dashboard warning.
 
 2. **Sähkötin** (`sahkotin.fi/api`) — actual realized Nord Pool 15-min prices, Finland only. No API key needed. Used transparently — `price_source: "Sähkötin"` in the plan JSON, no dashboard warning.
 
-3. **nordpool-predict-fi** (`raw.githubusercontent.com/vividfog/nordpool-predict-fi`) — ML forecast blended with realized prices. Native 15-min slots. By ~14:00–16:00 Helsinki time the forecast transitions to actual market prices, making it nearly as reliable as ENTSO-E once Nord Pool has published. Plans from this source are tagged `price_source: "forecast"` and display a warning banner on the dashboard.
+3. **nordpool-predict-fi** (`raw.githubusercontent.com/vividfog/nordpool-predict-fi`) — ML forecast blended with realized prices. Finland only. By ~14:00–16:00 Helsinki time the forecast transitions to actual market prices, making it nearly as reliable as ENTSO-E once Nord Pool has published. Plans from this source are tagged `price_source: "forecast"` and display a warning banner on the dashboard.
 
-The fallback triggers in two cases: network/HTTP errors, and when the returned prices don't extend into tomorrow (e.g. during scheduled maintenance where ENTSO-E returns a valid but stale response with only today's data).
-
-Elering and Sähkötin cover different areas — Elering handles FI/EE/LV/LT, Sähkötin and nordpool-predict-fi are Finland only. For areas not covered by any fallback source, the script exits with a non-zero code so the GHA run is marked as failed.
-
-If all three sources fail, the script exits with a non-zero code so the GHA run is marked as failed.
+If all sources in the area's chain fail, the script exits with a non-zero code so the GHA run is marked as failed and the operator receives an email.
 
 ## Histogram display augmentation
 
 Both ENTSO-E and Sähkötin return price slots from the previous evening onwards, including historical prices. This gives the dashboard histogram enough data to the left of "now" for context.
 
-After every successful real-price fetch, the planner always fetches up to 24 hours of forecast data from nordpool-predict-fi beyond the last real price slot. These slots are primarily **display-only** — they appear as grey diagonal-striped bars in the histogram. They are also used for slot selection when real prices don't fully cover the charging window (see fallback price sources), in which case `price_source` is set to `"forecast"`.
+After every successful real-price fetch, the planner always fetches up to 24 hours of forecast data from nordpool-predict-fi beyond the last real price slot (Finland only — other areas skip this step). These slots are primarily **display-only** — they appear as grey diagonal-striped bars in the histogram. They are also used for slot selection when real prices don't fully cover the charging window (see fallback price sources), in which case `price_source` is set to `"forecast"`.
 
 ## Dashboard
 

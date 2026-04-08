@@ -147,6 +147,37 @@ Both follow the same date-based URL pattern and return EUR/kWh — would slot cl
 
 ---
 
+### Session 19 — 2026-04-08
+
+**Area-based fallback chain dispatch** (v1.5.0):
+
+`_build_fallback_chain(area)` replaces the hardcoded nested try/except in `cmd_plan`. Returns `[(fetch_fn, source_name)]` tuples — the name is stored alongside the function at build time so it survives `mock.patch` replacement in tests.
+
+Chain by area:
+```
+FI:        ENTSO-E → Elering → Sähkötin → nordpool-predict-fi (forecast)
+EE/LV/LT:  ENTSO-E → Elering
+SE1–SE4:   ENTSO-E only  (elprisetjustnu not yet implemented)
+NO1–NO5:   ENTSO-E only  (hvakosterstrommen not yet implemented)
+other:     ENTSO-E only
+```
+
+Both short codes (`FI`, `EE`) and full EIC codes (`10YFI-1--------U`) are recognised so the chain is correct regardless of how `area` is configured.
+
+**Forecast supplement gated to FI**: the block that supplements real prices with forecast when they don't reach tomorrow noon was previously unconditional — it called `fetch_forecast_prices` for any area, which would raise `PricesNotYetAvailable` for non-FI and then exit. Now gated with `cfg0.area.upper() in _FI_AREAS` so non-FI areas with partial price coverage simply proceed with what they have (the window coverage check handles it).
+
+**`_SOURCE_NAMES` dict** maps function names to display names (`"ENTSO-E"`, `"Elering"`, `"Sähkötin"`, `"forecast"`). Used in `cmd_plan` warning messages and `price_source` field in the plan JSON.
+
+**Adding a new area/source** requires two steps: implement `fetch_<source>_prices(area)` raising `PricesNotYetAvailable` on failure, then add an area set and `chain.append()` call in `_build_fallback_chain`. No other changes needed.
+
+**`test_rule3` fix**: was only patching `fetch_sahkotin_prices` and `fetch_forecast_prices` — missed `fetch_elering_prices` which is now between ENTSO-E and Sähkötin in the FI chain. Updated to patch all three real sources.
+
+**38 new tests**: `TestBuildFallbackChain` (18 unit tests for chain composition across all area groups) and `TestAreaFallbackChainIntegration` (20 integration tests running `cmd_plan` with all fetchers explicitly patched). "Never called" tests use `_run_all_patched` which patches all four fetchers directly so `assert_not_called()` operates on the exact mock that `cmd_plan` calls.
+
+**210 tests** passing (172 + 38 new), 3 skipped.
+
+---
+
 ### Session 17 — 2026-04-06
 
 **`max_price_cents_kwh: "avg"` dynamic ceiling** (v1.4.0):
@@ -278,13 +309,24 @@ config.yaml                  # Configuration (committed with empty secrets)
 
 ---
 
-## Price sources (three-level fallback)
+## Price sources (area-based fallback chain)
+
+The fallback chain is built dynamically from the configured area by `_build_fallback_chain(area)`. Each source raises `PricesNotYetAvailable` on failure; the next source in the chain is tried automatically.
+
+```
+FI:        ENTSO-E → Elering → Sähkötin → nordpool-predict-fi (forecast)
+EE/LV/LT:  ENTSO-E → Elering
+SE1–SE4:   ENTSO-E only  (elprisetjustnu not yet implemented)
+NO1–NO5:   ENTSO-E only  (hvakosterstrommen not yet implemented)
+other:     ENTSO-E only
+```
 
 1. **ENTSO-E** — primary. Day-ahead 15-min prices. Retries 5×, backoff 5s. Raises `PricesNotYetAvailable` if slots don't reach tomorrow (catches partial/stale responses e.g. during maintenance).
-2. **Sähkötin** (`sahkotin.fi/api`) — actual Nord Pool 15-min prices, FI only, no API key. Used transparently.
-3. **nordpool-predict-fi** — ML forecast blended with realized prices. FI only. Tagged `price_source: "forecast"` in plan JSON; triggers dashboard warning.
+2. **Elering** (`dashboard.elering.ee/api`) — actual Nord Pool 15-min prices for FI/EE/LV/LT. No API key. Used transparently — `price_source: "Elering"` in plan JSON, no dashboard warning.
+3. **Sähkötin** (`sahkotin.fi/api`) — actual Nord Pool 15-min prices, FI only, no API key. Used transparently.
+4. **nordpool-predict-fi** — ML forecast blended with realized prices. FI only. Tagged `price_source: "forecast"` in plan JSON; triggers dashboard warning.
 
-Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch, up to 24h of forecast slots are fetched beyond the last real slot. Primarily display-only (grey diagonal bars in the histogram), but also used for selection when real prices don't fully cover the charging window — in that case `price_source` is set to `"forecast"` and the dashboard warning is shown.
+Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch, up to 24h of forecast display slots are fetched beyond the last real slot (FI only — `fetch_forecast_display_slots` returns `[]` for other areas). These are display-only (grey diagonal bars in the histogram), never used for selection. When real prices don't fully cover the charging window, forecast slots supplement them for selection too — in that case `price_source` is set to `"forecast"` and the dashboard warning is shown. This supplement is also FI-only.
 
 ---
 
@@ -495,8 +537,8 @@ charging:
 
 ## Test suite
 
-156 tests, 3 skipped:
-- `test/test_charging_planner.py` — price parsing, window selection, DP algorithm, gap constraint, spillover, plan building, schedule resolution, retained minutes
+210 tests, 3 skipped:
+- `test/test_charging_planner.py` — price parsing, window selection, DP algorithm, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration)
 - `test/test_deliver_chargeamps.py` — Charge Amps delivery handler (login/cache, connector mode, period fields, period timing)
 
 ---
@@ -535,6 +577,15 @@ Seven color pairs considered as alternative themes for the dashboard. Each pair 
 ---
 
 ## Future work
+
+### SE and NO fallback price sources
+
+The area-based chain is ready to accept new sources. Two candidates are documented and pre-researched:
+
+- **elprisetjustnu.se** — Sweden (SE1–SE4), free, no auth. URL: `https://www.elprisetjustnu.se/api/v1/prices/{YYYY}/{MM-DD}_{area}.json` (e.g. `_SE3.json`). Returns hourly slots with SEK öre and EUR/kWh fields.
+- **hvakosterstrommen.no** — Norway (NO1–NO5), free, no auth. URL: `https://www.hvakosterstrommen.no/api/v1/prices/{YYYY}/{MM-DD}_{area}.json` (e.g. `_NO1.json`). Returns hourly slots with `NOK_per_kWh` and `EUR_per_kWh` fields.
+
+Both follow the same date-based URL pattern and return EUR/kWh — would slot cleanly into a single `fetch_nordpool_prices()` dispatcher. Response format needs live verification before implementation. Once implemented, adding them to the chain is two lines in `_build_fallback_chain`.
 
 ### Additional charger delivery handlers
 
