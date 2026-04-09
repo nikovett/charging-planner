@@ -780,6 +780,193 @@ def fetch_elering_prices(area: str = "FI") -> list[Slot]:
             for i, s in enumerate(sorted(slots, key=lambda x: x.start))]
 
 
+# ---------------------------------------------------------------------------
+# Nordpool regional price sources — SE and NO
+# ---------------------------------------------------------------------------
+
+# elprisetjustnu.se — Sweden (SE1–SE4)
+# Native 15-min resolution (96 slots/day). EUR/kWh ex-VAT. No API key.
+
+_ELPRISETJUSTNU_AREAS = {
+    "SE1": "SE1", "SE2": "SE2", "SE3": "SE3", "SE4": "SE4",
+    "10Y1001A1001A44P": "SE1", "10Y1001A1001A45N": "SE2",
+    "10Y1001A1001A46L": "SE3", "10Y1001A1001A47J": "SE4",
+}
+
+# hvakosterstrommen.no — Norway (NO1–NO5)
+# Hourly resolution (24 slots/day), expanded to 15-min. EUR/kWh ex-VAT. No API key.
+
+_HVAKOSTERSTROMMEN_AREAS = {
+    "NO1": "NO1", "NO2": "NO2", "NO3": "NO3", "NO4": "NO4", "NO5": "NO5",
+    "10YNO-1--------2": "NO1", "10YNO-2--------T": "NO2",
+    "10YNO-3--------J": "NO3", "10YNO-4--------9": "NO4",
+    "10Y1001A1001A48H": "NO5",
+}
+
+_NORDPOOL_HOST = {
+    "SE": "www.elprisetjustnu.se",
+    "NO": "www.hvakosterstrommen.no",
+}
+
+
+def _fetch_nordpool_day(host: str, area_code: str, fetch_date) -> list[Slot]:
+    """Fetch one calendar day from a nordpool regional API and return raw Slot list.
+
+    Shared by fetch_elprisetjustnu_prices and fetch_hvakosterstrommen_prices.
+    Returns an empty list on 404 (tomorrow not yet published).
+    Raises PricesNotYetAvailable on any other failure.
+    """
+    date_str = fetch_date.strftime("%Y/%m-%d")
+    url      = f"https://{host}/api/v1/prices/{date_str}_{area_code}.json"
+    log.info("Fetching %s prices: %s", area_code, url)
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        raw = _http_request_with_retry(req, timeout=20, retries=3, backoff=3.0,
+                                       label=f"{host} ({area_code})")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            log.info("%s: no prices for %s yet (404)", area_code, fetch_date)
+            return []
+        raise PricesNotYetAvailable(
+            f"{host} fetch failed for {fetch_date}: HTTP {e.code}")
+    except Exception as e:
+        raise PricesNotYetAvailable(f"{host} fetch failed for {fetch_date}: {e}")
+
+    try:
+        entries = json.loads(raw)
+    except Exception as e:
+        raise PricesNotYetAvailable(f"{host} JSON parse failed for {fetch_date}: {e}")
+
+    if not isinstance(entries, list) or not entries:
+        return []
+
+    return entries
+
+
+def _nordpool_finalize(all_slots: list[Slot], host: str, area: str,
+                       now_utc: datetime) -> list[Slot]:
+    """Deduplicate, sort, check future coverage, renumber. Shared post-processing."""
+    if not all_slots:
+        raise PricesNotYetAvailable(
+            f"{host}: no price data returned for area '{area}'.")
+
+    if not any(s.end > now_utc for s in all_slots):
+        raise PricesNotYetAvailable(
+            f"{host}: no usable future slots for area '{area}'.")
+
+    seen: set[datetime] = set()
+    unique = []
+    for s in sorted(all_slots, key=lambda x: x.start):
+        if s.start not in seen:
+            seen.add(s.start)
+            unique.append(s)
+
+    future_slots = [s for s in unique if s.end > now_utc]
+    last_future  = max(s.start for s in future_slots)
+    tomorrow     = now_utc.date() + timedelta(days=1)
+    if last_future.date() < tomorrow:
+        raise PricesNotYetAvailable(
+            f"{host} slots only reach "
+            f"{last_future.strftime('%Y-%m-%d %H:%M UTC')} — "
+            f"tomorrow's prices not yet available.")
+
+    log.info("%s: %d total slots (%d future, last: %s)",
+             area, len(unique), len(future_slots),
+             last_future.strftime("%Y-%m-%d %H:%M UTC"))
+
+    return [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
+                 price_eur_kwh=s.price_eur_kwh, slot=i)
+            for i, s in enumerate(unique)]
+
+
+def fetch_elprisetjustnu_prices(area: str) -> list[Slot]:
+    """Fetch day-ahead prices from elprisetjustnu.se for Swedish bidding zones.
+
+    Covers SE1–SE4. Native 15-min resolution (96 slots/day). EUR/kWh ex-VAT,
+    sourced from ENTSO-E. SEK field present in response but unused.
+
+    Fetches yesterday, today, and tomorrow (one calendar day per request).
+    Tomorrow returns 404 until Nord Pool publishes (~13:00 local) — handled
+    silently.
+
+    Raises PricesNotYetAvailable if the area is unsupported, a fetch fails,
+    or the response contains no usable future data.
+    """
+    area_code = _ELPRISETJUSTNU_AREAS.get(area.upper())
+    if not area_code:
+        raise PricesNotYetAvailable(
+            f"elprisetjustnu.se is not available for area '{area}'. "
+            f"Supported: SE1–SE4.")
+
+    host    = _NORDPOOL_HOST["SE"]
+    now_utc = datetime.now(tz=timezone.utc)
+    today   = now_utc.date()
+
+    all_slots: list[Slot] = []
+    for fetch_date in [today - timedelta(days=1), today, today + timedelta(days=1)]:
+        entries = _fetch_nordpool_day(host, area_code, fetch_date)
+        for entry in entries:
+            try:
+                slot_start    = datetime.fromisoformat(entry["time_start"]).astimezone(timezone.utc)
+                slot_end      = datetime.fromisoformat(entry["time_end"]).astimezone(timezone.utc)
+                price_eur_kwh = float(entry["EUR_per_kWh"])
+            except (KeyError, ValueError) as e:
+                raise PricesNotYetAvailable(
+                    f"{host} entry parse failed: {e} — entry: {entry}")
+            # Native 15-min slots — use directly
+            all_slots.append(Slot(start=slot_start, end=slot_end,
+                                  duration_minutes=15,
+                                  price_eur_kwh=price_eur_kwh))
+
+    return _nordpool_finalize(all_slots, host, area, now_utc)
+
+
+def fetch_hvakosterstrommen_prices(area: str) -> list[Slot]:
+    """Fetch day-ahead prices from hvakosterstrommen.no for Norwegian bidding zones.
+
+    Covers NO1–NO5. Hourly resolution (24 slots/day), expanded to 4×15-min
+    at the same price. EUR/kWh ex-VAT, sourced from ENTSO-E. NOK field
+    present in response but unused.
+
+    Fetches yesterday, today, and tomorrow (one calendar day per request).
+    Tomorrow returns 404 until Nord Pool publishes (~13:00 local) — handled
+    silently.
+
+    Raises PricesNotYetAvailable if the area is unsupported, a fetch fails,
+    or the response contains no usable future data.
+    """
+    area_code = _HVAKOSTERSTROMMEN_AREAS.get(area.upper())
+    if not area_code:
+        raise PricesNotYetAvailable(
+            f"hvakosterstrommen.no is not available for area '{area}'. "
+            f"Supported: NO1–NO5.")
+
+    host    = _NORDPOOL_HOST["NO"]
+    now_utc = datetime.now(tz=timezone.utc)
+    today   = now_utc.date()
+
+    all_slots: list[Slot] = []
+    for fetch_date in [today - timedelta(days=1), today, today + timedelta(days=1)]:
+        entries = _fetch_nordpool_day(host, area_code, fetch_date)
+        for entry in entries:
+            try:
+                slot_start    = datetime.fromisoformat(entry["time_start"]).astimezone(timezone.utc)
+                slot_end      = datetime.fromisoformat(entry["time_end"]).astimezone(timezone.utc)
+                price_eur_kwh = float(entry["EUR_per_kWh"])
+            except (KeyError, ValueError) as e:
+                raise PricesNotYetAvailable(
+                    f"{host} entry parse failed: {e} — entry: {entry}")
+            # Hourly slots — expand to 4×15-min at the same price
+            for q in range(4):
+                q_start = slot_start + timedelta(minutes=15 * q)
+                all_slots.append(Slot(start=q_start,
+                                      end=q_start + timedelta(minutes=15),
+                                      duration_minutes=15,
+                                      price_eur_kwh=price_eur_kwh))
+
+    return _nordpool_finalize(all_slots, host, area, now_utc)
+
+
 FORECAST_URL = (
     "https://raw.githubusercontent.com/vividfog/nordpool-predict-fi"
     "/main/deploy/prediction.json"
@@ -1976,13 +2163,17 @@ _FI_AREAS = {"FI", "10YFI-1--------U"}
 _EE_AREAS = {"EE", "10Y1001A1001A39I"}
 _LV_AREAS = {"LV", "10YLV-1--------W", "10YLV-1001A00074"}
 _LT_AREAS = {"LT", "10YLT-1--------W", "10YLT-1001A0008Q"}
+_SE_AREAS = set(_ELPRISETJUSTNU_AREAS)    # SE1–SE4 + EIC codes
+_NO_AREAS = set(_HVAKOSTERSTROMMEN_AREAS)  # NO1–NO5 + EIC codes
 _ELERING_AREAS = _FI_AREAS | _EE_AREAS | _LV_AREAS | _LT_AREAS
 
 _SOURCE_NAMES = {
-    "fetch_entsoe_prices":   "ENTSO-E",
-    "fetch_elering_prices":  "Elering",
-    "fetch_sahkotin_prices": "Sähkötin",
-    "fetch_forecast_prices": "forecast",
+    "fetch_entsoe_prices":             "ENTSO-E",
+    "fetch_elering_prices":            "Elering",
+    "fetch_sahkotin_prices":           "Sähkötin",
+    "fetch_forecast_prices":           "forecast",
+    "fetch_elprisetjustnu_prices":     "elprisetjustnu.se",
+    "fetch_hvakosterstrommen_prices":  "hvakosterstrommen.no",
 }
 
 
@@ -1997,8 +2188,10 @@ def _build_fallback_chain(area: str) -> list[tuple]:
           ENTSO-E → Elering → Sähkötin → forecast (nordpool-predict-fi)
       EE / LV / LT (or their EIC codes):
           ENTSO-E → Elering
-      SE1–SE4 / NO1–NO5:
-          ENTSO-E only  (regional fallbacks not yet implemented)
+      SE1–SE4 (or their EIC codes):
+          ENTSO-E → elprisetjustnu.se  (native 15-min)
+      NO1–NO5 (or their EIC codes):
+          ENTSO-E → hvakosterstrommen.no  (hourly, expanded to 15-min)
       everything else:
           ENTSO-E only
     """
@@ -2009,6 +2202,10 @@ def _build_fallback_chain(area: str) -> list[tuple]:
     if a in _FI_AREAS:
         chain.append((fetch_sahkotin_prices, "Sähkötin"))
         chain.append((fetch_forecast_prices, "forecast"))
+    if a in _SE_AREAS:
+        chain.append((fetch_elprisetjustnu_prices, "elprisetjustnu.se"))
+    if a in _NO_AREAS:
+        chain.append((fetch_hvakosterstrommen_prices, "hvakosterstrommen.no"))
     return chain
 
 

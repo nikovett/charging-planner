@@ -1,97 +1,368 @@
-# Test reports
+# charging-planner
 
-Collection of test reports for the implementation
+Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](https://transparency.entsoe.eu) and schedules EV charging for the cheapest available hours — automatically, every day.
 
 ---
 
-## Charging Planner
+## What makes this different
 
-### Test suite
+**Build once, deliver once, charge unsupervised.** Day-ahead prices are published every afternoon for the following day — only information needed to plan the entire next charging cycle in one go. The result is a charging profile delivered directly to the charger. No further monitoring, no on/off toggling, no always-on process needed.
 
-119 tests in `test_charging_planner.py`, run with:
+**Zero extra hardware required.** Runs as a GitHub Actions cron job — no server, no hub, no Raspberry Pi. Day-ahead prices publish on a predictable schedule, making this a natural fit for a cloud cron. Local cron works too if preferred.
 
-```bash
-python3 -m unittest discover -s test -v
+**Globally optimal scheduling.** Continuous mode finds the cheapest unbroken block ending at departure time. Split mode uses dynamic programming to evaluate every valid combination of blocks across 96 price slots per day. The cheapest combination is rarely obvious to a human eye, and even harder to find manually as prices fluctuate every 15 minutes.
+
+**Works with any car.** The planner schedules the charger, not the car. No car integration, no brand-specific API, no pairing required. Swap cars and nothing changes — the charger infrastructure stays the same and the planner keeps working exactly as before.
+
+**Modular charger delivery.** Each charger type is a small handler script with a single deliver function. Charge Amps and Easee handlers are included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
+
+**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging window; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file. Both the preferred charging window and required hours can be configured per day of the week within each profile.
+
+**Realistic charger behaviour built in.** Independent minimum charging length and minimum gap between charging blocks prevent short on/off cycling — by default the planner won't schedule 15 minutes on, 15 minutes off, on again. The minimum block length and gap are both configurable; the gap can be set to zero if no pause between blocks is needed.
+
+**Previously committed charging is never lost.** If a new plan is built before all charging slots from the previous plan have taken place, the remaining uncommitted charging time is added on top of the new plan's requirement. The scheduler then finds the cheapest slots for the full combined need — so the charger never loses charging time it was already told to expect.
+
+**Area-aware price source fallback.** The fallback chain is built from the configured area: FI uses ENTSO-E → Elering → Sähkötin → forecast; EE/LV/LT use ENTSO-E → Elering; SE1–SE4 use ENTSO-E → elprisetjustnu.se; NO1–NO5 use ENTSO-E → hvakosterstrommen.no. Sources outside the area's chain are never tried. The dashboard warns when the plan is based on forecast rather than confirmed prices.
+
+
+```
+  ══════════════════════════════════════════════════════════════════
+  Charging Planner
+  ══════════════════════════════════════════════════════════════════
+  Date      2026-03-15   Area FI   Source ENTSO-E
+  Timezone  Europe/Helsinki (UTC+2)
+
+  Market prices   0.47 min  1.64 avg  4.27 max  c€/kWh
+
+  Scheduled  4h
+  Avg price  0.62 c€/kWh
+             ↓ 62% below market avg
+
+  Charging windows (1):
+    03:00–07:00  ████████████████  0.62 c€/kWh  4h00m
+
+  ══════════════════════════════════════════════════════════════════
 ```
 
-| Area | Tests |
-|---|---|
-| Configuration validation | 16 |
-| Config parsing | 10 |
-| Schedule window resolution | 6 |
-| OCPP charging profile | 13 |
-| XML parsing | 10 |
-| Real ENTSO-E data | 9 |
-| Slot selection (min-block) | 6 |
-| Slot selection (general) | 7 |
-| Best continuous window | 3 |
-| Spillover | 4 |
-| Gap merging | 6 |
-| Plan building | 4 |
-| Window filtering | 5 |
-| Time utilities | 10 |
-| End-to-end pipeline | 6 |
-| Window coverage check | 5 |
-| **Total** | **119** |
+---
 
-The 3 OCPP schema validation tests require the spec zip files placed in `test/ocpp16/`, `test/ocpp201/`, `test/ocpp21/` — they skip cleanly without them. All other tests run with no dependencies beyond `pyyaml`.
+## Requirements
 
-The real ENTSO-E data tests use an actual API response from 2026-03-14 inlined as a fixture — no network access needed.
+- Python 3.11+
+- [`pyyaml`](https://pypi.org/project/PyYAML/) — `pip install pyyaml`
+- An ENTSO-E API key (free)
 
-### Cyclomatic complexity
+No other dependencies. The script otherwise uses only the standard library, including [`zoneinfo`](https://docs.python.org/3/library/zoneinfo.html) (stdlib since Python 3.9) for DST-correct timezone handling.
 
-Measured across 88 blocks (classes, functions, methods) in all four Python files:
 
-| Grade | Threshold | Count |
+---
+
+## Getting an API key
+
+1. Register at [transparency.entsoe.eu](https://transparency.entsoe.eu)
+2. Email [transparency@entsoe.eu](mailto:transparency@entsoe.eu) to request API access
+3. Your key will appear under **My Account → Security Tokens**
+
+---
+
+## Configuration
+
+All configuration lives in a single `config.yaml` file. Deliveries are configured inside each charging profile, so the relationship between a plan and its chargers is explicit and co-located.
+
+### Multiple profiles with deliveries
+
+```yaml
+entsoe:
+  api_key: ""
+  area: FI
+  timezone: Europe/Helsinki
+
+charging:
+  - name: topup
+    required_hours: 1.5
+    continuous_only: false
+    min_slot_minutes: 30
+    min_gap_minutes: 15
+    preferred_window_start: "22:00"
+    preferred_window_end: "06:30"
+    schedule:
+      - days: [monday, tuesday, wednesday, thursday, friday]
+        preferred_window_start: "22:00"
+        preferred_window_end: "06:30"
+        required_hours: 1.5
+      - days: [saturday, sunday]
+        preferred_window_start: any     # any start + any end = no window constraint
+        preferred_window_end: any
+        required_hours: 4.5
+    deliveries:
+      - handler: chargeamps
+        charge_point_id: CHARGER_ID_1
+        connector_id: 1
+        max_charging_rate: 16.0
+        restore_mode: false
+
+  - name: overnight
+    required_hours: 4.5
+    continuous_only: true
+    preferred_window_start: "21:00"
+    preferred_window_end: "06:30"
+    deliveries:
+      - handler: chargeamps
+        charge_point_id: CHARGER_ID_2
+        connector_id: 1
+        max_charging_rate: 16.0
+        restore_mode: true
+
+```
+
+`charge_point_id` accepts either a single env var name or a list — when a list is given, the same plan is delivered to every charger independently. Timezone is set once in the `entsoe:` block and applies to all profiles and delivery handlers.
+
+### Charging profile reference
+
+| Key | Default | Description |
 |---|---|---|
-| A/B | CC ≤ 10 | 71 |
-| C | CC 11–15 | 9 |
-| D | CC 16–20 | 6 |
-| F | CC > 20 | 2 |
+| `entsoe.api_key` | — | **Required.** ENTSO-E security token |
+| `entsoe.area` | `FI` | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
+| `entsoe.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from system. Applies to all profiles |
+| `charging.name` | `"default"` | Profile name — used in the output filename (`plan-{name}.json`) |
+| `charging.required_hours` | `4` | Hours of charging to schedule |
+| `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
+| `charging.min_slot_minutes` | `30` | Minimum continuous block length. The charger should not run for less than this duration. Must be 15 minutes or more and a multiple of 15 (the price slot resolution) |
+| `charging.min_gap_minutes` | `15` | Minimum gap between charging blocks. Prevents the charger toggling off and straight back on. Must be a multiple of 15. `0` = no gap constraint. Can be set independently of `min_slot_minutes` — e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps |
+| `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling. `"avg"` = dynamic daily market average — ceiling is set to today's average price at plan time |
+| `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or `any`. `any` start = use all slots from script run time. `any` + `HH:MM` end = charge anytime until departure time. Both `any` = no constraint. |
+| `charging.preferred_window_end` | `any` | End of preferred charging window (`HH:MM`), or `any`. If earlier than `preferred_window_start` the window wraps midnight. Use `23:45` for end of day. `HH:MM` start + `any` end = charge from that time until last available price. Both `any` = no constraint. |
+| `deliveries[].enabled` | `true` | Set to `false` to temporarily disable a delivery entry without removing it from config. |
+| `charging.schedule` | `[]` | Optional list of day-specific overrides. Each entry has a `days` list (`monday`–`sunday`) and optionally `preferred_window_start`, `preferred_window_end`, and `required_hours`. Any of these can be omitted to fall back to the top-level value. The first matching entry for the target day is used. |
 
-The two F-grade functions are `_validate_charging_profile` (CC=27) — grown through incremental addition of schedule, `any`, and mixed-value validation — and `_select_with_min_block` (CC=20), a selection algorithm whose complexity is inherent to its logic. The D-grade functions (`_send_delivery_ntfy`, `_send_set_charging_profile`, `close_gap_merge`, `_select_spillover`, `build_plan`, `_resolve_tz`) are similarly algorithm-heavy. Average complexity: B (5.9).
+### Preferred window behaviour
+
+**The planner always plans for tomorrow.** The preferred window for tomorrow is taken from the matching `schedule` entry if one exists, otherwise from the top-level `preferred_window_start` / `preferred_window_end`.
+
+A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00–23:45`) stays within the target day. Note that `00:00–23:45` excludes the last 15-minute slot of the day — use `any` if you want truly unconstrained selection. When both fields are set to `any` (or omitted), there is no window constraint — the planner picks the cheapest slots from all available prices from the script run onwards.
+
+| Schedule entry | Used by | Plans |
+|---|---|---|
+| `saturday: any` | Friday's run | cheapest slots from all available prices |
+| `sunday: any` | Saturday's run | cheapest slots from all available prices |
+| `monday: 22:00–06:30` | Sunday's run | Monday (Sunday evening–Monday morning) |
+| `friday: 22:00–06:30` | Thursday's run | Friday (Thursday evening–Friday morning) |
+
+Days not listed in `schedule` use the top-level preferred window.
+
+**Slot selection** — for `continuous_only: true`, the planner evaluates all possible contiguous blocks of `required_hours` length and picks the cheapest. For `continuous_only: false`, it uses dynamic programming to find the globally cheapest combination of blocks that together cover exactly `required_hours`, where every block is ≥ `min_slot_minutes` and every gap between blocks is ≥ `min_gap_minutes`. Adjacent selected blocks are merged into a single charging window automatically.
+
+**Per-day required hours** — `required_hours` can be overridden per day within a `schedule` entry, independently of the window override. This allows a single profile to act as a true per-car profile: 1.5h on weekdays for a short commute, 4.5h on weekends for a longer charge. The top-level `required_hours` is the fallback when no schedule entry specifies it.
+
+**Preferred window and spillover** — slots within the configured preferred window are the primary candidates. If the window doesn't contain enough slots to satisfy `required_hours` (too few slots, or all above `max_price_cents_kwh`), the planner adds the cheapest available slots from outside the window to cover the deficit — but never past `preferred_window_end`. When no window is configured (`any`), all available slots are candidates from the start.
+
+**Dynamic price ceiling** — setting `max_price_cents_kwh: "avg"` uses today's market average as the ceiling, resolved at plan time from the available price data. This avoids hardcoding a number that may become stale as market conditions change. A partial plan is still possible if all slots in the window happen to be above the average, but this is uncommon in practice.
+
+**Guaranteed charge until departure time** — setting `required_hours` longer than the window with `continuous_only: true` ensures the block always ends exactly at `preferred_window_end`. Not applicable when using `any`.
 
 ---
 
-## Charge Amps Delivery
+## Charger delivery
 
-### Test suite
+Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` block inside each charging profile and dispatches each plan to the correct handler. A Charge Amps handler is included out of the box:
 
-41 tests in `test_deliver_chargeamps.py`, run with:
+| Handler | Script | Description |
+|---|---|---|
+| `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API — tested and supported |
+| `easee` | `delivery/deliver_easee.py` | Delivers via the official Easee API — untested |
 
-```bash
-python3 -m unittest discover -s test -v
-```
+The `chargeamps` handler always reads the connector state before delivery. If the car is actively charging, schedule override is activated after delivery so the current session is not interrupted — the override expires automatically when the cable is disconnected.
 
-| Area | Tests |
-|---|---|
-| Anchor calculation | 4 |
-| Period timing (from/to offsets) | 6 |
-| Period fields | 6 |
-| Edge cases | 3 |
-| deliver() interface | 14 |
-| Connector mode extraction | 5 |
-| Login cache | 3 |
-| **Total** | **41** |
+`restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
 
-These tests focus on the scheduling logic that converts plan windows to Charge Amps `schedulePeriods` — specifically that slots land at the correct times relative to the Monday anchor, across timezones and DST transitions. The deliver() tests also cover mode read/restore behaviour: the charger's original mode (`On`, `Off`, or `Schedule`) is read before delivery and restored afterwards if it was not already `Schedule`. All network calls are mocked; no credentials or live API access required.
+New handlers can be added by creating a `deliver_<n>.py` script in the `delivery/` directory with a single `deliver(plan, charge_point_id, entry, timezone) -> bool` function — the dispatcher handles the rest automatically.
 
 ---
 
-## Delivery Dispatcher (ntfy)
+## Fallback price sources
 
-### Test suite
+The fallback chain is assembled at startup from the configured area — sources outside an area's chain are never called:
 
-24 tests in `test_deliver.py`, run with:
+| Area | Chain |
+|---|---|
+| `FI` | ENTSO-E → Elering → Sähkötin → forecast |
+| `EE`, `LV`, `LT` | ENTSO-E → Elering |
+| `SE1`–`SE4` | ENTSO-E → elprisetjustnu.se |
+| `NO1`–`NO5` | ENTSO-E → hvakosterstrommen.no |
+| other | ENTSO-E only |
+
+The fallback triggers in two cases: network/HTTP errors, and when the returned prices don't extend into tomorrow (e.g. during scheduled maintenance where ENTSO-E returns a valid but stale response with only today's data).
+
+All sources use EUR/kWh ex-VAT. ENTSO-E returns EUR/MWh for all areas including SE and NO; the regional sources also provide EUR directly (SEK and NOK fields in the response are unused).
+
+1. **Elering** (`dashboard.elering.ee/api`) — actual Nord Pool 15-min prices for Finland, Estonia, Latvia and Lithuania. No API key needed. Used transparently — `price_source: "Elering"` in the plan JSON, no dashboard warning.
+
+2. **Sähkötin** (`sahkotin.fi/api`) — actual realized Nord Pool 15-min prices, Finland only. No API key needed. Used transparently — `price_source: "Sähkötin"` in the plan JSON, no dashboard warning.
+
+3. **nordpool-predict-fi** (`raw.githubusercontent.com/vividfog/nordpool-predict-fi`) — ML forecast blended with realized prices. Finland only. By ~14:00–16:00 Helsinki time the forecast transitions to actual market prices, making it nearly as reliable as ENTSO-E once Nord Pool has published. Plans from this source are tagged `price_source: "forecast"` and display a warning banner on the dashboard.
+
+4. **elprisetjustnu.se** — Sweden (SE1–SE4). Native 15-min resolution. No API key needed. Used transparently — `price_source: "nordpool-regional"` in the plan JSON, no dashboard warning.
+
+5. **hvakosterstrommen.no** — Norway (NO1–NO5). Hourly resolution, expanded to 15-min. No API key needed. Used transparently — `price_source: "nordpool-regional"` in the plan JSON, no dashboard warning.
+
+If all sources in the area's chain fail, the script exits with a non-zero code so the GHA run is marked as failed and the operator receives an email.
+
+## Histogram display augmentation
+
+Both ENTSO-E and Sähkötin return price slots from the previous evening onwards, including historical prices. This gives the dashboard histogram enough data to the left of "now" for context.
+
+After every successful real-price fetch, the planner always fetches up to 24 hours of forecast data from nordpool-predict-fi beyond the last real price slot (Finland only — other areas skip this step). These slots are primarily **display-only** — they appear as grey diagonal-striped bars in the histogram. They are also used for slot selection when real prices don't fully cover the charging window (see fallback price sources), in which case `price_source` is set to `"forecast"`.
+
+## Dashboard
+
+A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan JSONs from `data/` and `config.yaml` directly from the repository — no token or backend needed.
+
+Features:
+
+- One flip card per profile — front shows the plan, back shows profile configuration and weekly schedule
+- Price histogram with all available slots positioned by actual timestamp. The histogram window uses three modes as the day progresses:
+  - **Charging far away (>11h)**: the window starts 1 hour before now and extends to cover all charging slots — an overview of where in the future the charging slots are
+  - **Charging approaching (midpoint within 11h, not yet reached)**: the window centers on the charging slot midpoint ±12h, so the charging slots become the centerpiece
+  - **During and after charging (now past midpoint)**: the window centers on now ±12h and tracks forward in real time, revealing forecast bars to the right as time progresses
+- Four bar states: solid teal (scheduled + optimal), teal diagonal stripe (scheduled but not optimal), teal outline (optimal but not scheduled/missed), grey diagonal stripe (forecast display-only). Legend items are conditional — each only appears when that bar type is visible
+- Hero shows `scheduled 3h (1h30m carried over)` when hours from the previous plan are carried forward, and `vs optimal ↑N%` when the window constraint forces suboptimal slots
+- "vs market" percentage shows how much cheaper the scheduled avg price is compared to the average across all slots available to the scheduler at run time
+- Hover/touch any bar to see its price and time in the hero area; hovering a charging bar shows the window avg price
+- Price axis on the right side of the histogram with evenly-spaced tick marks. The scale ceiling is the smallest nice number above the day's max price that gives ≤ 4 ticks. Zero is always shown at the bottom. Bars scale proportionally from zero to the ceiling.
+- Responsive time tick intervals — 2h on wide screens, 4h on narrow (phone portrait)
+- Forecast warning banner when `price_source` is `"forecast"`
+- Staleness warning when plan is more than a day old
+- Charging period derived from UTC window times (e.g. "charges Mon 23 → Tue 24 Mar")
+- Weekly schedule grid per profile showing configured windows and required hours for each day
+
+To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose `main` and `/ (root)`. The site will be live at `https://<username>.github.io/<repo>/`.
+
+
+---
+
+## Running
+
+### Locally
 
 ```bash
-python3 -m unittest discover -s test -v
+# Build plans
+python charging_planner.py
+python charging_planner.py --config my-config.yaml --output-dir /tmp/plans
+python charging_planner.py --debug
+
+# Deliver plans
+python delivery/deliver.py plan-*.json --config config.yaml
+python delivery/deliver.py plan-*.json --debug
 ```
 
-| Area | Tests |
-|---|---|
-| Message content | 17 |
-| Sending behaviour | 7 |
-| **Total** | **24** |
+### GitHub Actions
 
-These tests cover the ntfy notification logic in `delivery/deliver.py` — message content (profile summary, window times, delivery status per charger, skipped profiles), and sending behaviour (disabled, missing topic, topic from env vs config, empty plans, send failure handling). All HTTP calls are mocked.
+Place `schedule.yml` in `.github/workflows/`. Add the following repository secrets:
+
+```
+Settings → Secrets and variables → Actions → New repository secret
+```
+
+| Secret | Value |
+|---|---|
+| `ENTSOE_API_KEY` | Your ENTSO-E security token |
+| `CHARGER_USERNAME` | Charge Amps or Easee login username (email or phone number) |
+| `CHARGER_PASSWORD` | Charge Amps or Easee login password |
+| `CHARGER_ID_1` | First charger ID |
+| `CHARGER_ID_2` | Second charger ID (if applicable) |
+
+Never commit secrets to the repository. All sensitive values are injected at runtime as environment variables — `config.yaml` keeps only empty placeholders.
+
+The workflow runs daily at 10:30 UTC. GHA consistently delays ~1 hour, landing at ~14:30 Helsinki time in summer (EEST, UTC+3). Prices publish at ~11:00 UTC so even without GHA delay the run lands after publication.
+
+If ENTSO-E is unavailable or prices aren't published yet, the planner automatically tries Elering, then Sähkötin, then the nordpool-predict-fi forecast. If all sources fail, the run exits with a non-zero code — the GHA job is marked as failed and the operator receives an email. Once prices are available the next scheduled run will succeed.
+
+To trigger a run manually: **Actions → Charging Planner → Run workflow**.
+
+Each successful run writes a formatted markdown summary to the GitHub Actions job view and commits the plan JSONs to `data/` in the repository so the GitHub Pages dashboard can fetch them without authentication.
+
+---
+
+## Outputs
+
+### Plan JSON
+
+One `plan-{name}.json` file is written per profile:
+
+```json
+{
+  "version": 1,
+  "date": "2026-03-15",
+  "area": "FI",
+  "price_source": "ENTSO-E",
+  "timezone": "Europe/Helsinki",
+  "utc_offset_hours": 2,
+  "profile": "overnight",
+  "price_stats": {
+    "min_cents_kwh": 0.82,
+    "max_cents_kwh": 7.21,
+    "avg_cents_kwh": 3.14
+  },
+  "required_minutes": 360,
+  "retained_minutes": 30,
+  "total_minutes": 390,
+  "avg_price_cents_kwh": 0.91,
+  "avg_optimal_price_cents_kwh": 0.91,
+  "preferred_window_start": "22:00",
+  "preferred_window_end": "06:30",
+  "windows": [
+    {
+      "start": "00:00",
+      "end": "06:30",
+      "duration_minutes": 390,
+      "avg_price_cents_kwh": 0.91
+    }
+  ],
+  "window_starts_utc": ["2026-03-14T22:00:00+00:00"],
+  "window_ends_utc":   ["2026-03-15T04:30:00+00:00"],
+  "price_slots": [
+    { "start_utc": "2026-03-14T20:00:00+00:00", "price_cents_kwh": 0.82, "charging": false, "optimal": false },
+    { "start_utc": "2026-03-14T22:00:00+00:00", "price_cents_kwh": 0.91, "charging": true, "optimal": true },
+    ...
+  ],
+  "ocpp_charging_profile": { ... }
+}
+```
+
+`price_source` is `"ENTSO-E"`, `"Sähkötin"`, or `"forecast"` depending on which source provided the prices for this plan.
+
+`window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems.
+
+`price_slots` contains all available price slots from the previous evening onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `continuous_only` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. `price_stats` (min/avg/max) reflects the full range of slots available to the scheduler at run time — the basis for the "vs market" percentage shown on the dashboard.
+
+`retained_minutes` is the number of future charging minutes carried forward from the previous plan. When non-zero, `total_minutes` will exceed `required_minutes` by the same amount.
+
+`plan_warning` is `null` when the plan is complete. When `total_minutes < required_minutes` it contains a human-readable reason: `"partial plan — price limit X c€/kWh"` or `"partial plan — required hours exceed boundaries"`. See Plan comparisons for how the cause is determined. The dashboard shows the reason in amber next to the scheduled hours.
+
+Slots with `"forecasted": true` are display-only — they extend the histogram beyond the last real price slot. They are never used for slot selection or optimal calculation.
+
+### Plan comparisons
+
+Every time a plan is built, the planner runs two background comparisons.
+
+**Optimal comparison** — finds the cheapest possible slots ignoring the preferred window constraint, with all other settings (price ceiling, `continuous_only`, `min_slot_minutes`, `min_gap_minutes`) kept intact. The result is `avg_optimal_price_cents_kwh` and the `optimal` flag on each slot in `price_slots`. The dashboard shows `vs optimal ↑N%` when the window constraint forced suboptimal choices — if scheduled and optimal are the same, the window contained the cheapest slots anyway and no comparison is shown.
+
+**Price ceiling comparison** — only runs when the plan is partial (`total_minutes < required_minutes`) and `max_price_cents_kwh` is set. Runs the same plan without the price ceiling. If it succeeds, the ceiling was the limiting factor → `plan_warning: "partial plan — price limit X c€/kWh"` (or `"partial plan — price limit avg (X c€/kWh)"` when using the dynamic ceiling). If it also fails, the shortage is due to insufficient slots in the window → `plan_warning: "partial plan — required hours exceed boundaries"`.
+
+### OCPP smart charging
+
+Each plan includes an `ocpp_charging_profile` field containing a ready-to-use OCPP `ChargingProfile` object compatible with OCPP 1.6, 2.0.1, and 2.1. Charging windows run at `max_charging_rate`; gaps between windows are explicitly set to `limit: 0` so the charger does not charge outside the planned slots.
+
+For a split plan with two windows separated by a gap, the schedule periods alternate between charging and zero:
+
+```json
+"chargingSchedulePeriod": [
+  { "startPeriod":    0, "limit": 11000.0 },
+  { "startPeriod": 5400, "limit": 0.0     },
+  { "startPeriod": 7200, "limit": 11000.0 }
+]
+```
+
+The profile is `TxDefaultProfile` (`Absolute` kind), meaning it applies automatically to any transaction started on the EVSE without needing a transaction ID in advance. OCPP 2.0.1 and 2.1 use `id` instead of `chargingProfileId` — adjust the field name when consuming the profile in your own delivery integration.
+
+---
