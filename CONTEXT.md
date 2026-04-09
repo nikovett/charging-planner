@@ -176,6 +176,8 @@ Both short codes (`FI`, `EE`) and full EIC codes (`10YFI-1--------U`) are recogn
 
 **210 tests** passing (172 + 38 new), 3 skipped.
 
+**v1.5.0 released** — area-based fallback chain. See RELEASE_NOTES_v1.5.0.md.
+
 ---
 
 ### Session 17 — 2026-04-06
