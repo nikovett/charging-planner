@@ -329,19 +329,7 @@ function renderTimeline(plan, profileName, nowPrice) {
 
   var utcOffset = (plan.utc_offset_hours || 0) * 60;
   var minP = plan.price_stats ? plan.price_stats.min_cents_kwh : 0;
-  var maxP = plan.price_stats ? plan.price_stats.max_cents_kwh : 1;
-  var rangeP = maxP - minP || 1;
-
-  // Nice ceiling: round maxP up to next clean tick value for proportional scale
-  // Find smallest nice ceiling above maxP with at most 4 evenly-spaced ticks
-  // Zero is the implicit bottom tick, shown ticks are interval, 2x, 3x, 4x
-  var niceSteps = [0.5,1,2,5,10,25,50,100,150,200,500,1000];
-  var niceInterval = 1, niceCeil = 100;
-  for (var ni2 = 0; ni2 < niceSteps.length; ni2++) {
-    var step = niceSteps[ni2];
-    var c = Math.ceil(maxP / step) * step;
-    if (c / step <= 4 && c < niceCeil) { niceInterval = step; niceCeil = c; }
-  }
+  var rangeP = 1; // placeholder, recomputed after visible is known
 
   // Find now slot
   var nowMs = Date.now();
@@ -393,6 +381,36 @@ function renderTimeline(plan, profileName, nowPrice) {
     return lm >= rangeStart && lm < rangeEnd;
   });
   if (!visible.length) visible = slots;
+
+  // Scale is based on the maximum price visible in the current histogram window,
+  // not the global max from the selection pool which may be off-screen.
+  var visiblePrices = visible.filter(function(s){ return s.price_cents_kwh > 0; })
+                             .map(function(s){ return s.price_cents_kwh; });
+  var maxP = visiblePrices.length ? Math.max.apply(null, visiblePrices) : 1;
+
+  // Nice ceiling: round maxP up to a clean value that gives 3–5 evenly-spaced ticks.
+  // Strategy: try each candidate interval, compute the ceiling it produces, and
+  // pick the candidate that gives the most ticks without exceeding 5.
+  // Zero is always shown at the bottom; ticks are at interval, 2×, 3×, … niceCeil.
+  var niceSteps = [0.5,1,2,5,10,25,50,100,150,200,500,1000];
+  var niceInterval = 1, niceCeil = 100;
+  var bestTicks = 0;
+  for (var ni2 = 0; ni2 < niceSteps.length; ni2++) {
+    var step = niceSteps[ni2];
+    var c = Math.ceil(maxP / step) * step;
+    var ticks = Math.round(c / step);
+    if (ticks >= 3 && ticks <= 5 && (bestTicks === 0 || ticks > bestTicks || (ticks === bestTicks && c < niceCeil))) {
+      niceInterval = step; niceCeil = c; bestTicks = ticks;
+    }
+  }
+  // Fallback: if no candidate gave 3–5 ticks, use the smallest ceiling with ≤5 ticks
+  if (bestTicks === 0) {
+    for (var ni3 = 0; ni3 < niceSteps.length; ni3++) {
+      var step2 = niceSteps[ni3];
+      var c2 = Math.ceil(maxP / step2) * step2;
+      if (c2 / step2 <= 5 && c2 < niceCeil) { niceInterval = step2; niceCeil = c2; }
+    }
+  }
 
   var slotW = (15/totalMins*100).toFixed(4);
 
