@@ -109,19 +109,19 @@ The fallback chain should be built dynamically based on the configured area rath
 ```
 FI:       ENTSO-E → Elering → Sähkötin → nordpool-predict-fi (forecast)
 EE/LV/LT: ENTSO-E → Elering
-SE1-SE4:  ENTSO-E → elprisetjustnu.se (not yet implemented)
-NO1-NO5:  ENTSO-E → hvakosterstrommen.no (not yet implemented)
+SE1-SE4:  ENTSO-E → elprisetjustnu.se
+NO1-NO5:  ENTSO-E → hvakosterstrommen.no
 other:    ENTSO-E only
 ```
 
 This is cleaner than the current linear chain where non-FI areas silently fall through Sähkötin and forecast. Implementation: each fetch function declares its supported areas; `cmd_plan` builds the chain from the area config at startup.
 
-**Potential fallback sources for SE and NO areas** (not yet implemented):
+**Potential fallback sources for SE and NO areas** (implemented in Session 20):
 
-- **hvakosterstrommen.no** — Norway (NO1–NO5), free, no auth. URL: `https://www.hvakosterstrommen.no/api/v1/prices/{YYYY}/{MM-DD}_{area}.json` (e.g. `_NO1.json`). Returns hourly slots with `NOK_per_kWh` and `EUR_per_kWh` fields. Widely used in Home Assistant integrations.
-- **elprisetjustnu.se** — Sweden (SE1–SE4), free, no auth. URL: `https://www.elprisetjustnu.se/api/v1/prices/{YYYY}/{MM-DD}_{area}.json` (e.g. `_SE3.json`). Returns hourly slots with SEK öre and EUR/kWh fields.
+- **elprisetjustnu.se** — Sweden (SE1–SE4), free, no auth. URL: `https://www.elprisetjustnu.se/api/v1/prices/{YYYY}/{MM-DD}_{area}.json`. Native 15-min resolution (96 slots/day). Returns `EUR_per_kWh` and `SEK_per_kWh` — only EUR used.
+- **hvakosterstrommen.no** — Norway (NO1–NO5), free, no auth. URL: `https://www.hvakosterstrommen.no/api/v1/prices/{YYYY}/{MM-DD}_{area}.json`. Hourly resolution (24 slots/day), expanded to 15-min. Returns `EUR_per_kWh` and `NOK_per_kWh` — only EUR used.
 
-Both follow the same date-based URL pattern and return EUR/kWh — would slot cleanly into a single `fetch_nordpool_prices()` dispatcher function. Neither covers both SE and NO, so the function would dispatch by area prefix. Response format needs live verification before implementation.
+Both use EUR/kWh ex-VAT sourced from ENTSO-E, consistent with every other source in the pipeline. SEK/NOK fields are ignored.
 
 ### Session 18 — 2026-04-07
 
@@ -177,6 +177,49 @@ Both short codes (`FI`, `EE`) and full EIC codes (`10YFI-1--------U`) are recogn
 **210 tests** passing (172 + 38 new), 3 skipped.
 
 **v1.5.0 released** — area-based fallback chain. See RELEASE_NOTES_v1.5.0.md.
+
+---
+
+### Session 20 — 2026-04-09
+
+**SE and NO fallback sources implemented** — two dedicated fetch functions, each self-contained:
+
+- `fetch_elprisetjustnu_prices` — Sweden (SE1–SE4). elprisetjustnu.se, native 15-min resolution (96 slots/day). `EUR_per_kWh`, `time_start`, `time_end`. SEK field unused.
+- `fetch_hvakosterstrommen_prices` — Norway (NO1–NO5). hvakosterstrommen.no, hourly resolution (24 slots/day), expanded to 4×15-min. Same fields. NOK field unused.
+
+Both return EUR/kWh ex-VAT sourced from ENTSO-E, consistent with every other source in the pipeline. Fetch yesterday, today, and tomorrow separately (one calendar day per request). Tomorrow 404 handled silently.
+
+**Chain updated**:
+```
+SE1–SE4:  ENTSO-E → elprisetjustnu.se
+NO1–NO5:  ENTSO-E → hvakosterstrommen.no
+```
+
+`_SE_AREAS` derived from `_ELPRISETJUSTNU_AREAS`, `_NO_AREAS` from `_HVAKOSTERSTROMMEN_AREAS` — EIC codes live in one place. `_build_fallback_chain` has separate `if a in _SE_AREAS` and `if a in _NO_AREAS` branches. `price_source` in plan JSON is `"elprisetjustnu.se"` or `"hvakosterstrommen.no"`.
+
+**7 new tests** in `TestBuildFallbackChain` (chain order, EIC codes, SE≠NO chains differ, no Elering in SE/NO) and 8 new tests in `TestAreaFallbackChainIntegration`.
+
+**217 tests** passing, 3 skipped.
+
+**v1.6.0 released** — SE and NO fallback price sources. See RELEASE_NOTES_v1.6.0.md.
+
+---
+
+### Session 21 — 2026-04-10
+
+**Dashboard histogram price axis improvements** (v1.7.0):
+
+**Scale from visible slots**: `maxP` is now computed from the slots visible in the current histogram window rather than `plan.price_stats.max_cents_kwh` (the global max from the full selection pool). Off-screen price spikes no longer compress the visible bars.
+
+**Better tick selection**: the algorithm now targets 3–5 evenly-spaced ticks. Previously it found the smallest ceiling with ≤4 ticks — for a visible max of 22 c€/kWh this produced a single tick at 25 with nothing in between. New algorithm picks the interval that maximises tick count in the 3–5 range.
+
+**Extended `niceSteps`**: added `0.1, 0.2, 0.25` for low-price days. `maxP=0.75` now produces ticks at 0.20, 0.40, 0.60, 0.80 instead of collapsing to 0.5 and 1.0.
+
+**Float rounding**: `Math.round(...* 1000) / 1000` applied throughout to avoid drift with small intervals (e.g. `0.8000000000000002`). Tick labels render as integers for whole numbers, decimal for fractional values.
+
+**Tick axis width** fixed to use the formatted label string length rather than `String(niceCeil).length`, which broke for decimal ceilings like `0.80`.
+
+**v1.7.0 released** — histogram price axis improvements. See RELEASE_NOTES_v1.7.0.md.
 
 ---
 
@@ -318,15 +361,18 @@ The fallback chain is built dynamically from the configured area by `_build_fall
 ```
 FI:        ENTSO-E → Elering → Sähkötin → nordpool-predict-fi (forecast)
 EE/LV/LT:  ENTSO-E → Elering
-SE1–SE4:   ENTSO-E only  (elprisetjustnu not yet implemented)
-NO1–NO5:   ENTSO-E only  (hvakosterstrommen not yet implemented)
+SE1–SE4:   ENTSO-E → nordpool-regional (elprisetjustnu.se)
+NO1–NO5:   ENTSO-E → nordpool-regional (hvakosterstrommen.no)
 other:     ENTSO-E only
 ```
+
+All sources use EUR/kWh ex-VAT. ENTSO-E returns EUR/MWh for all areas including SE and NO; the regional sources also provide EUR/kWh directly (SEK and NOK fields are present in SE/NO responses but unused).
 
 1. **ENTSO-E** — primary. Day-ahead 15-min prices. Retries 5×, backoff 5s. Raises `PricesNotYetAvailable` if slots don't reach tomorrow (catches partial/stale responses e.g. during maintenance).
 2. **Elering** (`dashboard.elering.ee/api`) — actual Nord Pool 15-min prices for FI/EE/LV/LT. No API key. Used transparently — `price_source: "Elering"` in plan JSON, no dashboard warning.
 3. **Sähkötin** (`sahkotin.fi/api`) — actual Nord Pool 15-min prices, FI only, no API key. Used transparently.
 4. **nordpool-predict-fi** — ML forecast blended with realized prices. FI only. Tagged `price_source: "forecast"` in plan JSON; triggers dashboard warning.
+5. **nordpool-regional** (`fetch_nordpool_prices`) — single dispatcher for SE and NO. elprisetjustnu.se serves SE1–SE4 at native 15-min resolution; hvakosterstrommen.no serves NO1–NO5 at hourly resolution (expanded to 15-min). No API key. Used transparently — `price_source: "nordpool-regional"` in plan JSON, no dashboard warning.
 
 Both ENTSO-E and Sähkötin return **all slots including historical** (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them as it filters by window start. After every successful real-price fetch, up to 24h of forecast display slots are fetched beyond the last real slot (FI only — `fetch_forecast_display_slots` returns `[]` for other areas). These are display-only (grey diagonal bars in the histogram), never used for selection. When real prices don't fully cover the charging window, forecast slots supplement them for selection too — in that case `price_source` is set to `"forecast"` and the dashboard warning is shown. This supplement is also FI-only.
 
@@ -539,7 +585,7 @@ charging:
 
 ## Test suite
 
-210 tests, 3 skipped:
+216 tests, 3 skipped:
 - `test/test_charging_planner.py` — price parsing, window selection, DP algorithm, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration)
 - `test/test_deliver_chargeamps.py` — Charge Amps delivery handler (login/cache, connector mode, period fields, period timing)
 
@@ -579,15 +625,6 @@ Seven color pairs considered as alternative themes for the dashboard. Each pair 
 ---
 
 ## Future work
-
-### SE and NO fallback price sources
-
-The area-based chain is ready to accept new sources. Two candidates are documented and pre-researched:
-
-- **elprisetjustnu.se** — Sweden (SE1–SE4), free, no auth. URL: `https://www.elprisetjustnu.se/api/v1/prices/{YYYY}/{MM-DD}_{area}.json` (e.g. `_SE3.json`). Returns hourly slots with SEK öre and EUR/kWh fields.
-- **hvakosterstrommen.no** — Norway (NO1–NO5), free, no auth. URL: `https://www.hvakosterstrommen.no/api/v1/prices/{YYYY}/{MM-DD}_{area}.json` (e.g. `_NO1.json`). Returns hourly slots with `NOK_per_kWh` and `EUR_per_kWh` fields.
-
-Both follow the same date-based URL pattern and return EUR/kWh — would slot cleanly into a single `fetch_nordpool_prices()` dispatcher. Response format needs live verification before implementation. Once implemented, adding them to the chain is two lines in `_build_fallback_chain`.
 
 ### Additional charger delivery handlers
 

@@ -22,7 +22,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Previously committed charging is never lost.** If a new plan is built before all charging slots from the previous plan have taken place, the remaining uncommitted charging time is added on top of the new plan's requirement. The scheduler then finds the cheapest slots for the full combined need — so the charger never loses charging time it was already told to expect.
 
-**Area-aware price source fallback.** The fallback chain is built from the configured area: FI uses ENTSO-E → Elering → Sähkötin → forecast; EE/LV/LT use ENTSO-E → Elering; SE and NO areas use ENTSO-E only (regional fallbacks not yet implemented). Sources outside the area's chain are never tried. The dashboard warns when the plan is based on forecast rather than confirmed prices.
+**Area-aware price source fallback.** The fallback chain is built from the configured area: FI uses ENTSO-E → Elering → Sähkötin → forecast; EE/LV/LT use ENTSO-E → Elering; SE1–SE4 use ENTSO-E → elprisetjustnu.se; NO1–NO5 use ENTSO-E → hvakosterstrommen.no. Sources outside the area's chain are never tried. The dashboard warns when the plan is based on forecast rather than confirmed prices.
 
 
 ```
@@ -187,16 +187,23 @@ The fallback chain is assembled at startup from the configured area — sources 
 |---|---|
 | `FI` | ENTSO-E → Elering → Sähkötin → forecast |
 | `EE`, `LV`, `LT` | ENTSO-E → Elering |
-| `SE1`–`SE4`, `NO1`–`NO5` | ENTSO-E only |
+| `SE1`–`SE4` | ENTSO-E → elprisetjustnu.se |
+| `NO1`–`NO5` | ENTSO-E → hvakosterstrommen.no |
 | other | ENTSO-E only |
 
 The fallback triggers in two cases: network/HTTP errors, and when the returned prices don't extend into tomorrow (e.g. during scheduled maintenance where ENTSO-E returns a valid but stale response with only today's data).
+
+All sources use EUR/kWh ex-VAT. ENTSO-E returns EUR/MWh for all areas including SE and NO; the regional sources also provide EUR directly (SEK and NOK fields in the response are unused).
 
 1. **Elering** (`dashboard.elering.ee/api`) — actual Nord Pool 15-min prices for Finland, Estonia, Latvia and Lithuania. No API key needed. Used transparently — `price_source: "Elering"` in the plan JSON, no dashboard warning.
 
 2. **Sähkötin** (`sahkotin.fi/api`) — actual realized Nord Pool 15-min prices, Finland only. No API key needed. Used transparently — `price_source: "Sähkötin"` in the plan JSON, no dashboard warning.
 
 3. **nordpool-predict-fi** (`raw.githubusercontent.com/vividfog/nordpool-predict-fi`) — ML forecast blended with realized prices. Finland only. By ~14:00–16:00 Helsinki time the forecast transitions to actual market prices, making it nearly as reliable as ENTSO-E once Nord Pool has published. Plans from this source are tagged `price_source: "forecast"` and display a warning banner on the dashboard.
+
+4. **elprisetjustnu.se** — Sweden (SE1–SE4). Native 15-min resolution. No API key needed. Used transparently — `price_source: "nordpool-regional"` in the plan JSON, no dashboard warning.
+
+5. **hvakosterstrommen.no** — Norway (NO1–NO5). Hourly resolution, expanded to 15-min. No API key needed. Used transparently — `price_source: "nordpool-regional"` in the plan JSON, no dashboard warning.
 
 If all sources in the area's chain fail, the script exits with a non-zero code so the GHA run is marked as failed and the operator receives an email.
 
@@ -221,7 +228,7 @@ Features:
 - Hero shows `scheduled 3h (1h30m carried over)` when hours from the previous plan are carried forward, and `vs optimal ↑N%` when the window constraint forces suboptimal slots
 - "vs market" percentage shows how much cheaper the scheduled avg price is compared to the average across all slots available to the scheduler at run time
 - Hover/touch any bar to see its price and time in the hero area; hovering a charging bar shows the window avg price
-- Price axis on the right side of the histogram with evenly-spaced tick marks. The scale ceiling is the smallest nice number above the day's max price that gives ≤ 4 ticks. Zero is always shown at the bottom. Bars scale proportionally from zero to the ceiling.
+- Price axis on the right side of the histogram with 3–5 evenly-spaced tick marks. The scale is based on the maximum price visible in the current histogram window (not the global day max), so off-screen spikes don't compress the visible bars. Zero is always shown at the bottom.
 - Responsive time tick intervals — 2h on wide screens, 4h on narrow (phone portrait)
 - Forecast warning banner when `price_source` is `"forecast"`
 - Staleness warning when plan is more than a day old
