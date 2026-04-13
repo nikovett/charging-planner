@@ -203,7 +203,7 @@ def _easee_put_weekly_plan(
     days: list[dict] = [{"dayOfWeek": d, "ranges": []} for d in range(7)]
 
     for start_utc, stop_utc in windows:
-        dow = start_utc.isoweekday() % 7  # Monday=0 … Sunday=6
+        dow = (start_utc.isoweekday() - 1) % 7  # Monday=0 … Sunday=6
         start_str = start_utc.strftime("%H:%MZ")
         stop_str  = stop_utc.strftime("%H:%MZ")
         days[dow]["ranges"].append({
