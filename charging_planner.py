@@ -1281,6 +1281,7 @@ def select_charging_windows(
     max_price: Optional[float] = None,
     min_slot_minutes: int = 15,
     min_gap_minutes: int = 15,
+    _log: bool = True,
 ) -> list[Slot]:
     if not prices:
         return []
@@ -1288,11 +1289,12 @@ def select_charging_windows(
     slot_dur = prices[0].duration_minutes
     if required_minutes % slot_dur != 0:
         required_minutes = ((required_minutes + slot_dur - 1) // slot_dur) * slot_dur
-        log.warning("required_minutes rounded up to %d to align with %d-minute slots.",
+        log.info("required_minutes rounded up to %d to align with %d-minute slots.",
                     required_minutes, slot_dur)
 
     n_slots = required_minutes // slot_dur
-    log.info("Selecting %d slots × %d min = %d min of charging", n_slots, slot_dur, required_minutes)
+    if _log:
+        log.info("Selecting %d slots × %d min = %d min of charging", n_slots, slot_dur, required_minutes)
 
     candidates = prices
     if max_price is not None:
@@ -1453,9 +1455,6 @@ def _select_with_min_block(
     if short:
         log.error("DP produced a block shorter than %d min — this is a bug.",
                   min_block_min)
-    else:
-        log.info("All %d block(s) meet the minimum block length of %d min.",
-                 len(final_blocks), min_block_min)
     for i2 in range(len(final_blocks) - 1):
         gap_min = int(
             (final_blocks[i2 + 1][0].start - final_blocks[i2][-1].end
@@ -1812,6 +1811,7 @@ def build_plan(p: PlanParams) -> dict:
         max_price=p.max_price_eur,
         min_slot_minutes=p.min_slot_minutes,
         min_gap_minutes=p.min_gap_minutes,
+        _log=False,
     )
     optimal_starts = {s.start for s in optimal_selected}
     opt_prices = [s.price_eur_kwh for s in optimal_selected]
@@ -1910,7 +1910,7 @@ def build_ocpp_charging_profile(
     ends   = [datetime.fromisoformat(s) for s in plan.get("window_ends_utc",   [])]
 
     if not starts:
-        log.warning("build_ocpp_charging_profile: no windows in plan, returning empty profile")
+        log.debug("build_ocpp_charging_profile: no windows in plan, returning empty profile")
         return {}
 
     schedule_start = starts[0]
@@ -2336,7 +2336,8 @@ def _select_slots(
 
     remaining = req_min - sum(s.duration_minutes for s in selected)
     if remaining > 0 and outside:
-        log.info("Filling %d min from outside preferred window.", remaining)
+        log.info("Profile '%s': window short by %d min — filling from outside preferred window.",
+                 cfg.name, remaining)
         spillover = _select_spillover(
             outside=outside,
             selected=selected,
@@ -2354,15 +2355,6 @@ def _select_slots(
     if not selected:
         log.error("Profile '%s': no slots selected — check preferred window and price ceiling.",
                   cfg.name)
-    else:
-        scheduled_min = sum(s.duration_minutes for s in selected)
-        if scheduled_min < req_min:
-            log.warning(
-                "⚠ Profile '%s': only %d min scheduled of %d min required. "
-                "Window prices may all be above max_price_cents_kwh, or the window "
-                "is too short for the required hours.",
-                cfg.name, scheduled_min, req_min,
-            )
 
     return selected, used_forecast
 
@@ -2567,9 +2559,6 @@ def _plan_one_profile(
 
     earliest_useful  = win_start_utc - timedelta(minutes=sched_required_minutes or cfg.required_minutes)
     candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
-    if trimmed := len(all_prices) - len(candidate_prices):
-        log.info("Trimmed %d unreachable slots (earliest useful: %s UTC)",
-                 trimmed, earliest_useful.strftime("%Y-%m-%d %H:%M"))
 
     now_utc_plan  = datetime.now(tz=timezone.utc)
     retained_minutes = _load_retained_minutes(output_dir, cfg.name, now_utc_plan)
@@ -2597,6 +2586,8 @@ def _plan_one_profile(
             log.warning("Profile '%s': %s", cfg.name, plan_warning)
         else:
             # Price ceiling is set — run comparison plan without ceiling to determine cause
+            log.info("Profile '%s': partial — checking if ceiling is the constraint "
+                     "(%.2f c€/kWh).", cfg.name, resolved_max_price_eur * 100)
             comparison = select_charging_windows(
                 [s for s in candidate_prices if s.start >= win_start_utc and s.start < win_end_utc],
                 required_minutes=effective_required,
@@ -2604,6 +2595,7 @@ def _plan_one_profile(
                 max_price=None,
                 min_slot_minutes=cfg.min_slot_minutes,
                 min_gap_minutes=cfg.min_gap_minutes,
+                _log=False,
             )
             comparison_min = sum(s.duration_minutes for s in comparison)
             if comparison_min >= effective_required:
@@ -2615,9 +2607,12 @@ def _plan_one_profile(
                     plan_warning = (
                         f"partial plan — price limit {resolved_max_price_eur * 100:.2f} c\u20ac/kWh"
                     )
+                log.warning("Profile '%s': %s — window has capacity, ceiling is blocking slots.",
+                            cfg.name, plan_warning)
             else:
                 plan_warning = "partial plan — required hours exceed boundaries"
-            log.warning("Profile '%s': %s", cfg.name, plan_warning)
+                log.warning("Profile '%s': %s — window too short even without ceiling.",
+                            cfg.name, plan_warning)
 
     windows = merge_continuous_slots(selected)
 
@@ -2646,6 +2641,16 @@ def _plan_one_profile(
         plan_warning=plan_warning,
     ))
     plan["profile"] = cfg.name
+
+    total_min   = sum(s.duration_minutes for s in selected)
+    avg_c       = plan.get("avg_price_cents_kwh", 0.0)
+    n_windows   = len(windows)
+    spilled     = total_min - sum(s.duration_minutes for s in selected
+                                  if win_start_utc <= s.start < win_end_utc)
+    spill_str   = f", {spilled} min outside window" if spilled > 0 else ""
+    log.info("Profile '%s': %d/%d min scheduled, avg %.2f c€/kWh, %d window%s%s",
+             cfg.name, total_min, effective_required, avg_c,
+             n_windows, "s" if n_windows != 1 else "", spill_str)
 
     print_plan_summary(plan, future_prices)
     output_path = os.path.join(output_dir, f"plan-{cfg.name}.json")
