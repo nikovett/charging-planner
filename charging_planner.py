@@ -1363,8 +1363,20 @@ def _select_with_min_block(
     def block_cost(i: int, k: int) -> float:
         return prefix[i + k] - prefix[i]
 
+    # Precompute max_run[i] = length of the longest time-continuous run starting
+    # at index i.  Two consecutive candidates are time-adjacent iff the gap
+    # between them is zero (ordered[i].end == ordered[i+1].start).  When a price
+    # ceiling excludes some slots the candidate array may contain index-adjacent
+    # entries that are NOT time-adjacent (e.g. indices 0 and 1 map to 20:45 and
+    # 21:30 when 21:00 and 21:15 are above the ceiling).  A valid charging block
+    # must be time-continuous, so the DP caps block length at max_run[i].
+    max_run = [1] * n
+    for i in range(n - 2, -1, -1):
+        gap = int((ordered[i + 1].start - ordered[i].end).total_seconds() // 60)
+        if gap == 0:
+            max_run[i] = max_run[i + 1] + 1
+
     # dp[i][r]: min cost to schedule r more slots from position i onwards
-    # Use dicts to avoid allocating a full n×n_slots+1 table (sparse)
     dp     = [[INF] * (n_slots + 1) for _ in range(n + 1)]
 
     # Base: 0 remaining slots = 0 cost, regardless of position
@@ -1378,8 +1390,9 @@ def _select_with_min_block(
             best  = dp[i + 1][r]
             best_k = 0
 
-            # Option 2: start a block of length k here
-            max_k = min(r, n - i)
+            # Option 2: start a block of length k here.
+            # k is capped at max_run[i] to ensure the block is time-continuous.
+            max_k = min(r, n - i, max_run[i])
             for k in range(min_slots_per_block, max_k + 1):
                 # Next valid position after this block + mandatory gap
                 next_i = i + k + min_slots_per_gap
@@ -1408,11 +1421,12 @@ def _select_with_min_block(
     r = n_slots
     i = 0
     while r > 0:
-        # Find latest i' >= i where placing a block gives the optimal remaining cost
+        # Find latest i' >= i where placing a block gives the optimal remaining cost.
+        # max_run[i2] cap mirrors the fill pass — only time-continuous blocks allowed.
         best_i = None
         best_k = None
         for i2 in range(i, n):
-            for k in range(min_slots_per_block, min(r, n - i2) + 1):
+            for k in range(min_slots_per_block, min(r, n - i2, max_run[i2]) + 1):
                 next_i = min(i2 + k + min_slots_per_gap, n)
                 cost = block_cost(i2, k) + dp[next_i][r - k]
                 if abs(cost - dp[i][r]) < 1e-12:
@@ -1429,8 +1443,8 @@ def _select_with_min_block(
     final_blocks  = _group_continuous(sorted(selected, key=lambda x: x.start))
     short = [b for b in final_blocks if len(b) < min_slots_per_block]
     if short:
-        log.warning("%d block(s) still shorter than %d min.",
-                    len(short), min_block_min)
+        log.error("DP produced a block shorter than %d min — this is a bug.",
+                  min_block_min)
     else:
         log.info("All %d block(s) meet the minimum block length of %d min.",
                  len(final_blocks), min_block_min)

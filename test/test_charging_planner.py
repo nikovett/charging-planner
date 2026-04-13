@@ -1191,6 +1191,44 @@ class TestSelectWithMinBlock(unittest.TestCase):
                 f"Gap of {gap_min} min between blocks violates min_gap_minutes=30"
             )
 
+    def test_isolated_cheap_slot_with_price_ceiling(self):
+        # Regression: when a price ceiling excludes slots on both sides of a cheap
+        # slot, the candidate array has an index-adjacent entry that is NOT
+        # time-adjacent.  The DP must not form a block across this time gap,
+        # producing a 1-slot (15 min) block that violates min_slot_minutes=30.
+        #
+        # Reproduces the 2026-04-13 production bug:
+        #   20:45 UTC (5.4 c/kWh) — isolated, neighbors above ceiling
+        #   21:00 UTC (10.5 c/kWh) — ABOVE ceiling, excluded
+        #   21:15 UTC (10.3 c/kWh) — ABOVE ceiling, excluded
+        #   21:30 UTC (8.5 c/kWh) — below ceiling
+        #   21:45 UTC (6.1 c/kWh) — below ceiling
+        base = datetime(2026, 4, 13, 20, 45, tzinfo=UTC)
+        cheap_isolated = slots_from(base,                         1, price_cents=5.4)
+        above_ceiling  = slots_from(base + timedelta(minutes=15), 2, price_cents=10.5)
+        after_gap      = slots_from(base + timedelta(minutes=45), 6, price_cents=7.0)
+        all_slots = cheap_isolated + above_ceiling + after_gap
+
+        ceiling = 9.8  # c/kWh — excludes the two above-ceiling slots
+        selected = select_charging_windows(
+            all_slots, required_minutes=30, min_slot_minutes=30,
+            max_price=ceiling / 100,
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for group in groups:
+            duration = sum(s.duration_minutes for s in group)
+            self.assertGreaterEqual(
+                duration, 30,
+                f"Block of {duration} min violates min_slot_minutes=30 "
+                f"(isolated cheap slot leaked through price-ceiling gap)"
+            )
+        # The isolated 20:45 slot must not appear — it cannot form a valid block
+        selected_starts = {s.start for s in selected}
+        self.assertNotIn(
+            base, selected_starts,
+            "Isolated cheap slot at 20:45 must not be selected when it cannot form a 30-min block"
+        )
+
 
 
     """_check_window_coverage exits cleanly when prices are not yet published."""

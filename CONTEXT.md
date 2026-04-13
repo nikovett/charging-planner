@@ -223,6 +223,28 @@ NO1–NO5:  ENTSO-E → hvakosterstrommen.no
 
 ---
 
+### Session 22 — 2026-04-13
+
+**Bug fix: `_select_with_min_block` violated `min_slot_minutes` when price ceiling created time gaps in candidate array.**
+
+Root cause: the DP operated on candidate array index positions, not real time positions. A price ceiling (e.g. `max_price_cents_kwh: avg`) can exclude slots adjacent to a cheap slot, leaving it isolated in time but index-adjacent to the next candidate. The DP formed a "block" across the time gap; `_group_continuous` then split it by real time, leaving the isolated slot as a 1-slot (15-min) block — violating `min_slot_minutes=30`.
+
+Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot at 23:45 local (5.40 c€/kWh) isolated by neighbors at 10.48 and 10.30. First occurrence because this specific combination — cheap isolated slot with both neighbors above the avg ceiling — had not appeared in prior runs.
+
+**Fix:** precompute `max_run[i]` = longest time-continuous run from index `i`. Two candidates are time-adjacent iff `ordered[i].end == ordered[i+1].start`. Block length capped at `max_run[i]` in both the DP fill pass and the reconstruction pass.
+
+**Log message:** `log.warning("N block(s) still shorter than 30 min")` → `log.error("DP produced a block shorter than 30 min — this is a bug")`. The "still" wording implied a retry loop that never existed. Now unreachable if the DP is correct.
+
+**1 new test** in `TestSelectWithMinBlock`: `test_isolated_cheap_slot_with_price_ceiling` — reproduces the exact 2026-04-13 scenario, asserts the isolated slot is not selected and no sub-30-min block is produced.
+
+**217 tests** passing, 3 skipped.
+
+**Easee delivery handler `deliver_easee.py` added** (doc-based, untested against real hardware). Day-of-week bug fixed before first release: `isoweekday() % 7` mapped Monday→1 and Sunday→0 (colliding with Monday). Fixed to `(isoweekday() - 1) % 7`. 26 tests in `test_deliver_easee.py`.
+
+**v1.7.1 released** — min_slot_minutes DP bug fix + Easee day-of-week fix. See RELEASE_NOTES_v1.7.1.md.
+
+---
+
 ### Session 17 — 2026-04-06
 
 **`max_price_cents_kwh: "avg"` dynamic ceiling** (v1.4.0):
