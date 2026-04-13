@@ -13,6 +13,7 @@ Run daily after ~12:00 UTC when ENTSO-E publishes next-day prices.
 """
 
 import argparse
+import bisect
 from dataclasses import dataclass, field
 import json
 import logging
@@ -1333,19 +1334,24 @@ def _select_with_min_block(
     ≥ min_slots_per_block long and every gap between blocks is ≥ min_slots_per_gap
     long.  Uses dynamic programming for a globally optimal solution.
 
+    The DP is time-aware: both block continuity and gap enforcement are based on
+    actual slot timestamps, not candidate array indices.  This means the algorithm
+    is correct regardless of how the candidate list was filtered (e.g. by a price
+    ceiling that creates time gaps between otherwise index-adjacent entries).
+
     DP formulation:
       dp[i][r] = minimum total price to schedule exactly r more slots,
-                 using only candidates[i:]
-      choice[i][r] = block length k chosen at position i when dp[i][r] was set
-                     (0 = skip slot i)
+                 considering only candidates[i:]
+      Transitions at position i with r slots remaining:
+        Skip:          dp[i][r] = dp[i+1][r]
+        Start block k: dp[i][r] = sum(prices[i:i+k]) + dp[next_i][r-k]
+                       for k in [min_slots_per_block .. run_end[i]-i+1]
+                       where run_end[i] is the last index time-continuous with i,
+                       and next_i = first_valid_after[i+k-1] is the first slot
+                       whose start >= ordered[i+k-1].end + gap_duration.
 
-    Transitions at position i with r slots remaining:
-      Skip:           dp[i][r] = dp[i+1][r]
-      Start block k:  dp[i][r] = sum(prices[i:i+k]) + dp[i+k+min_gap][r-k]
-                      for k in [min_slots_per_block .. min(r, n - i)]
-                      next valid start = i + k + min_slots_per_gap (min gap enforced)
-
-    Reconstruction walks choice[][] forward to collect selected slots.
+    Reconstruction finds the latest valid block at each step (latest-preferred
+    tiebreaker for equal-price ties).
     """
     if not candidates:
         return []
@@ -1363,23 +1369,31 @@ def _select_with_min_block(
     def block_cost(i: int, k: int) -> float:
         return prefix[i + k] - prefix[i]
 
-    # Precompute max_run[i] = length of the longest time-continuous run starting
-    # at index i.  Two consecutive candidates are time-adjacent iff the gap
-    # between them is zero (ordered[i].end == ordered[i+1].start).  When a price
-    # ceiling excludes some slots the candidate array may contain index-adjacent
-    # entries that are NOT time-adjacent (e.g. indices 0 and 1 map to 20:45 and
-    # 21:30 when 21:00 and 21:15 are above the ceiling).  A valid charging block
-    # must be time-continuous, so the DP caps block length at max_run[i].
-    max_run = [1] * n
+    # run_end[i]: index of the last slot in the same time-continuous run as i.
+    # Two slots are time-adjacent iff ordered[i].end == ordered[i+1].start.
+    # A valid charging block must be time-continuous, so block length at i is
+    # capped at run_end[i] - i + 1.  This is structurally enforced — there is
+    # no index arithmetic that could accidentally span a time gap.
+    run_end = [0] * n
+    run_end[n - 1] = n - 1
     for i in range(n - 2, -1, -1):
-        gap = int((ordered[i + 1].start - ordered[i].end).total_seconds() // 60)
-        if gap == 0:
-            max_run[i] = max_run[i + 1] + 1
+        if ordered[i + 1].start == ordered[i].end:
+            run_end[i] = run_end[i + 1]
+        else:
+            run_end[i] = i
+
+    # first_valid_after[j]: first slot index whose .start >= ordered[j].end + gap_dur.
+    # Used to find the next valid block start after a block ending at slot j.
+    # Time-based — correct even when runs are separated by gaps larger than gap_dur.
+    gap_dur = timedelta(minutes=slot_dur * min_slots_per_gap)
+    starts = [s.start for s in ordered]
+    first_valid_after = [
+        bisect.bisect_left(starts, ordered[j].end + gap_dur)
+        for j in range(n)
+    ]
 
     # dp[i][r]: min cost to schedule r more slots from position i onwards
-    dp     = [[INF] * (n_slots + 1) for _ in range(n + 1)]
-
-    # Base: 0 remaining slots = 0 cost, regardless of position
+    dp = [[INF] * (n_slots + 1) for _ in range(n + 1)]
     for i in range(n + 1):
         dp[i][0] = 0.0
 
@@ -1387,47 +1401,42 @@ def _select_with_min_block(
     for i in range(n - 1, -1, -1):
         for r in range(1, n_slots + 1):
             # Option 1: skip slot i
-            best  = dp[i + 1][r]
-            best_k = 0
+            best = dp[i + 1][r]
 
             # Option 2: start a block of length k here.
-            # k is capped at max_run[i] to ensure the block is time-continuous.
-            max_k = min(r, n - i, max_run[i])
+            # k is capped at the run boundary — guarantees time-continuity.
+            max_k = min(r, run_end[i] - i + 1)
             for k in range(min_slots_per_block, max_k + 1):
-                # Next valid position after this block + mandatory gap
-                next_i = i + k + min_slots_per_gap
+                # Next valid position: first slot after mandatory time gap.
+                next_i = first_valid_after[i + k - 1]
                 if next_i > n:
                     next_i = n
-                remaining_r = r - k
-                if dp[next_i][remaining_r] < INF:
-                    cost = block_cost(i, k) + dp[next_i][remaining_r]
+                if dp[next_i][r - k] < INF:
+                    cost = block_cost(i, k) + dp[next_i][r - k]
                     # Strict < only — on equal cost keep the solution found
                     # at the highest i (latest), since we fill backwards
                     if cost < best:
-                        best   = cost
-                        best_k = k
+                        best = cost
 
-            dp[i][r]     = best
+            dp[i][r] = best
 
     if dp[0][n_slots] == INF:
         log.warning("No valid solution found for n_slots=%d min_slots_per_block=%d — "
                     "not enough eligible slots.", n_slots, min_slots_per_block)
         return []
 
-    # Reconstruct: at each step find the latest position where we can place
-    # a block that still leads to the optimal total cost. This ensures that
-    # on equal-price ties the latest slots are preferred.
+    # Reconstruct: find the latest valid block at each step to prefer later slots
+    # on equal-price ties.
     selected: list[Slot] = []
     r = n_slots
     i = 0
     while r > 0:
-        # Find latest i' >= i where placing a block gives the optimal remaining cost.
-        # max_run[i2] cap mirrors the fill pass — only time-continuous blocks allowed.
         best_i = None
         best_k = None
         for i2 in range(i, n):
-            for k in range(min_slots_per_block, min(r, n - i2, max_run[i2]) + 1):
-                next_i = min(i2 + k + min_slots_per_gap, n)
+            max_k = min(r, run_end[i2] - i2 + 1)
+            for k in range(min_slots_per_block, max_k + 1):
+                next_i = min(first_valid_after[i2 + k - 1], n)
                 cost = block_cost(i2, k) + dp[next_i][r - k]
                 if abs(cost - dp[i][r]) < 1e-12:
                     best_i = i2
@@ -1435,10 +1444,9 @@ def _select_with_min_block(
         if best_i is None:
             break
         selected.extend(ordered[best_i:best_i + best_k])
-        i = best_i + best_k + min_slots_per_gap
+        i = first_valid_after[best_i + best_k - 1]
         r -= best_k
 
-    slot_dur      = ordered[0].duration_minutes if ordered else 15
     min_block_min = min_slots_per_block * slot_dur
     final_blocks  = _group_continuous(sorted(selected, key=lambda x: x.start))
     short = [b for b in final_blocks if len(b) < min_slots_per_block]
