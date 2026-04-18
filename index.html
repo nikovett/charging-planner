@@ -329,7 +329,19 @@ function renderTimeline(plan, profileName, nowPrice) {
 
   var utcOffset = (plan.utc_offset_hours || 0) * 60;
   var minP = plan.price_stats ? plan.price_stats.min_cents_kwh : 0;
-  var rangeP = 1; // placeholder, recomputed after visible is known
+  var maxP = plan.price_stats ? plan.price_stats.max_cents_kwh : 1;
+  var rangeP = maxP - minP || 1;
+
+  // Nice ceiling: round maxP up to next clean tick value for proportional scale
+  // Find smallest nice ceiling above maxP with at most 4 evenly-spaced ticks
+  // Zero is the implicit bottom tick, shown ticks are interval, 2x, 3x, 4x
+  var niceSteps = [0.5,1,2,5,10,25,50,100,150,200,500,1000];
+  var niceInterval = 1, niceCeil = 100;
+  for (var ni2 = 0; ni2 < niceSteps.length; ni2++) {
+    var step = niceSteps[ni2];
+    var c = Math.ceil(maxP / step) * step;
+    if (c / step <= 4 && c < niceCeil) { niceInterval = step; niceCeil = c; }
+  }
 
   // Find now slot
   var nowMs = Date.now();
@@ -347,6 +359,12 @@ function renderTimeline(plan, profileName, nowPrice) {
   var allLm  = slots.map(function(s) { return new Date(s.start_utc).getTime()/60000 + utcOffset; });
   var cLm    = slots.filter(function(s){return s.charging;}).map(function(s){ return new Date(s.start_utc).getTime()/60000 + utcOffset; });
   var nowLm  = Date.now()/60000 + utcOffset;
+  // Last real (non-forecast) slot end — used to cap Mode 3 / no-charging fallback
+  // when no forecast slots exist (non-FI areas). Prevents the histogram scrolling
+  // into empty space when there is nothing to the right of the last price bar.
+  var hasForecastSlots = slots.some(function(s){ return s.forecasted; });
+  var realLm = slots.filter(function(s){ return !s.forecasted; }).map(function(s){ return new Date(s.start_utc).getTime()/60000 + utcOffset; });
+  var lastRealEndLm = realLm.length ? Math.max.apply(null, realLm) + 15 : nowLm;
   var rangeStart, rangeEnd;
   if (cLm.length) {
     var mid        = (Math.min.apply(null,cLm) + Math.max.apply(null,cLm)) / 2;
@@ -354,8 +372,10 @@ function renderTimeline(plan, profileName, nowPrice) {
     if (nowLm >= mid) {
       // Mode 3: now-centered ±12h. Now has reached or passed the charging midpoint —
       // window tracks now, revealing forecast bars to the right as time progresses.
+      // When no forecast slots exist, cap at last real price bar so the histogram
+      // doesn't scroll into empty space (non-FI areas).
       rangeStart = nowLm - 12*60;
-      rangeEnd   = nowLm + 12*60;
+      rangeEnd   = hasForecastSlots ? nowLm + 12*60 : lastRealEndLm;
     } else if (mid - 12*60 <= nowLm - 60) {
       // Mode 2: charge-centered ±12h (now is within the window naturally)
       rangeStart = mid - 12*60;
@@ -366,9 +386,10 @@ function renderTimeline(plan, profileName, nowPrice) {
       rangeEnd   = Math.max(rangeStart + 24*60, lastSlotLm + 60);
     }
   } else {
-    // No charging slots — now-centered ±12h (same as Mode 3)
+    // No charging slots — now-centered ±12h (same as Mode 3).
+    // Cap right edge at last real price bar when no forecast available.
     rangeStart = nowLm - 12*60;
-    rangeEnd   = nowLm + 12*60;
+    rangeEnd   = hasForecastSlots ? nowLm + 12*60 : lastRealEndLm;
   }
   rangeStart = Math.max(rangeStart, Math.min.apply(null,allLm));
   // Snap to 15-minute slot boundaries so bars fill edge to edge
@@ -381,36 +402,6 @@ function renderTimeline(plan, profileName, nowPrice) {
     return lm >= rangeStart && lm < rangeEnd;
   });
   if (!visible.length) visible = slots;
-
-  // Scale is based on the maximum price visible in the current histogram window,
-  // not the global max from the selection pool which may be off-screen.
-  var visiblePrices = visible.filter(function(s){ return s.price_cents_kwh > 0; })
-                             .map(function(s){ return s.price_cents_kwh; });
-  var maxP = visiblePrices.length ? Math.max.apply(null, visiblePrices) : 1;
-
-  // Nice ceiling: round maxP up to a clean value that gives 3–5 evenly-spaced ticks.
-  // Strategy: try each candidate interval, compute the ceiling it produces, and
-  // pick the candidate that gives the most ticks without exceeding 5.
-  // Zero is always shown at the bottom; ticks are at interval, 2×, 3×, … niceCeil.
-  var niceSteps = [0.1,0.2,0.25,0.5,1,2,5,10,25,50,100,150,200,500,1000];
-  var niceInterval = 1, niceCeil = 100;
-  var bestTicks = 0;
-  for (var ni2 = 0; ni2 < niceSteps.length; ni2++) {
-    var step = niceSteps[ni2];
-    var c = Math.round(Math.ceil(maxP / step) * step * 1000) / 1000;
-    var ticks = Math.round(c / step);
-    if (ticks >= 3 && ticks <= 5 && (bestTicks === 0 || ticks > bestTicks || (ticks === bestTicks && c < niceCeil))) {
-      niceInterval = step; niceCeil = c; bestTicks = ticks;
-    }
-  }
-  // Fallback: if no candidate gave 3–5 ticks, use the smallest ceiling with ≤5 ticks
-  if (bestTicks === 0) {
-    for (var ni3 = 0; ni3 < niceSteps.length; ni3++) {
-      var step2 = niceSteps[ni3];
-      var c2 = Math.round(Math.ceil(maxP / step2) * step2 * 1000) / 1000;
-      if (c2 / step2 <= 5 && c2 < niceCeil) { niceInterval = step2; niceCeil = c2; }
-    }
-  }
 
   var slotW = (15/totalMins*100).toFixed(4);
 
@@ -472,12 +463,11 @@ function renderTimeline(plan, profileName, nowPrice) {
     + '<div style="width:4px;height:1px;background:var(--dim);flex-shrink:0"></div>'
     + '<span style="font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1">0</span>'
     + '</div>';
-  for (var tick = niceInterval; tick <= niceCeil + 1e-9; tick = Math.round((tick + niceInterval) * 1000) / 1000) {
+  for (var tick = niceInterval; tick <= niceCeil; tick += niceInterval) {
     var tickPct = (100 - (tick - _effMin2) / (niceCeil - _effMin2) * 90).toFixed(1);
-    var tickLabel = tick % 1 === 0 ? String(tick) : tick.toFixed(tick < 1 ? 2 : 1);
     priceTicksHTML += '<div style="position:absolute;top:calc(' + tickPct + '% - 5px);left:0;display:flex;align-items:center;gap:2px;white-space:nowrap">'
       + '<div style="width:4px;height:1px;background:var(--dim);flex-shrink:0"></div>'
-      + '<span style="font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1">' + tickLabel + '</span>'
+      + '<span style="font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1">' + tick + '</span>'
       + '</div>';
   }
 
@@ -510,7 +500,7 @@ function renderTimeline(plan, profileName, nowPrice) {
        + '<div class="histogram" style="flex:1;-webkit-user-select:none;user-select:none;touch-action:pan-y" ontouchmove="histoTouchMove(event,\'' + profileName + '\')" ontouchend="unhoverBar(\'' + profileName + '\')" ontouchcancel="unhoverBar(\'' + profileName + '\')">'
        + avgLine + barsHTML
        + '</div>'
-       + '<div style="position:relative;flex-shrink:0;width:calc(6px + ' + (String(niceCeil % 1 === 0 ? niceCeil : niceCeil.toFixed(niceCeil < 1 ? 2 : 1)).length * 6) + 'px)">' + priceTicksHTML + '</div>'
+       + '<div style="position:relative;flex-shrink:0;width:calc(6px + ' + (String(niceCeil).length * 6) + 'px)">' + priceTicksHTML + '</div>'
        + '</div>'
        + '<div class="timeline-ticks">' + tickHTML + '</div>'
        + '</div>';

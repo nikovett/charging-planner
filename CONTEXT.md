@@ -658,3 +658,11 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 **`README_tests.md` created** — documents all 244 tests across `test_charging_planner.py` (177), `test_deliver_chargeamps.py` (41), and `test_deliver_easee.py` (26). One paragraph per test class describing what it covers; regression tests called out explicitly.
 
 **v1.7.1 released** — min_slot_minutes DP bug fix + Easee day-of-week fix.
+
+### Session 23 — 2026-04-18
+
+**Warning level audit** (`charging_planner.py`): reviewed all `log.warning` and `log.error` calls. Four fixes: `required_minutes rounded up` demoted WARNING → INFO (normal expected behaviour for non-multiple-of-15 input); `build_ocpp_charging_profile: no windows` demoted WARNING → DEBUG (expected on empty/partial plans, not actionable); `⚠ Profile 'X': only N min scheduled` in `_select_slots` removed entirely (redundant — immediately followed by the more informative `plan_warning` log from `_plan_one_profile`); `Supplemented with N forecast slots` confirmed already INFO, no change needed.
+
+**Dashboard histogram Mode 3 fix** (`index.html`): Mode 3 (now-centered ±12h, tracking forward in real time) previously scrolled into empty space for non-FI areas that never receive forecast display slots. Fix: precompute `hasForecastSlots` (any `forecasted: true` slot in the plan) and `lastRealEndLm` (end of last non-forecast slot). In Mode 3 and the no-charging-slots fallback, `rangeEnd` is now capped at `lastRealEndLm` when no forecast slots are present. FI behaviour unchanged. Same cap applied to the no-charging-slots fallback which uses the same now±12h logic.
+
+**First successful live run with `any:any` Sunday window**: topup profile scheduled 4h30m at 1.24 c€/kWh (↓68% vs market avg 3.93 c€/kWh), all slots optimal. Delivery succeeded mid active charging session — schedule override protected the current session, `restore_mode: true` restored connector to On mode, no interruption to charging current observed on load balancer chart.
