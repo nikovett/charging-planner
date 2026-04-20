@@ -666,3 +666,11 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 **Dashboard histogram Mode 3 fix** (`index.html`): Mode 3 (now-centered ±12h, tracking forward in real time) previously scrolled into empty space for non-FI areas that never receive forecast display slots. Fix: precompute `hasForecastSlots` (any `forecasted: true` slot in the plan) and `lastRealEndLm` (end of last non-forecast slot). In Mode 3 and the no-charging-slots fallback, `rangeEnd` is now capped at `lastRealEndLm` when no forecast slots are present. FI behaviour unchanged. Same cap applied to the no-charging-slots fallback which uses the same now±12h logic.
 
 **First successful live run with `any:any` Sunday window**: topup profile scheduled 4h30m at 1.24 c€/kWh (↓68% vs market avg 3.93 c€/kWh), all slots optimal. Delivery succeeded mid active charging session — schedule override protected the current session, `restore_mode: true` restored connector to On mode, no interruption to charging current observed on load balancer chart.
+
+### Session 24 — 2026-04-20
+
+**Console output fixes** (`charging_planner.py`): two display-only changes, no effect on JSON or selection logic. (1) Avg price and savings lines suppressed entirely when no slots were scheduled (`total_minutes == 0`) — previously showed `0.00 c€/kWh` and `↓ 100% below market avg`, which were artifacts of the zero-division path on a fully-blocked plan. (2) `-0.00` min price display fixed — `-0.001 c€/kWh` rounded to 2 decimal places produced the string `"-0.00"`. Fix checks the formatted string directly and substitutes `"0.00"` only for that exact artifact; real negative prices like `-0.05` display unchanged.
+
+**Dashboard fix** (`index.html`): same `-0.00` fix applied to the min price in the right hero panel using the same string-check approach.
+
+**First live run with `avg` ceiling producing a fully-blocked plan**: topup profile on 2026-04-20 had all window slots above the dynamic avg ceiling (5.45 c€/kWh), spillover also found nothing below ceiling. Plan correctly produced `total_minutes: 0` with `plan_warning: "partial plan — price limit avg (5.45 c€/kWh)"`. Overnight ran normally at 7.00 c€/kWh (no ceiling).
