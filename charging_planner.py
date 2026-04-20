@@ -2031,9 +2031,14 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     print()
 
     # Price summary bar
+    # Format min price — guard against -0.00 artifact from tiny negatives like -0.001.
+    # Real negative prices (e.g. -0.05) are shown as-is; only -0.00 is suppressed.
+    def _fmt_price(v: float) -> str:
+        s = f"{v:.2f}"
+        return "0.00" if s == "-0.00" else s
     avg_mkt_str = f"{ps['avg_cents_kwh']:.2f}"
     print(f"  {_dim('Market prices')}   "
-          f"{_green(f'{min_c:.2f}')} {_dim('min')}  "
+          f"{_green(_fmt_price(min_c))} {_dim('min')}  "
           f"{_yellow(avg_mkt_str)} {_dim('avg')}  "
           f"{_red(f'{max_c:.2f}')} {_dim('max')}  "
           f"{_dim('c€/kWh')}")
@@ -2060,16 +2065,18 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
         reason = warning.replace("partial plan — ", "")
         print(f"{indent}{_yellow(reason)}")
 
-    # Avg price line
-    print(f"  {_bold('Avg price')}  {_yellow(f'{avg:.2f} c€/kWh')}")
-    if savings_pct > 5:
-        print(f"{indent}{_green(f'↓ {savings_pct:.0f}% below market avg')}")
-    else:
-        print(f"{indent}{_dim('≈ near market avg')}")
-    avg_opt = plan.get("avg_optimal_price_cents_kwh")
-    if avg_opt and avg_opt > 0 and avg > avg_opt:
-        opt_pct = (avg / avg_opt - 1) * 100
-        print(f"{indent}{_dim(f'vs optimal ↑{opt_pct:.0f}%')}")
+    # Avg price line — suppress entirely when no slots were scheduled.
+    # avg=0.0 on an empty plan produces nonsense savings percentages.
+    if tot > 0:
+        print(f"  {_bold('Avg price')}  {_yellow(f'{avg:.2f} c€/kWh')}")
+        if savings_pct > 5:
+            print(f"{indent}{_green(f'↓ {savings_pct:.0f}% below market avg')}")
+        else:
+            print(f"{indent}{_dim('≈ near market avg')}")
+        avg_opt = plan.get("avg_optimal_price_cents_kwh")
+        if avg_opt and avg_opt > 0 and avg > avg_opt:
+            opt_pct = (avg / avg_opt - 1) * 100
+            print(f"{indent}{_dim(f'vs optimal ↑{opt_pct:.0f}%')}")
 
     print()
 

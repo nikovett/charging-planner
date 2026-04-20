@@ -632,7 +632,7 @@ function renderProfile(plan) {
     + '<div class="hero-price" id="now-price-' + plan.profile + '">' + (nowPrice !== null ? nowPrice.toFixed(2) : '\u2014') + ' <span class="hero-unit">c\u20ac/kWh</span></div>'
     + '<div class="hero-details">'
     + (plan.price_stats
-        ? '<div class="hero-det">min <span class="good">' + plan.price_stats.min_cents_kwh.toFixed(2) + '</span></div>'
+        ? '<div class="hero-det">min <span class="good">' + (function(v){ var s = v.toFixed(2); return s === '-0.00' ? '0.00' : s; })(plan.price_stats.min_cents_kwh) + '</span></div>'
         + '<div class="hero-det">avg <strong>' + plan.price_stats.avg_cents_kwh.toFixed(2) + '</strong></div>'
         + '<div class="hero-det">max <span class="warn">' + plan.price_stats.max_cents_kwh.toFixed(2) + '</span></div>'
         : '')
