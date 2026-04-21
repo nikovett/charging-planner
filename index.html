@@ -594,9 +594,9 @@ function renderProfile(plan) {
     var e1 = fmtDay(toLoc(plan.window_ends_utc[plan.window_ends_utc.length-1]));
     chargePeriod = s1 === e1 ? s1 : s1 + " \u2192 " + e1;
   }
-  var allPast  = plan.window_ends_utc && plan.window_ends_utc.every(function(e){return new Date(e)<new Date();});
-  var dateStyle = allPast ? ' style="color:var(--warn)"' : '';
-
+  var noSlots  = plan.total_minutes === 0;
+  var allPast  = !noSlots && plan.window_ends_utc && plan.window_ends_utc.every(function(e){return new Date(e)<new Date();});
+  var dateStyle = allPast ? ' style="color:var(--warn)"' : (noSlots ? ' style="color:var(--muted)"' : '');
   // Now price
   var nowMs = Date.now(), nowPrice = null;
   if (plan.price_slots) {
@@ -612,17 +612,26 @@ function renderProfile(plan) {
     : '';
   var warningStr = '';
   if (plan.plan_warning) {
-    var shortWarn = plan.plan_warning.indexOf('price limit') !== -1
-      ? plan.plan_warning.replace('partial plan \u2014 ', '')
-      : 'required hours exceed boundaries';
-    warningStr = ' <span style="color:var(--warn)">(' + shortWarn + ')</span>';
+    var shortWarn;
+    if (plan.plan_warning.indexOf('price limit') !== -1) {
+      // Extract the price value — handle both "price limit 5.45 c€/kWh"
+      // and "price limit avg (5.45 c€/kWh)". Pull the number in parentheses
+      // or after "limit " and rewrite as "due to price limit (X c€/kWh)".
+      var priceMatch = plan.plan_warning.match(/([\d.]+)\s*c[\u20ac€]\/kWh/);
+      var priceVal = priceMatch ? priceMatch[1] + ' c\u20ac/kWh' : '';
+      shortWarn = 'due to price limit (' + priceVal + ')';
+    } else {
+      shortWarn = 'required hours exceed boundaries';
+    }
+    warningStr = ' <span style="color:var(--warn)">' + shortWarn + '</span>';
+  }
   }
   var heroL = '<div class="hero">'
     + '<div class="hero-label" id="avg-label-' + plan.profile + '">avg scheduled</div>'
-    + '<div class="hero-price accent" id="avg-price-' + plan.profile + '">' + plan.avg_price_cents_kwh.toFixed(2) + ' <span class="hero-unit">c\u20ac/kWh</span></div>'
+    + '<div class="hero-price ' + (noSlots ? '' : 'accent') + '" id="avg-price-' + plan.profile + '">' + (noSlots ? '\u2014' : plan.avg_price_cents_kwh.toFixed(2) + ' <span class="hero-unit">c\u20ac/kWh</span>') + '</div>'
     + '<div class="hero-details">'
     + '<div class="hero-det">scheduled <strong>' + fmtDuration(plan.total_minutes) + (incomplete ? '&thinsp;of&thinsp;' + fmtDuration(plan.required_minutes) : '') + '</strong>' + retainedStr + warningStr + '</div>'
-    + '<div class="hero-det">vs market <span class="' + savClass + '">' + savStr + '</span></div>'
+    + (!noSlots ? '<div class="hero-det">vs market <span class="' + savClass + '">' + savStr + '</span></div>' : '')
     + optStr
     + '</div></div>';
 
@@ -650,7 +659,7 @@ function renderProfile(plan) {
        + '<div class="flip-card-front">'
        + '<div class="card-header">'
        + '<span class="profile-name">' + plan.profile + '</span>'
-       + '<span class="profile-date"' + dateStyle + '>charges ' + chargePeriod + '</span>'
+       + '<span class="profile-date"' + dateStyle + '>' + (noSlots ? 'no charging scheduled' : 'charges ' + chargePeriod) + '</span>'
        + '</div>'
        + '<div class="heroes">' + heroL + '<div class="hero-divider"></div>' + heroR + '</div>'
        + renderTimeline(plan, plan.profile, nowPrice)
