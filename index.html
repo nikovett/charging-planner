@@ -625,7 +625,6 @@ function renderProfile(plan) {
     }
     warningStr = ' <span style="color:var(--warn)">' + shortWarn + '</span>';
   }
-  }
   var heroL = '<div class="hero">'
     + '<div class="hero-label" id="avg-label-' + plan.profile + '">avg scheduled</div>'
     + '<div class="hero-price ' + (noSlots ? '' : 'accent') + '" id="avg-price-' + plan.profile + '">' + (noSlots ? '\u2014' : plan.avg_price_cents_kwh.toFixed(2) + ' <span class="hero-unit">c\u20ac/kWh</span>') + '</div>'
