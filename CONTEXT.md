@@ -298,6 +298,12 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 
 Append-only. One entry per release. For full context see the session log below.
 
+## v1.7.2 — 2026-04-21
+- **Bug fix:** Elering price unit was EUR/MWh not c€/kWh — divided by 1000 instead of 100. Affected all Elering fallback runs since Session 18; undetected because near-zero test prices were ambiguous.
+- **Bug fix:** Warning level audit — `required_minutes rounded up` demoted to INFO; `build_ocpp_charging_profile: no windows` demoted to DEBUG; redundant `_select_slots` partial warning removed.
+- **Console:** Avg price and savings lines suppressed when no slots scheduled. `vs market` and `vs optimal` switched from percentage to absolute c€/kWh diff; unified sign convention (negative = cheaper). `-0.00` display artifact fixed.
+- **Dashboard:** Blocked plan card shows `no charging scheduled`, `—` hero price, hidden `vs market`, reworded warning. Mode 3 histogram capped at last real price bar for non-FI areas. `vs market`/`vs optimal` absolute diff with consistent sign convention.
+
 ## v1.7.1 — 2026-04-13
 - **Bug fix:** `_select_with_min_block` violated `min_slot_minutes` when a price ceiling excluded slots on both sides of a cheap slot, creating a time gap the DP did not see. Fixed by precomputing `max_run[i]` and capping block length at it in both the fill and reconstruction passes.
 - **Bug fix:** Easee weekly plan day-of-week off by one — `isoweekday() % 7` mapped Sunday→0 (Monday). Fixed to `(isoweekday() - 1) % 7`.
