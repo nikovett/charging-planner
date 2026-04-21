@@ -316,10 +316,10 @@ function fmtDuration(minutes) {
 }
 
 function savings(plan) {
-  if (!plan.price_stats || !plan.avg_price_cents_kwh) return null;
-  var avg = plan.price_stats.avg_cents_kwh;
-  if (!avg) return null;
-  return (avg - plan.avg_price_cents_kwh) / avg * 100;
+  if (!plan.price_stats || plan.avg_price_cents_kwh === undefined) return null;
+  var marketAvg = plan.price_stats.avg_cents_kwh;
+  if (marketAvg === undefined) return null;
+  return marketAvg - plan.avg_price_cents_kwh;  // c€/kWh, positive = cheaper than market
 }
 
 // ── Histogram ─────────────────────────────────────────────────────────────
@@ -570,19 +570,22 @@ function unhoverBar(profileName) {
 
 function renderProfile(plan) {
   var sav      = savings(plan);
-  var savStr   = sav !== null ? (sav > 0 ? "\u2193" + sav.toFixed(0) + "%" : "\u2191" + Math.abs(sav).toFixed(0) + "%") : "\u2014";
-  var savClass = sav !== null && sav > 0 ? "good" : "warn";
+  var savStr   = sav !== null ? (function(v){var s=v.toFixed(2);return s==="-0.00"?"0.00":s;})(sav) + ' c\u20ac/kWh' : '\u2014';
+  var savClass = sav !== null && sav > 0 ? 'good' : 'warn';
   var incomplete = plan.total_minutes < plan.required_minutes;
 
-  // vs optimal — only show when there are suboptimal charging slots in the plan
+  // vs optimal — only show when there are suboptimal charging slots in the plan.
+  // Always shown as absolute difference (avg - avg_optimal) in c€/kWh.
+  // Percentage form breaks when avg_optimal is negative or near zero.
   var optStr = "";
   var hasSuboptimal = (plan.price_slots || []).some(function(s) { return s.charging && !s.optimal && !s.forecasted; });
-  if (hasSuboptimal && plan.avg_optimal_price_cents_kwh && plan.avg_price_cents_kwh) {
-    var optDiff = ((plan.avg_price_cents_kwh - plan.avg_optimal_price_cents_kwh) / plan.avg_optimal_price_cents_kwh * 100);
-    var optSign = optDiff > 0 ? "\u2191" : "\u2193";
-    var optClass = optDiff > 0 ? "warn" : "good";
-    optStr = '<div class="hero-det">vs optimal <span class="' + optClass + '">' + optSign + Math.abs(optDiff).toFixed(0) + '%</span></div>';
+  if (hasSuboptimal && plan.avg_optimal_price_cents_kwh !== undefined && plan.avg_price_cents_kwh !== undefined) {
+    var optDiff = plan.avg_price_cents_kwh - plan.avg_optimal_price_cents_kwh;
+    var optSign = optDiff > 0 ? '+' : '';
+    var optClass = optDiff > 0 ? 'warn' : 'good';
+    optStr = '<div class="hero-det">vs optimal <span class="' + optClass + '">' + optSign + optDiff.toFixed(2) + ' c\u20ac/kWh</span></div>';
   }
+
 
   // Charge period
   var chargePeriod = plan.date;
@@ -627,7 +630,7 @@ function renderProfile(plan) {
   }
   var heroL = '<div class="hero">'
     + '<div class="hero-label" id="avg-label-' + plan.profile + '">avg scheduled</div>'
-    + '<div class="hero-price ' + (noSlots ? '' : 'accent') + '" id="avg-price-' + plan.profile + '">' + (noSlots ? '\u2014' : plan.avg_price_cents_kwh.toFixed(2) + ' <span class="hero-unit">c\u20ac/kWh</span>') + '</div>'
+    + '<div class="hero-price ' + (noSlots ? '' : 'accent') + '" id="avg-price-' + plan.profile + '">' + (noSlots ? '\u2014' : (function(v){var s=v.toFixed(2);return s==="-0.00"?"0.00":s;})(plan.avg_price_cents_kwh) + ' <span class="hero-unit">c\u20ac/kWh</span>') + '</div>'
     + '<div class="hero-details">'
     + '<div class="hero-det">scheduled <strong>' + fmtDuration(plan.total_minutes) + (incomplete ? '&thinsp;of&thinsp;' + fmtDuration(plan.required_minutes) : '') + '</strong>' + retainedStr + warningStr + '</div>'
     + (!noSlots ? '<div class="hero-det">vs market <span class="' + savClass + '">' + savStr + '</span></div>' : '')

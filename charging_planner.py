@@ -2053,7 +2053,7 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
 
     indent = "             "  # aligns under the value after "  Scheduled  " and "  Avg price  "
     retained = plan.get("retained_minutes", 0)
-    savings_pct = (1 - avg / ps["avg_cents_kwh"]) * 100 if ps["avg_cents_kwh"] else 0
+    savings_abs = ps["avg_cents_kwh"] - avg if ps["avg_cents_kwh"] else 0
 
     # Scheduled line
     sched_str = _fmt_dur(tot)
@@ -2070,15 +2070,20 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     # Avg price line — suppress entirely when no slots were scheduled.
     # avg=0.0 on an empty plan produces nonsense savings percentages.
     if tot > 0:
-        print(f"  {_bold('Avg price')}  {_yellow(f'{avg:.2f} c€/kWh')}")
-        if savings_pct > 5:
-            print(f"{indent}{_green(f'↓ {savings_pct:.0f}% below market avg')}")
+        print(f"  {_bold('Avg price')}  {_yellow(_fmt_price(avg) + ' c€/kWh')}")
+        if savings_abs > 0.005:
+            sign = "-" if savings_abs > 0 else "+"
+            print(f"{indent}{_green(f'vs market {sign}{abs(savings_abs):.2f} c€/kWh')}")
+        elif savings_abs < -0.005:
+            print(f"{indent}{_yellow(f'vs market +{abs(savings_abs):.2f} c€/kWh')}")
         else:
             print(f"{indent}{_dim('≈ near market avg')}")
         avg_opt = plan.get("avg_optimal_price_cents_kwh")
-        if avg_opt and avg_opt > 0 and avg > avg_opt:
-            opt_pct = (avg / avg_opt - 1) * 100
-            print(f"{indent}{_dim(f'vs optimal ↑{opt_pct:.0f}%')}")
+        if avg_opt is not None and avg is not None and hasattr(avg, '__float__'):
+            opt_diff = avg - avg_opt
+            if opt_diff > 0.005:  # only show when meaningfully more expensive than optimal
+                sign = "+" if opt_diff > 0 else ""
+                print(f"{indent}{_dim(f'vs optimal {sign}{opt_diff:.2f} c€/kWh')}")
 
     print()
 
@@ -2129,7 +2134,7 @@ def _gha_summary_profile(plan: dict, market_avg: float) -> list[str]:
     profile = plan.get("profile", "default")
     req, tot, avg = plan["required_minutes"], plan["total_minutes"], plan["avg_price_cents_kwh"]
     wins = plan["windows"]
-    savings_pct = (1 - avg / market_avg) * 100 if market_avg else 0
+    savings_abs = market_avg - avg if market_avg else 0
 
     incomplete = " ⚠️ **charge plan not possible**" if tot < req else ""
     md = [
@@ -2137,7 +2142,7 @@ def _gha_summary_profile(plan: dict, market_avg: float) -> list[str]:
         f"| **Required** | {_gha_fmt_hours(req)} |",
         f"| **Scheduled** | {_gha_fmt_hours(tot)}{incomplete} |",
         f"| **Avg price** | **{avg:.2f} c€/kWh**"
-        f" ({abs(savings_pct):.0f}% {'below' if savings_pct >= 0 else 'above'} market avg) |",
+        f" ({'−' if savings_abs >= 0 else '+'}{abs(savings_abs):.2f} c€/kWh vs market avg) |",
         "",
     ]
     if wins:

@@ -36,7 +36,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
   Scheduled  4h
   Avg price  0.62 c€/kWh
-             ↓ 62% below market avg
+             vs market -1.02 c€/kWh
 
   Charging windows (1):
     03:00–07:00  ████████████████  0.62 c€/kWh  4h00m
@@ -225,7 +225,7 @@ Features:
   - **Charging approaching (midpoint within 11h, not yet reached)**: the window centers on the charging slot midpoint ±12h, so the charging slots become the centerpiece
   - **During and after charging (now past midpoint)**: the window centers on now ±12h and tracks forward in real time, revealing forecast bars to the right as time progresses
 - Four bar states: solid teal (scheduled + optimal), teal diagonal stripe (scheduled but not optimal), teal outline (optimal but not scheduled/missed), grey diagonal stripe (forecast display-only). Legend items are conditional — each only appears when that bar type is visible
-- Hero shows `scheduled 3h (1h30m carried over)` when hours from the previous plan are carried forward, and `vs optimal ↑N%` when the window constraint forces suboptimal slots
+- Hero shows `scheduled 3h (1h30m carried over)` when hours from the previous plan are carried forward, and `vs optimal +0.18 c€/kWh` when the window constraint forces suboptimal slots
 - "vs market" percentage shows how much cheaper the scheduled avg price is compared to the average across all slots available to the scheduler at run time
 - Hover/touch any bar to see its price and time in the hero area; hovering a charging bar shows the window avg price
 - Price axis on the right side of the histogram with 3–5 evenly-spaced tick marks. The scale is based on the maximum price visible in the current histogram window (not the global day max), so off-screen spikes don't compress the visible bars. Zero is always shown at the bottom.
@@ -345,7 +345,7 @@ Slots with `"forecasted": true` are display-only — they extend the histogram b
 
 Every time a plan is built, the planner runs two background comparisons.
 
-**Optimal comparison** — finds the cheapest possible slots ignoring the preferred window constraint, with all other settings (price ceiling, `continuous_only`, `min_slot_minutes`, `min_gap_minutes`) kept intact. The result is `avg_optimal_price_cents_kwh` and the `optimal` flag on each slot in `price_slots`. The dashboard shows `vs optimal ↑N%` when the window constraint forced suboptimal choices — if scheduled and optimal are the same, the window contained the cheapest slots anyway and no comparison is shown.
+**Optimal comparison** — finds the cheapest possible slots ignoring the preferred window constraint, with all other settings (price ceiling, `continuous_only`, `min_slot_minutes`, `min_gap_minutes`) kept intact. The result is `avg_optimal_price_cents_kwh` and the `optimal` flag on each slot in `price_slots`. The dashboard shows `vs optimal +X.XX c€/kWh` when the window constraint forced suboptimal choices — if scheduled and optimal are the same, the window contained the cheapest slots anyway and no comparison is shown.
 
 **Price ceiling comparison** — only runs when the plan is partial (`total_minutes < required_minutes`) and `max_price_cents_kwh` is set. Runs the same plan without the price ceiling. If it succeeds, the ceiling was the limiting factor → `plan_warning: "partial plan — price limit X c€/kWh"` (or `"partial plan — price limit avg (X c€/kWh)"` when using the dynamic ceiling). If it also fails, the shortage is due to insufficient slots in the window → `plan_warning: "partial plan — required hours exceed boundaries"`.
 
