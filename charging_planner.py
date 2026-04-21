@@ -756,13 +756,15 @@ def fetch_elering_prices(area: str = "FI") -> list[Slot]:
     if not entries:
         raise PricesNotYetAvailable(f"Elering returned no price data for area '{area}'.")
 
-    # Prices are in c€/kWh — divide by 100 to get €/kWh ex-VAT.
+    # Prices are in EUR/MWh — divide by 1000 to get EUR/kWh ex-VAT.
+    # (Session 18 incorrectly noted c€/kWh based on near-zero test prices;
+    # confirmed EUR/MWh from API documentation and live data on 2026-04-21.)
     # Data is native 15-min resolution, no expansion needed.
     slots: list[Slot] = []
     for entry in entries:
         slot_start    = datetime.fromtimestamp(entry["timestamp"], tz=timezone.utc)
         slot_end      = slot_start + timedelta(minutes=15)
-        price_eur_kwh = entry["price"] / 100.0
+        price_eur_kwh = entry["price"] / 1000.0  # EUR/MWh → EUR/kWh
         slots.append(Slot(
             start=slot_start,
             end=slot_end,

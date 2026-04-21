@@ -561,7 +561,7 @@ Both use EUR/kWh ex-VAT sourced from ENTSO-E, consistent with every other source
 
 **Bug fix: avg price ceiling used wrong slot pool**: `max_price_cents_kwh: "avg"` was computing the average from `display_prices` (all real slots including historical ones from yesterday evening), which skewed the ceiling artificially low. Fixed to use future slots only — same pool the planner selects from — consistent with `price_stats.avg` shown on the dashboard.
 
-**Elering API format confirmed from live data**: prices are in c€/kWh (not EUR/MWh as initially assumed), native 15-min resolution. Response always returns all 4 areas (fi, ee, lv, lt) regardless of `fields` param — correct area selected by key from `data[elering_field]`.
+**Elering API format**: ~~prices are in c€/kWh~~ — this was incorrect. Confirmed in Session 25 that the API returns EUR/MWh (same as ENTSO-E), not c€/kWh. The error was undetected in Session 18 because test prices happened to be near-zero, making EUR/MWh values indistinguishable from c€/kWh. Fixed in Session 25: `entry["price"] / 1000.0`. Native 15-min resolution. Response always returns all 4 areas (fi, ee, lv, lt) regardless of `fields` param — correct area selected by key from `data[elering_field]`.
 
 **schedule.yml**: cron updated to `00 11 * * *` (11:00 UTC = 14:00 EEST summer / 13:00 EET winter, GHA delay lands ~14:30 EEST).
 
@@ -680,3 +680,9 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 **Dashboard blocked plan display** (`index.html`): improved rendering when `total_minutes == 0`. Header now shows `no charging scheduled` in muted grey instead of `charges <date>`. Hero price shows `—` with no accent colour instead of `0.00` in green. `vs market` line hidden entirely. Warning rewritten from `(price limit avg (5.45 c€/kWh))` to `due to price limit (5.45 c€/kWh)` — strips the `avg` keyword and redundant outer parens, shows the resolved numeric value which is more useful than the config keyword. Regex extracts the price from both static and dynamic avg ceiling warning strings. `-0.00` min price display fix also applied to dashboard hero (same string-check approach as console). JS syntax checking (`node --check` on extracted script block) added as mandatory step before presenting `index.html`.
 
 **First live observation of fully-blocked plan** on 2026-04-20: topup profile blocked by `avg` ceiling (5.45 c€/kWh), all window slots above ceiling. Dashboard rendering revealed the display issues fixed this session.
+
+### Session 26 — 2026-04-21
+
+**Bug fix: Elering price unit incorrect** (`charging_planner.py`): `fetch_elering_prices` was dividing by 100 assuming c€/kWh, but the API returns EUR/MWh. Fixed to divide by 1000 (EUR/MWh → EUR/kWh), consistent with ENTSO-E. The error was introduced in Session 18 where live confirmation happened on a near-zero price day, making EUR/MWh values (0.3, 0.5 EUR/MWh) indistinguishable from c€/kWh — the bug only became visible on 2026-04-21 when ENTSO-E was down and Elering was the fallback, with historical slots at 38–92 EUR/MWh clearly wrong as c€/kWh. Session 18 note in CONTEXT corrected with strikethrough. Reference section was already correct (original assumption in Session 17 was EUR/MWh). Confirmed via external API documentation: Elering returns EUR/MWh ex-VAT.
+
+**ENTSO-E 503 on two consecutive days** (Apr 20–21): fallback chain working correctly — Elering used both days. Apr 20: plan produced but prices were wrong (bug above, not yet fixed). Apr 21: bug fixed, prices correct.
