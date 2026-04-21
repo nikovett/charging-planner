@@ -2053,7 +2053,7 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
 
     indent = "             "  # aligns under the value after "  Scheduled  " and "  Avg price  "
     retained = plan.get("retained_minutes", 0)
-    savings_abs = ps["avg_cents_kwh"] - avg if ps["avg_cents_kwh"] else 0
+    savings_abs = avg - ps["avg_cents_kwh"] if ps["avg_cents_kwh"] else 0
 
     # Scheduled line
     sched_str = _fmt_dur(tot)
@@ -2071,11 +2071,10 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     # avg=0.0 on an empty plan produces nonsense savings percentages.
     if tot > 0:
         print(f"  {_bold('Avg price')}  {_yellow(_fmt_price(avg) + ' c€/kWh')}")
-        if savings_abs > 0.005:
-            sign = "-" if savings_abs > 0 else "+"
-            print(f"{indent}{_green(f'vs market {sign}{abs(savings_abs):.2f} c€/kWh')}")
-        elif savings_abs < -0.005:
-            print(f"{indent}{_yellow(f'vs market +{abs(savings_abs):.2f} c€/kWh')}")
+        if savings_abs < -0.005:
+            print(f"{indent}{_green(f'vs market {savings_abs:.2f} c\u20ac/kWh')}")
+        elif savings_abs > 0.005:
+            print(f"{indent}{_yellow(f'vs market +{savings_abs:.2f} c\u20ac/kWh')}")
         else:
             print(f"{indent}{_dim('≈ near market avg')}")
         avg_opt = plan.get("avg_optimal_price_cents_kwh")
@@ -2134,7 +2133,7 @@ def _gha_summary_profile(plan: dict, market_avg: float) -> list[str]:
     profile = plan.get("profile", "default")
     req, tot, avg = plan["required_minutes"], plan["total_minutes"], plan["avg_price_cents_kwh"]
     wins = plan["windows"]
-    savings_abs = market_avg - avg if market_avg else 0
+    savings_abs = avg - market_avg if market_avg else 0
 
     incomplete = " ⚠️ **charge plan not possible**" if tot < req else ""
     md = [
@@ -2142,7 +2141,7 @@ def _gha_summary_profile(plan: dict, market_avg: float) -> list[str]:
         f"| **Required** | {_gha_fmt_hours(req)} |",
         f"| **Scheduled** | {_gha_fmt_hours(tot)}{incomplete} |",
         f"| **Avg price** | **{avg:.2f} c€/kWh**"
-        f" ({'−' if savings_abs >= 0 else '+'}{abs(savings_abs):.2f} c€/kWh vs market avg) |",
+        f" ({'+' if savings_abs > 0 else '−' if savings_abs < 0 else ''}{abs(savings_abs):.2f} c€/kWh vs market avg) |",
         "",
     ]
     if wins:

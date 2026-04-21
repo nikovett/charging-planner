@@ -319,7 +319,7 @@ function savings(plan) {
   if (!plan.price_stats || plan.avg_price_cents_kwh === undefined) return null;
   var marketAvg = plan.price_stats.avg_cents_kwh;
   if (marketAvg === undefined) return null;
-  return marketAvg - plan.avg_price_cents_kwh;  // c€/kWh, positive = cheaper than market
+  return plan.avg_price_cents_kwh - marketAvg;  // c€/kWh, positive = more expensive than market, negative = cheaper
 }
 
 // ── Histogram ─────────────────────────────────────────────────────────────
@@ -571,7 +571,7 @@ function unhoverBar(profileName) {
 function renderProfile(plan) {
   var sav      = savings(plan);
   var savStr   = sav !== null ? (function(v){var s=v.toFixed(2);return s==="-0.00"?"0.00":s;})(sav) + ' c\u20ac/kWh' : '\u2014';
-  var savClass = sav !== null && sav > 0 ? 'good' : 'warn';
+  var savClass = sav !== null && sav < 0 ? 'good' : 'warn';
   var incomplete = plan.total_minutes < plan.required_minutes;
 
   // vs optimal — only show when there are suboptimal charging slots in the plan.
