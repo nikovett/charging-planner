@@ -692,3 +692,9 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 **`vs market` and `vs optimal` switched to absolute c€/kWh difference** (both `charging_planner.py` and `index.html`): percentage form breaks when prices are near zero or negative — `↓102%` and `↓105%` appeared on today's near-zero price day. Absolute difference is unambiguous at any price level: `vs market -3.05 c€/kWh`, `vs optimal +0.28 c€/kWh`. Positive = you pay more than the reference, negative = you pay less. Both metrics now use the same unit for consistency. `savings()` function in dashboard rewritten to return absolute diff. GHA summary updated to match. Console threshold of 0.005 c€/kWh suppresses noise-level `vs optimal` display. `-0.00` avg price artifact fixed in console hero using existing `_fmt_price` helper.
 
 **First observation of near-zero/negative price day**: Elering bug fix (Session 26) confirmed correct — today's topup scheduled at -0.007 c€/kWh avg, overnight at 0.009 c€/kWh, both from genuinely near-zero Finnish day-ahead prices on 2026-04-21/22.
+
+### Session 28 — 2026-04-21
+
+**Sign convention fix for `vs market`** (`charging_planner.py`, `index.html`): `vs market` was using `market - scheduled` (positive = cheaper) while `vs optimal` uses `scheduled - optimal` (positive = more expensive). Unified both to `scheduled - reference` so negative always means cheaper and positive always means more expensive, consistent with `vs optimal`. Green for negative, amber for positive in both console and dashboard. GHA summary updated to match. Duplicate line removed from console output path.
+
+**`README.md` updated**: console example block and two prose references updated from percentage format (`↓ 62% below market avg`, `vs optimal ↑N%`) to absolute format (`vs market -1.02 c€/kWh`, `vs optimal +X.XX c€/kWh`).
