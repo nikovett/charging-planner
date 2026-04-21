@@ -674,3 +674,9 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 **Dashboard fix** (`index.html`): same `-0.00` fix applied to the min price in the right hero panel using the same string-check approach.
 
 **First live run with `avg` ceiling producing a fully-blocked plan**: topup profile on 2026-04-20 had all window slots above the dynamic avg ceiling (5.45 c€/kWh), spillover also found nothing below ceiling. Plan correctly produced `total_minutes: 0` with `plan_warning: "partial plan — price limit avg (5.45 c€/kWh)"`. Overnight ran normally at 7.00 c€/kWh (no ceiling).
+
+### Session 25 — 2026-04-21
+
+**Dashboard blocked plan display** (`index.html`): improved rendering when `total_minutes == 0`. Header now shows `no charging scheduled` in muted grey instead of `charges <date>`. Hero price shows `—` with no accent colour instead of `0.00` in green. `vs market` line hidden entirely. Warning rewritten from `(price limit avg (5.45 c€/kWh))` to `due to price limit (5.45 c€/kWh)` — strips the `avg` keyword and redundant outer parens, shows the resolved numeric value which is more useful than the config keyword. Regex extracts the price from both static and dynamic avg ceiling warning strings. `-0.00` min price display fix also applied to dashboard hero (same string-check approach as console). JS syntax checking (`node --check` on extracted script block) added as mandatory step before presenting `index.html`.
+
+**First live observation of fully-blocked plan** on 2026-04-20: topup profile blocked by `avg` ceiling (5.45 c€/kWh), all window slots above ceiling. Dashboard rendering revealed the display issues fixed this session.
