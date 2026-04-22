@@ -2072,9 +2072,9 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     if tot > 0:
         print(f"  {_bold('Avg price')}  {_yellow(_fmt_price(avg) + ' c€/kWh')}")
         if savings_abs < -0.005:
-            print(f"{indent}{_green(f'vs market {savings_abs:.2f} c\u20ac/kWh')}")
+            print(f"{indent}{_green(f'vs market {savings_abs:.2f} c€/kWh')}")
         elif savings_abs > 0.005:
-            print(f"{indent}{_yellow(f'vs market +{savings_abs:.2f} c\u20ac/kWh')}")
+            print(f"{indent}{_yellow(f'vs market +{savings_abs:.2f} c€/kWh')}")
         else:
             print(f"{indent}{_dim('≈ near market avg')}")
         avg_opt = plan.get("avg_optimal_price_cents_kwh")
