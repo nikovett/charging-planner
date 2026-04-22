@@ -204,8 +204,8 @@ Weekly plan uses UTC times in `"HH:MMZ"` format. All other days cleared — the 
 
 ## Test suite
 
-244 tests, 3 skipped:
-- `test/test_charging_planner.py` (177) — price parsing, window selection, DP algorithm, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration)
+296 tests, 3 skipped:
+- `test/test_charging_planner.py` (229) — price parsing, window selection, DP algorithm, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
 - `test/test_deliver_chargeamps.py` (41) — Charge Amps delivery handler (login/cache, connector mode, period fields, period timing)
 - `test/test_deliver_easee.py` (26) — Easee delivery handler (day-of-week mapping, weekly/basic plan payloads, deliver routing)
 
@@ -297,6 +297,10 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 # Changelog
 
 Append-only. One entry per release. For full context see the session log below.
+
+## v1.7.4 — 2026-04-22
+- **Fix:** Python 3.11+ compatibility — invalid Unicode escape sequences inside f-strings in `print_plan_summary` replaced with literal `€`. Python 3.11 raises `DeprecationWarning` for invalid escapes; future versions raise `SyntaxError`.
+- **Tests:** 52 new tests covering all previously untested console output — `print_plan_summary`, `_window_bar`, `_gha_fmt_hours`, `_gha_summary_header`, `_gha_summary_profile`, `write_gha_summary`.
 
 ## v1.7.3 — 2026-04-22
 - **Dashboard:** Negative price bars now render downward from zero baseline in distinct colour; faint zero baseline line shown when negative prices present. Zero price: no bar (correct — zero is zero).
@@ -720,3 +724,13 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 **`-0.00` fix in window pills** (`index.html`): same string-check guard applied to `w.avg_price_cents_kwh.toFixed(2)` in pill rendering.
 
 **v1.7.3 released.**
+
+### Session 30 — 2026-04-22
+
+**Python 3.11+ compatibility fix** (`charging_planner.py`): two invalid Unicode escape sequences inside f-strings in `print_plan_summary` replaced with literal `€`. Python 3.11 raises `DeprecationWarning` for such escapes; future versions will raise `SyntaxError`. Output was correct at runtime but the source was non-compliant.
+
+**Console output test suite** (52 new tests, `test/test_charging_planner.py`): six new test classes covering all previously untested output functions. `TestPrintPlanSummary` — header fields, market price stats, charging window count and times, savings vs market (below/above/near), optional fields (retained minutes, plan warning, vs-optimal line), ANSI colour suppression and enabling. `TestWindowBar` — bar block length including minimum-2 floor, duration formatting for hours+minutes/exact hours/minutes-only, price label. `TestGhaFmtHours` — all three duration format branches. `TestGhaSummaryHeader` — all markdown fields including UTC offset. `TestGhaSummaryProfile` — profile name, required hours, window table, no-windows message, incomplete-plan warning, savings amount. `TestWriteGhaSummary` — no-op when env var absent, file write, skipped-profiles section, graceful `OSError` handling. Standard library imports `contextlib`, `io`, `os`, `tempfile` added.
+
+**229 tests** in `test_charging_planner.py`, 3 skipped. **296 total** (229 + 41 + 26).
+
+**v1.7.4 released.**
