@@ -405,16 +405,28 @@ function renderTimeline(plan, profileName, nowPrice) {
 
   var slotW = (15/totalMins*100).toFixed(4);
 
+  // Zero baseline position: where price=0 sits in the 90% bar range.
+  // Positive prices grow upward from this point; negative prices grow downward.
+  var _effMin3 = Math.min(minP, 0);
+  var zeroTopPct = (100 - (0 - _effMin3) / (niceCeil - _effMin3) * 90).toFixed(1);
+
   var barsHTML = '<div style="position:absolute;left:0;right:0;top:0;bottom:0;">'
     + visible.map(function(s) {
         var lm      = new Date(s.start_utc).getTime()/60000 + utcOffset;
         var leftPct = ((lm-rangeStart)/totalMins*100).toFixed(4);
-        var effectiveMin = Math.min(minP, 0);
-        // Scale bars from 0 to niceCeil so ticks are proportional
-        var h = (s.price_cents_kwh <= 0 && !s.forecasted)
-          ? "0"
-          : (Math.max(0, s.price_cents_kwh - effectiveMin) / (niceCeil - effectiveMin) * 90).toFixed(1);
         var isNow   = nowSlot && s.start_utc === nowSlot.start_utc;
+        var _effMin = Math.min(minP, 0);
+        // Positive prices: bar grows upward from zero baseline
+        // Negative prices: bar grows downward from zero baseline
+        var h, topPct, bottomPct;
+        if (s.price_cents_kwh > 0) {
+          h = (s.price_cents_kwh / (niceCeil - _effMin) * 90).toFixed(1);
+        } else if (s.price_cents_kwh < 0 && !s.forecasted) {
+          h = (Math.abs(s.price_cents_kwh) / (niceCeil - _effMin) * 90).toFixed(1);
+        } else {
+          h = "0";
+        }
+        var isNegative = s.price_cents_kwh < 0 && !s.forecasted;
         var bg, extra = "";
 
         if (s.charging && s.optimal) {
@@ -427,6 +439,8 @@ function renderTimeline(plan, profileName, nowPrice) {
           bg = "repeating-linear-gradient(45deg,var(--dim) 0px,var(--dim) 2px,var(--bg3) 2px,var(--bg3) 4px)";
         } else if (isNow) {
           bg = "var(--border2)";
+        } else if (isNegative) {
+          bg = "var(--accent2)";
         } else {
           bg = "var(--dim)";
         }
@@ -443,8 +457,13 @@ function renderTimeline(plan, profileName, nowPrice) {
           ? 'onmouseenter="hoverBar(this,\'' + profileName + '\')" onmouseleave="unhoverBar(\'' + profileName + '\')" ontouchstart="barTouch(event,this,\'' + profileName + '\')"'
           : '';
 
+        // Negative price bars: anchor top at zero baseline, grow downward
+        // Positive price bars: anchor bottom at 0, grow upward (default)
+        var posStyle = isNegative
+          ? 'top:' + zeroTopPct + '%;bottom:auto;border-radius:0 0 2px 2px;'
+          : 'bottom:0;border-radius:2px 2px 0 0;';
         return '<div data-price="' + s.price_cents_kwh.toFixed(2) + '" data-time="' + hoverTime + '" data-charging="' + (s.charging ? '1' : '0') + '" ' + onEnter
-             + ' style="position:absolute;left:' + leftPct + '%;bottom:0;width:calc(' + slotW + '% - 1px);height:' + h + '%;background:' + bg + ';' + extra + 'box-sizing:border-box;border-radius:2px 2px 0 0">' + playhead + '</div>';
+             + ' style="position:absolute;left:' + leftPct + '%;' + posStyle + 'width:calc(' + slotW + '% - 1px);height:' + h + '%;background:' + bg + ';' + extra + 'box-sizing:border-box">' + playhead + '</div>';
       }).join("")
     + '</div>';
 
@@ -452,6 +471,7 @@ function renderTimeline(plan, profileName, nowPrice) {
   var _effMin = Math.min(minP, 0);
   var avgH = (100 - (plan.price_stats.avg_cents_kwh - _effMin) / (niceCeil - _effMin) * 90).toFixed(1);
   var avgLine = '<div style="position:absolute;left:0;right:0;top:' + avgH + '%;border-top:1px dashed var(--border2);pointer-events:none"></div>'
+             + (minP < 0 ? '<div style="position:absolute;left:0;right:0;top:' + zeroTopPct + '%;border-top:1px solid var(--dim);pointer-events:none;opacity:0.5"></div>' : '');
               + '<div style="position:absolute;right:4px;bottom:calc(' + (100-parseFloat(avgH)) + '% + 2px);font-family:var(--mono);font-size:7px;color:var(--dim)">avg</div>';
 
   // Price ticks — vertical axis to the right of the histogram
