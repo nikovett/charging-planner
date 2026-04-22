@@ -298,6 +298,13 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 
 Append-only. One entry per release. For full context see the session log below.
 
+## v1.7.3 — 2026-04-22
+- **Dashboard:** Negative price bars now render downward from zero baseline in distinct colour; faint zero baseline line shown when negative prices present. Zero price: no bar (correct — zero is zero).
+- **Dashboard:** `vs market` sign convention fixed — `scheduled − market` so negative = cheaper (green), positive = more expensive (amber). Consistent with `vs optimal`.
+- **Dashboard:** `-0.00` fix in window pill avg prices.
+- **Console/GHA:** `vs market` sign convention fix and GHA summary updated to match.
+- **README:** Console example and prose updated to absolute c€/kWh format.
+
 ## v1.7.2 — 2026-04-21
 - **Bug fix:** Elering price unit was EUR/MWh not c€/kWh — divided by 1000 instead of 100. Affected all Elering fallback runs since Session 18; undetected because near-zero test prices were ambiguous.
 - **Bug fix:** Warning level audit — `required_minutes rounded up` demoted to INFO; `build_ocpp_charging_profile: no windows` demoted to DEBUG; redundant `_select_slots` partial warning removed.
@@ -704,3 +711,12 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 **Sign convention fix for `vs market`** (`charging_planner.py`, `index.html`): `vs market` was using `market - scheduled` (positive = cheaper) while `vs optimal` uses `scheduled - optimal` (positive = more expensive). Unified both to `scheduled - reference` so negative always means cheaper and positive always means more expensive, consistent with `vs optimal`. Green for negative, amber for positive in both console and dashboard. GHA summary updated to match. Duplicate line removed from console output path.
 
 **`README.md` updated**: console example block and two prose references updated from percentage format (`↓ 62% below market avg`, `vs optimal ↑N%`) to absolute format (`vs market -1.02 c€/kWh`, `vs optimal +X.XX c€/kWh`).
+### Session 29 — 2026-04-22
+
+**`vs market` sign convention fix** (`charging_planner.py`, `index.html`): `vs market` was using `market - scheduled` (positive = cheaper) while `vs optimal` uses `scheduled - optimal` (positive = more expensive). Unified to `scheduled - reference` throughout — negative = cheaper (green), positive = more expensive (amber). GHA summary updated. Duplicate line removed from console output path.
+
+**Negative price bar rendering** (`index.html`): negative price slots now render as downward-growing bars from the zero baseline in `--accent2` colour. Zero price slots render as no bar (zero is zero — not special-cased). Faint zero baseline line added when `minP < 0`. Positive bars anchor at `bottom: zeroBottomPct%` — identical to `bottom: 0` on all-positive days, correct on mixed days. `topPct`/`bottomPct` unused variables removed.
+
+**`-0.00` fix in window pills** (`index.html`): same string-check guard applied to `w.avg_price_cents_kwh.toFixed(2)` in pill rendering.
+
+**v1.7.3 released.**
