@@ -652,7 +652,7 @@ function renderProfile(plan) {
   // Window pills
   var pillsHTML = plan.windows.map(function(w) {
     return '<div class="window-pill">' + w.start + '\u2013' + w.end
-         + ' <span class="w-price">' + w.avg_price_cents_kwh.toFixed(2) + ' c\u20ac/kWh</span>'
+         + ' <span class="w-price">' + (function(v){var s=v.toFixed(2);return s==="-0.00"?"0.00":s;})(w.avg_price_cents_kwh) + ' c\u20ac/kWh</span>'
          + ' <span class="w-dur">' + fmtDuration(w.duration_minutes) + '</span></div>';
   }).join("");
 
