@@ -457,11 +457,13 @@ function renderTimeline(plan, profileName, nowPrice) {
           ? 'onmouseenter="hoverBar(this,\'' + profileName + '\')" onmouseleave="unhoverBar(\'' + profileName + '\')" ontouchstart="barTouch(event,this,\'' + profileName + '\')"'
           : '';
 
-        // Negative price bars: anchor top at zero baseline, grow downward
-        // Positive price bars: anchor bottom at 0, grow upward (default)
+        // Both bar types anchor at the zero baseline line.
+        // Positive: bottom sits at zero line, bar grows upward.
+        // Negative: top sits at zero line, bar grows downward.
+        var zeroBottomPct = (100 - parseFloat(zeroTopPct)).toFixed(1);
         var posStyle = isNegative
           ? 'top:' + zeroTopPct + '%;bottom:auto;border-radius:0 0 2px 2px;'
-          : 'bottom:0;border-radius:2px 2px 0 0;';
+          : 'bottom:' + zeroBottomPct + '%;border-radius:2px 2px 0 0;';
         return '<div data-price="' + s.price_cents_kwh.toFixed(2) + '" data-time="' + hoverTime + '" data-charging="' + (s.charging ? '1' : '0') + '" ' + onEnter
              + ' style="position:absolute;left:' + leftPct + '%;' + posStyle + 'width:calc(' + slotW + '% - 1px);height:' + h + '%;background:' + bg + ';' + extra + 'box-sizing:border-box">' + playhead + '</div>';
       }).join("")
