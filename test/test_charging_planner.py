@@ -15,8 +15,12 @@ Organised by feature area:
  10. End-to-end pipeline — cmd_plan with synthetic prices
 """
 
+import contextlib
+import io
 import json
+import os
 import sys
+import tempfile
 import unittest
 import unittest.mock as mock
 import zipfile
@@ -40,13 +44,19 @@ from charging_planner import (
     _resolve_schedule_window,
     _resolve_window_utc,
     _select_spillover,
+    _gha_fmt_hours,
+    _gha_summary_header,
+    _gha_summary_profile,
+    _window_bar,
     build_ocpp_charging_profile,
     build_plan,
     filter_preferred_window,
     merge_continuous_slots,
     parse_configs,
+    print_plan_summary,
     select_charging_windows,
     validate_plan_config,
+    write_gha_summary,
 )
 
 UTC      = timezone.utc
@@ -2351,6 +2361,322 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self._run("EE", entsoe=short_prices)
         mock_fc.assert_not_called()
+
+
+# ===========================================================================
+# 11. Console output — print_plan_summary, _window_bar, GHA summary
+# ===========================================================================
+
+def _make_output_plan(*, windows=None, total_minutes=240, avg_price=0.62,
+                      retained=0, warning=None, avg_optimal=None) -> dict:
+    """Minimal plan dict for print_plan_summary / GHA summary tests."""
+    if windows is None:
+        windows = [
+            {"start": "03:00", "end": "07:00",
+             "duration_minutes": 240, "avg_price_cents_kwh": 0.62},
+        ]
+    return {
+        "date": "2026-03-15",
+        "area": "FI",
+        "price_source": "ENTSO-E",
+        "timezone": "Europe/Helsinki",
+        "utc_offset_hours": 2,
+        "price_stats": {
+            "min_cents_kwh": 0.47,
+            "max_cents_kwh": 4.27,
+            "avg_cents_kwh": 1.64,
+        },
+        "required_minutes": 240,
+        "total_minutes": total_minutes,
+        "avg_price_cents_kwh": avg_price,
+        "avg_optimal_price_cents_kwh": avg_optimal,
+        "windows": windows,
+        "retained_minutes": retained,
+        "plan_warning": warning,
+        "profile": "test",
+    }
+
+
+def _capture_stdout(fn, *args, **kwargs) -> str:
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        fn(*args, **kwargs)
+    return buf.getvalue()
+
+
+class TestPrintPlanSummary(unittest.TestCase):
+
+    def setUp(self):
+        patcher = mock.patch("charging_planner._USE_COLOR", False)
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
+    def _out(self, **kw) -> str:
+        return _capture_stdout(print_plan_summary, _make_output_plan(**kw), [])
+
+    # ── Header content ────────────────────────────────────────────────────────
+
+    def test_header_contains_date(self):
+        self.assertIn("2026-03-15", self._out())
+
+    def test_header_contains_area(self):
+        self.assertIn("FI", self._out())
+
+    def test_header_contains_price_source(self):
+        self.assertIn("ENTSO-E", self._out())
+
+    def test_header_contains_timezone(self):
+        self.assertIn("Europe/Helsinki", self._out())
+
+    def test_market_prices_line_shows_min_avg_max(self):
+        out = self._out()
+        self.assertIn("Market prices", out)
+        self.assertIn("0.47", out)
+        self.assertIn("1.64", out)
+        self.assertIn("4.27", out)
+
+    def test_scheduled_line_present(self):
+        self.assertIn("Scheduled", self._out())
+
+    # ── Avg price line ────────────────────────────────────────────────────────
+
+    def test_avg_price_line_present_when_slots_scheduled(self):
+        self.assertIn("Avg price", self._out())
+
+    def test_avg_price_line_absent_when_no_slots_scheduled(self):
+        out = self._out(total_minutes=0, windows=[])
+        self.assertNotIn("Avg price", out)
+
+    # ── Charging windows ──────────────────────────────────────────────────────
+
+    def test_window_times_shown(self):
+        out = self._out()
+        self.assertIn("03:00", out)
+        self.assertIn("07:00", out)
+
+    def test_no_windows_message_when_empty(self):
+        out = self._out(windows=[], total_minutes=0)
+        self.assertIn("No windows selected", out)
+
+    def test_window_count_in_header(self):
+        self.assertIn("Charging windows (1)", self._out())
+
+    def test_multiple_windows_count(self):
+        plan = _make_output_plan(windows=[
+            {"start": "01:00", "end": "03:00", "duration_minutes": 120, "avg_price_cents_kwh": 0.50},
+            {"start": "05:00", "end": "06:00", "duration_minutes": 60,  "avg_price_cents_kwh": 0.60},
+        ], total_minutes=180)
+        out = _capture_stdout(print_plan_summary, plan, [])
+        self.assertIn("Charging windows (2)", out)
+
+    # ── Savings vs market ─────────────────────────────────────────────────────
+
+    def test_savings_below_market_avg_shown(self):
+        # avg (0.62) < market avg (1.64) → savings = -1.02
+        out = self._out()
+        self.assertIn("vs market", out)
+        self.assertIn("-1.02", out)
+
+    def test_savings_above_market_avg_shown(self):
+        # avg (2.00) > market avg (1.64) → "+0.36"
+        plan = _make_output_plan(avg_price=2.00)
+        out = _capture_stdout(print_plan_summary, plan, [])
+        self.assertIn("vs market +", out)
+
+    def test_near_market_avg_shown(self):
+        plan = _make_output_plan(avg_price=1.64)
+        out = _capture_stdout(print_plan_summary, plan, [])
+        self.assertIn("near market avg", out)
+
+    # ── Optional fields ───────────────────────────────────────────────────────
+
+    def test_retained_minutes_shown_when_nonzero(self):
+        self.assertIn("carried over", self._out(retained=60))
+
+    def test_retained_minutes_absent_when_zero(self):
+        self.assertNotIn("carried over", self._out(retained=0))
+
+    def test_plan_warning_shown(self):
+        out = self._out(warning="partial plan — grid limited")
+        self.assertIn("grid limited", out)
+
+    def test_plan_warning_absent_when_none(self):
+        self.assertNotIn("partial plan", self._out())
+
+    def test_vs_optimal_shown_when_more_expensive(self):
+        # avg (0.62) - optimal (0.40) = 0.22 > 0.005 → line shown
+        out = self._out(avg_price=0.62, avg_optimal=0.40)
+        self.assertIn("vs optimal", out)
+
+    def test_vs_optimal_not_shown_when_near_optimal(self):
+        self.assertNotIn("vs optimal", self._out(avg_price=0.62, avg_optimal=0.62))
+
+    # ── Color control ─────────────────────────────────────────────────────────
+
+    def test_no_ansi_codes_when_color_disabled(self):
+        self.assertNotIn("\033[", self._out())
+
+    def test_ansi_codes_present_when_color_enabled(self):
+        with mock.patch("charging_planner._USE_COLOR", True):
+            out = self._out()
+        self.assertIn("\033[", out)
+
+
+class TestWindowBar(unittest.TestCase):
+
+    def setUp(self):
+        patcher = mock.patch("charging_planner._USE_COLOR", False)
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
+    def _bar(self, start="03:00", end="07:00", dur=120,
+             avg=1.0, mn=0.5, mx=4.0) -> str:
+        return _window_bar(start, end, dur, avg, mn, mx)
+
+    def test_returns_string(self):
+        self.assertIsInstance(self._bar(), str)
+
+    def test_contains_start_and_end_times(self):
+        result = self._bar(start="02:00", end="06:00")
+        self.assertIn("02:00", result)
+        self.assertIn("06:00", result)
+
+    def test_contains_avg_price(self):
+        self.assertIn("1.23", self._bar(avg=1.23))
+
+    def test_bar_length_for_60_minutes(self):
+        # bar_len = max(2, 60 // 15) = 4 → four block chars
+        self.assertIn("████", self._bar(dur=60))
+
+    def test_bar_length_minimum_two_blocks(self):
+        # dur=1 → bar_len = max(2, 0) = 2
+        result = self._bar(dur=1)
+        self.assertIn("██", result)
+
+    def test_duration_hours_and_minutes(self):
+        # 90 min → "1h30m"
+        self.assertIn("1h30m", self._bar(dur=90))
+
+    def test_duration_exact_hours(self):
+        # 120 min → "2h00m"
+        self.assertIn("2h00m", self._bar(dur=120))
+
+    def test_duration_minutes_only(self):
+        # 30 min → "30m" (h=0)
+        self.assertIn("30m", self._bar(dur=30))
+
+
+class TestGhaFmtHours(unittest.TestCase):
+
+    def test_exact_hours(self):
+        self.assertEqual(_gha_fmt_hours(120), "2h")
+
+    def test_hours_and_minutes(self):
+        self.assertEqual(_gha_fmt_hours(90), "1h30min")
+
+    def test_minutes_only(self):
+        self.assertEqual(_gha_fmt_hours(45), "0h45min")
+
+
+class TestGhaSummaryHeader(unittest.TestCase):
+
+    def _header(self, **kw) -> str:
+        return "\n".join(_gha_summary_header(_make_output_plan(**kw)))
+
+    def test_returns_list(self):
+        self.assertIsInstance(_gha_summary_header(_make_output_plan()), list)
+
+    def test_contains_date(self):
+        self.assertIn("2026-03-15", self._header())
+
+    def test_contains_area(self):
+        self.assertIn("FI", self._header())
+
+    def test_contains_price_source(self):
+        self.assertIn("ENTSO-E", self._header())
+
+    def test_contains_timezone(self):
+        self.assertIn("Europe/Helsinki", self._header())
+
+    def test_contains_utc_offset(self):
+        self.assertIn("UTC+2", self._header())
+
+    def test_contains_market_price_range(self):
+        lines = self._header()
+        self.assertIn("0.47", lines)
+        self.assertIn("4.27", lines)
+        self.assertIn("1.64", lines)
+
+
+class TestGhaSummaryProfile(unittest.TestCase):
+
+    def _profile(self, **kw) -> str:
+        return "\n".join(_gha_summary_profile(_make_output_plan(**kw), market_avg=1.64))
+
+    def test_returns_list(self):
+        self.assertIsInstance(_gha_summary_profile(_make_output_plan(), market_avg=1.64), list)
+
+    def test_contains_profile_name(self):
+        self.assertIn("test", self._profile())
+
+    def test_contains_required_hours(self):
+        # required_minutes=240 → "4h"
+        self.assertIn("4h", self._profile())
+
+    def test_window_table_shows_start_and_end(self):
+        lines = self._profile()
+        self.assertIn("03:00", lines)
+        self.assertIn("07:00", lines)
+
+    def test_no_windows_message_when_empty(self):
+        self.assertIn("No windows selected", self._profile(windows=[], total_minutes=0))
+
+    def test_incomplete_plan_warning_shown(self):
+        # total_minutes (60) < required_minutes (240)
+        self.assertIn("charge plan not possible", self._profile(total_minutes=60))
+
+    def test_savings_amount_shown(self):
+        # avg 0.62, market 1.64 → |diff| = 1.02
+        self.assertIn("1.02", self._profile(avg_price=0.62))
+
+
+class TestWriteGhaSummary(unittest.TestCase):
+
+    def test_no_op_when_env_var_not_set(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            write_gha_summary([_make_output_plan()])  # must not raise
+
+    def test_writes_markdown_to_file(self):
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".md", delete=False) as f:
+            path = f.name
+        try:
+            with mock.patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": path}):
+                write_gha_summary([_make_output_plan()])
+            with open(path, encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("2026-03-15", content)
+            self.assertIn("ENTSO-E", content)
+        finally:
+            os.unlink(path)
+
+    def test_includes_skipped_profiles_section(self):
+        with tempfile.NamedTemporaryFile(mode="r", suffix=".md", delete=False) as f:
+            path = f.name
+        try:
+            with mock.patch.dict("os.environ", {"GITHUB_STEP_SUMMARY": path}):
+                write_gha_summary([_make_output_plan()], skipped=["night", "peak"])
+            with open(path, encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("night", content)
+            self.assertIn("peak", content)
+            self.assertIn("Skipped profiles", content)
+        finally:
+            os.unlink(path)
+
+    def test_handles_oserror_gracefully(self):
+        with mock.patch.dict("os.environ",
+                             {"GITHUB_STEP_SUMMARY": "/nonexistent/path/summary.md"}):
+            write_gha_summary([_make_output_plan()])  # must not raise
 
 
 if __name__ == "__main__":
