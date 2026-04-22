@@ -418,7 +418,8 @@ function renderTimeline(plan, profileName, nowPrice) {
         var _effMin = Math.min(minP, 0);
         // Positive prices: bar grows upward from zero baseline
         // Negative prices: bar grows downward from zero baseline
-        var h, topPct, bottomPct;
+        // Zero and forecasted: no bar
+        var h;
         if (s.price_cents_kwh > 0) {
           h = (s.price_cents_kwh / (niceCeil - _effMin) * 90).toFixed(1);
         } else if (s.price_cents_kwh < 0 && !s.forecasted) {
