@@ -36,6 +36,30 @@ Fetches day-ahead electricity prices and schedules EV charging for the cheapest 
 
 ---
 
+## End-session skill
+
+The `end-session` Claude skill automates the session wrap-up workflow. Trigger with `/end-session` or phrases like "let's wrap up", "commit the files", "update CONTEXT".
+
+**Phases:**
+1. Run all three test suites — stop if any fail
+2. Identify what changed (inferred from conversation or asked)
+3. Update `CONTEXT.md` — Reference in place, Changelog prepend, Session log append
+4. Update `README_tests.md` if test suite changed
+5. Copy modified files to `/mnt/user-data/outputs/` (working copy → correct repo paths)
+6. Write `commit.sh` — ready-to-run shell script with `git add` and commit message
+7. Present all outputs
+
+**Key rules encoded in the skill:**
+- Release notes go to GitHub Releases only — never create `RELEASE_NOTES_*.md` in the repo
+- `charging_planner_current.py` → outputs as `charging_planner.py`
+- `test_charging_planner_current.py` → outputs as `test/test_charging_planner.py`
+- JS syntax check (`node --check` on extracted script block) mandatory before presenting `index.html`
+- Test counts verified by running tests, never from memory
+
+**Install:** drop `end-session.skill` into Claude's skills directory via Settings → Skills.
+
+---
+
 ## Architecture
 
 ```
