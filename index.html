@@ -502,8 +502,8 @@ function renderTimeline(plan, profileName, nowPrice) {
   // Each tick has a short horizontal line touching the histogram edge and a label
   var _effMin2 = Math.min(minP, 0);
   var priceTicksHTML = '';
-  // Zero tick at the bottom
-  priceTicksHTML += '<div style="position:absolute;top:calc(100% - 5px);left:0;display:flex;align-items:center;gap:2px;white-space:nowrap">'
+  // Zero tick: positioned at zeroTopPct (moves up when negative prices exist)
+  priceTicksHTML += '<div style="position:absolute;top:calc(' + zeroTopPct + '% - 5px);left:0;display:flex;align-items:center;gap:2px;white-space:nowrap">'
     + '<div style="width:4px;height:1px;background:var(--dim);flex-shrink:0"></div>'
     + '<span style="font-family:var(--mono);font-size:7px;color:var(--dim);line-height:1">0</span>'
     + '</div>';
