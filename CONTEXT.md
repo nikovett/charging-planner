@@ -322,6 +322,12 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 
 Append-only. One entry per release. For full context see the session log below.
 
+## v1.7.5 — 2026-05-24
+- **Dashboard:** `niceCeil` computed from visible window max with floor of 6 c€/kWh — off-screen spikes don't compress bars; cheap days stay visually flat.
+- **Dashboard:** Negative price bars grow downward from zero baseline; faint zero baseline line when negative prices present.
+- **Dashboard:** Zero tick (`0` label on price axis) now tracks zero baseline position — moves up on negative-price days.
+- **Dashboard:** Negative bar colour fix — colour now encodes slot role (charging/optimal/unselected) same as positive bars, not price direction.
+
 ## v1.7.4 — 2026-04-22
 - **Fix:** Python 3.11+ compatibility — invalid Unicode escape sequences inside f-strings in `print_plan_summary` replaced with literal `€`. Python 3.11 raises `DeprecationWarning` for invalid escapes; future versions raise `SyntaxError`.
 - **Tests:** 52 new tests covering all previously untested console output — `print_plan_summary`, `_window_bar`, `_gha_fmt_hours`, `_gha_summary_header`, `_gha_summary_profile`, `write_gha_summary`.
