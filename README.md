@@ -224,11 +224,11 @@ Features:
   - **Charging far away (>11h)**: the window starts 1 hour before now and extends to cover all charging slots — an overview of where in the future the charging slots are
   - **Charging approaching (midpoint within 11h, not yet reached)**: the window centers on the charging slot midpoint ±12h, so the charging slots become the centerpiece
   - **During and after charging (now past midpoint)**: the window centers on now ±12h and tracks forward in real time, revealing forecast bars to the right as time progresses
-- Four bar states: solid teal (scheduled + optimal), teal diagonal stripe (scheduled but not optimal), teal outline (optimal but not scheduled/missed), grey diagonal stripe (forecast display-only). Legend items are conditional — each only appears when that bar type is visible
+- Four bar states: solid teal (scheduled + optimal), teal diagonal stripe (scheduled but not optimal), teal outline (optimal but not scheduled/missed), grey diagonal stripe (forecast display-only). Legend items are conditional — each only appears when that bar type is visible. Negative-price slots render as downward-growing bars from the zero baseline using the same colour coding; a faint zero baseline line appears when negative prices are present
 - Hero shows `scheduled 3h (1h30m carried over)` when hours from the previous plan are carried forward, and `vs optimal +0.18 c€/kWh` when the window constraint forces suboptimal slots
-- "vs market" percentage shows how much cheaper the scheduled avg price is compared to the average across all slots available to the scheduler at run time
+- "vs market" shows the absolute difference between scheduled avg price and market avg (e.g. `-1.02 c€/kWh` = cheaper than market, `+0.50 c€/kWh` = more expensive). Same sign convention as "vs optimal"
 - Hover/touch any bar to see its price and time in the hero area; hovering a charging bar shows the window avg price
-- Price axis on the right side of the histogram with 3–5 evenly-spaced tick marks. The scale is based on the maximum price visible in the current histogram window (not the global day max), so off-screen spikes don't compress the visible bars. Zero is always shown at the bottom.
+- Price axis on the right side of the histogram with 3–5 evenly-spaced tick marks. The scale is based on the maximum price visible in the current histogram window with a floor of 6 c€/kWh — off-screen spikes don't compress visible bars, and cheap days stay visually flat relative to a normal day rather than zooming in. The zero tick tracks the zero baseline and moves up when negative prices are present
 - Responsive time tick intervals — 2h on wide screens, 4h on narrow (phone portrait)
 - Forecast warning banner when `price_source` is `"forecast"`
 - Staleness warning when plan is more than a day old
@@ -333,7 +333,7 @@ One `plan-{name}.json` file is written per profile:
 
 `window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems.
 
-`price_slots` contains all available price slots from the previous evening onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `continuous_only` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. `price_stats` (min/avg/max) reflects the full range of slots available to the scheduler at run time — the basis for the "vs market" percentage shown on the dashboard.
+`price_slots` contains all available price slots from the previous evening onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `continuous_only` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. `price_stats` (min/avg/max) reflects the full range of slots available to the scheduler at run time — the basis for the "vs market" difference shown on the dashboard.
 
 `retained_minutes` is the number of future charging minutes carried forward from the previous plan. When non-zero, `total_minutes` will exceed `required_minutes` by the same amount.
 
