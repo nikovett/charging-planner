@@ -71,7 +71,7 @@ class TestAnchorCalculation(unittest.TestCase):
             ["2026-03-15T20:00:00+00:00"],  # Sunday 22:00 Helsinki
             ["2026-03-16T04:30:00+00:00"],  # Monday 06:30 Helsinki
         )
-        _, anchor_iso = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        _, anchor_iso, _, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         self.assertEqual(anchor_iso, "2026-03-08T22:00:00Z")
 
     def test_anchor_is_same_week_when_window_starts_monday(self):
@@ -81,7 +81,7 @@ class TestAnchorCalculation(unittest.TestCase):
             ["2026-03-16T00:00:00+00:00"],
             ["2026-03-16T06:00:00+00:00"],
         )
-        _, anchor_iso = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        _, anchor_iso, _, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         self.assertEqual(anchor_iso, "2026-03-15T22:00:00Z")
 
     def test_anchor_utc_timezone(self):
@@ -91,7 +91,7 @@ class TestAnchorCalculation(unittest.TestCase):
             ["2026-03-16T02:00:00+00:00"],
             ["2026-03-16T06:00:00+00:00"],
         )
-        _, anchor_iso = _ca_build_periods(plan, "UTC", 16.0)
+        _, anchor_iso, _, _ = _ca_build_periods(plan, "UTC", 16.0)
         self.assertEqual(anchor_iso, "2026-03-16T00:00:00Z")
 
     def test_anchor_dst_transition_week(self):
@@ -101,7 +101,7 @@ class TestAnchorCalculation(unittest.TestCase):
             ["2026-03-29T20:00:00+00:00"],  # Sunday 22:00 EET (before transition)
             ["2026-03-30T01:30:00+00:00"],  # Monday 04:30 EEST
         )
-        _, anchor_iso = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        _, anchor_iso, _, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         self.assertEqual(anchor_iso, "2026-03-22T22:00:00Z")
 
 
@@ -118,7 +118,8 @@ class TestPeriodTiming(unittest.TestCase):
 
     def _periods_and_anchor(self, start_iso, end_iso, tz="Europe/Helsinki", rate=16.0):
         plan = make_plan([start_iso], [end_iso])
-        return _ca_build_periods(plan, tz, rate)
+        periods, anchor, _, _ = _ca_build_periods(plan, tz, rate)
+        return periods, anchor
 
     def test_single_window_from_offset(self):
         # Window: Sunday 2026-03-15 22:00–06:30 Helsinki (EET = UTC+2)
@@ -133,20 +134,28 @@ class TestPeriodTiming(unittest.TestCase):
         self.assertEqual(periods[0]["from"], 6 * 24 * 3600 + 22 * 3600)
 
     def test_single_window_to_offset(self):
-        # End: 2026-03-16 04:30 UTC = Monday 06:30 Helsinki
-        # Offset from anchor (2026-03-08 22:00 UTC):
-        # 7 days + 6.5 hours = (7*24 + 6.5) * 3600 = 627000 s
-        periods, _ = self._periods_and_anchor(
-            "2026-03-15T20:00:00+00:00",
-            "2026-03-16T04:30:00+00:00",
+        # End: 2026-03-16 04:30 UTC = Monday 06:30 Helsinki — crosses midnight, splits.
+        # periods_this has to=604800 (capped at Monday 00:00).
+        # periods_next has the remainder starting at from=0.
+        periods_this, _, periods_next, _ = _ca_build_periods(
+            make_plan(["2026-03-15T20:00:00+00:00"], ["2026-03-16T04:30:00+00:00"]),
+            "Europe/Helsinki", 16.0,
         )
-        self.assertEqual(periods[0]["to"], 7 * 24 * 3600 + int(6.5 * 3600))
+        self.assertEqual(len(periods_this), 1)
+        self.assertEqual(periods_this[0]["to"], 604800)
+        self.assertEqual(len(periods_next), 1)
+        self.assertEqual(periods_next[0]["from"], 0)
+        # Total span = 604800 - 597600 + next_to = 7200 + next_to
+        # next_to = 628200 - 604800 = 23400
+        self.assertEqual(periods_next[0]["to"], 628200 - 604800)
 
     def test_window_duration_preserved(self):
-        # A 4h window should produce a period whose (to - from) == 4h in seconds
+        # Use a Saturday window ending before Monday midnight — no split, duration exact.
+        # 2026-03-14 is Saturday. Window: Sat 22:00–02:00 Helsinki (does not reach Mon)
+        # Sat 22:00 Helsinki = 20:00 UTC; Sun 02:00 Helsinki = 00:00 UTC (4h)
         periods, _ = self._periods_and_anchor(
-            "2026-03-15T20:00:00+00:00",
-            "2026-03-16T00:00:00+00:00",  # 4h window
+            "2026-03-14T20:00:00+00:00",
+            "2026-03-15T00:00:00+00:00",  # 4h window, ends Sun 02:00 Helsinki
         )
         duration = periods[0]["to"] - periods[0]["from"]
         self.assertEqual(duration, 4 * 3600)
@@ -162,7 +171,7 @@ class TestPeriodTiming(unittest.TestCase):
             ["2026-03-16T23:00:00+00:00", "2026-03-17T01:00:00+00:00"],
             ["2026-03-17T00:30:00+00:00", "2026-03-17T01:30:00+00:00"],
         )
-        periods, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        periods, _, _, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         self.assertEqual(len(periods), 2)
         self.assertEqual(periods[0]["from"], 1 * 24 * 3600 + 1 * 3600)
         self.assertEqual(periods[0]["to"],   1 * 24 * 3600 + int(2.5 * 3600))
@@ -182,7 +191,7 @@ class TestPeriodTiming(unittest.TestCase):
             ["2026-03-16T23:00:00+00:00", "2026-03-17T01:00:00+00:00"],
             ["2026-03-17T00:30:00+00:00", "2026-03-17T01:30:00+00:00"],
         )
-        periods, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        periods, _, _, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         froms = [p["from"] for p in periods]
         self.assertEqual(froms, sorted(froms))
 
@@ -199,7 +208,7 @@ class TestPeriodFields(unittest.TestCase):
             ["2026-03-15T20:00:00+00:00"],
             ["2026-03-16T04:30:00+00:00"],
         )
-        periods, _ = _ca_build_periods(plan, "Europe/Helsinki", rate)
+        periods, _, _, _ = _ca_build_periods(plan, "Europe/Helsinki", rate)
         return periods
 
     def test_period_has_required_fields(self):
@@ -227,7 +236,7 @@ class TestPeriodFields(unittest.TestCase):
             ["2026-03-16T23:00:00+00:00", "2026-03-17T01:00:00+00:00"],
             ["2026-03-17T00:30:00+00:00", "2026-03-17T01:30:00+00:00"],
         )
-        periods, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        periods, _, _, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         ids = [p["id"] for p in periods]
         self.assertEqual(len(ids), len(set(ids)))
 
@@ -245,7 +254,7 @@ class TestBuildPeriodsEdgeCases(unittest.TestCase):
 
     def test_empty_plan_returns_empty(self):
         plan = make_plan([], [])
-        periods, anchor = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        periods, anchor, _, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         self.assertEqual(periods, [])
         self.assertEqual(anchor, "")
 
@@ -254,7 +263,7 @@ class TestBuildPeriodsEdgeCases(unittest.TestCase):
             ["2026-03-15T20:00:00+00:00"],
             ["2026-03-16T04:30:00+00:00"],
         )
-        _, anchor_iso = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        _, anchor_iso, _, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         # Must be parseable and end with Z
         self.assertTrue(anchor_iso.endswith("Z"))
         datetime.strptime(anchor_iso, "%Y-%m-%dT%H:%M:%SZ")  # must not raise
@@ -265,9 +274,64 @@ class TestBuildPeriodsEdgeCases(unittest.TestCase):
             ["2026-03-15T20:00:00Z"],
             ["2026-03-16T04:30:00Z"],
         )
-        periods, anchor = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        periods, anchor, _, _ = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         self.assertEqual(len(periods), 1)
         self.assertGreater(periods[0]["to"], periods[0]["from"])
+
+    def test_window_crossing_monday_midnight_splits(self):
+        # Sun 23:45 → Mon 01:00 Helsinki — crosses Monday midnight, to would be 608400s
+        # 2026-08-16 is a Sunday; anchor = Mon 2026-08-10 21:00 UTC
+        plan = make_plan(
+            ["2026-08-16T20:45:00+00:00"],  # Sun 23:45 Helsinki
+            ["2026-08-16T22:00:00+00:00"],  # Mon 01:00 Helsinki
+        )
+        periods_this, anchor_iso, periods_next, anchor_next_iso = _ca_build_periods(
+            plan, "Europe/Helsinki", 16.0
+        )
+        # periods_this: capped at 604800
+        self.assertEqual(len(periods_this), 1)
+        self.assertEqual(periods_this[0]["to"], 604800)
+        self.assertLessEqual(periods_this[0]["to"], 604800)
+        # periods_next: starts at 0
+        self.assertEqual(len(periods_next), 1)
+        self.assertEqual(periods_next[0]["from"], 0)
+        self.assertGreater(periods_next[0]["to"], 0)
+        self.assertLessEqual(periods_next[0]["to"], 604800)
+        # anchor_next is one week after anchor
+        anchor_dt      = datetime.strptime(anchor_iso,      "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        anchor_next_dt = datetime.strptime(anchor_next_iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        self.assertEqual((anchor_next_dt - anchor_dt).days, 7)
+
+    def test_window_fully_on_monday_fits_in_this_week(self):
+        # Mon 01:00–02:00 Helsinki: anchor = that same Monday 00:00 Helsinki.
+        # from and to are small positive values well within 604800s.
+        # 2026-08-17 00:00 Helsinki = 2026-08-16 21:00 UTC (anchor)
+        # Mon 01:00 Helsinki = 2026-08-16 22:00 UTC → from = 3600s
+        # Mon 02:00 Helsinki = 2026-08-16 23:00 UTC → to   = 7200s
+        plan = make_plan(
+            ["2026-08-16T22:00:00+00:00"],  # Mon 01:00 Helsinki
+            ["2026-08-16T23:00:00+00:00"],  # Mon 02:00 Helsinki
+        )
+        periods_this, _, periods_next, _ = _ca_build_periods(
+            plan, "Europe/Helsinki", 16.0
+        )
+        self.assertEqual(len(periods_this), 1)
+        self.assertEqual(len(periods_next), 0)
+        self.assertEqual(periods_this[0]["from"], 3600)
+        self.assertEqual(periods_this[0]["to"], 7200)
+
+    def test_normal_window_no_split(self):
+        # Normal Tuesday window — should produce no periods_next
+        plan = make_plan(
+            ["2026-08-11T18:00:00+00:00"],
+            ["2026-08-12T03:30:00+00:00"],
+        )
+        periods_this, _, periods_next, _ = _ca_build_periods(
+            plan, "Europe/Helsinki", 16.0
+        )
+        self.assertGreater(len(periods_this), 0)
+        self.assertEqual(len(periods_next), 0)
+        self.assertLessEqual(periods_this[0]["to"], 604800)
 
 
 # ===========================================================================
