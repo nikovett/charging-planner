@@ -183,31 +183,28 @@ def _ca_build_periods(
     plan: dict,
     tz_name: str,
     max_charging_rate: float,
-) -> tuple[list[dict], str, list[dict], str]:
+) -> tuple[list[dict], str]:
     """Convert plan windows → Charge Amps schedulePeriods.
 
     max_charging_rate is in amps — the Charge Amps API uses current (A),
     not power (W).
 
     Charge Amps enforces a 604800s (7-day) limit on period 'to' values,
-    measured from Monday 00:00 local (the anchor). Windows that end on Monday
+    measured from Monday 00:00 local (the anchor). Windows ending on Monday
     (e.g. an overnight slot Sun 23:45 → Mon 01:00) exceed this limit.
 
-    To handle this, periods are split at the 604800s boundary:
-      periods_this  — periods with to <= 604800, anchor = this week's Monday
-      periods_next  — periods shifted by -604800, anchor = next week's Monday
-
-    Windows crossing midnight are split: first half capped at to=604800,
-    second half starts at from=0 in next week's schedule.
-    periods_next is empty on most days and the caller skips the second PUT.
-
-    Returns (periods_this, anchor_iso, periods_next, anchor_next_iso).
+    Fix: any period where 'to' exceeds 604800 is wrapped to the start of the
+    week — from=0, to=(original_to - 604800). The slot lands at Monday 00:00
+    on the charger, which is correct since the original window was Monday anyway.
+    A window crossing midnight is split: the part before midnight is discarded
+    (it falls outside the 7-day limit) and only the Monday portion is kept,
+    starting at from=0.
     """
     window_starts = plan.get("window_starts_utc", [])
     window_ends   = plan.get("window_ends_utc", [])
 
     if not window_starts:
-        return [], "", [], ""
+        return [], ""
 
     zone        = ZoneInfo(tz_name)
     first_start = datetime.fromisoformat(window_starts[0].replace("Z", "+00:00"))
@@ -217,37 +214,46 @@ def _ca_build_periods(
     monday_local = (local_start - timedelta(days=days_since_monday)).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
-    anchor_utc      = monday_local.astimezone(timezone.utc)
-    anchor_next_utc = anchor_utc + timedelta(weeks=1)
-    anchor_iso      = anchor_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    anchor_next_iso = anchor_next_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    anchor_utc = monday_local.astimezone(timezone.utc)
+    anchor_iso = anchor_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     LIMIT = 604800
-    periods_this: list[dict] = []
-    periods_next: list[dict] = []
-
+    periods = []
     for start_iso, end_iso in zip(window_starts, window_ends):
         start_utc = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
         end_utc   = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
         fr = int((start_utc - anchor_utc).total_seconds())
         to = int((end_utc   - anchor_utc).total_seconds())
 
-        if to <= LIMIT:
-            # Entirely within this week
-            periods_this.append({"id": _nanoid(), "from": fr, "to": to, "maxCurrent": max_charging_rate})
-        elif fr >= LIMIT:
-            # Entirely in next week — shift offsets back by one week
-            periods_next.append({"id": _nanoid(), "from": fr - LIMIT, "to": to - LIMIT, "maxCurrent": max_charging_rate})
-        else:
-            # Crosses Monday midnight — split at the 604800s boundary
-            log.info("Window %s–%s crosses Monday midnight — splitting at week boundary.", start_iso, end_iso)
-            periods_this.append({"id": _nanoid(), "from": fr,   "to": LIMIT,      "maxCurrent": max_charging_rate})
-            periods_next.append({"id": _nanoid(), "from": 0,    "to": to - LIMIT, "maxCurrent": max_charging_rate})
+        if to > LIMIT:
+            if fr >= LIMIT:
+                # Window falls entirely on Monday — preserve the offset within Monday
+                log.info(
+                    "Window %s–%s falls on Monday — shifting offsets by -604800s.",
+                    start_iso, end_iso,
+                )
+                fr = fr - LIMIT
+                to = to - LIMIT
+            else:
+                # Window crosses Sunday→Monday midnight — the Monday portion
+                # starts at 0 (Monday 00:00 on the charger).
+                log.info(
+                    "Window %s–%s crosses Monday midnight — wrapping to Monday 00:00 "
+                    "(from=0, to=%ds).",
+                    start_iso, end_iso, to - LIMIT,
+                )
+                fr = 0
+                to = to - LIMIT
 
-    log.debug("Anchor: %s  periods_this: %s", anchor_iso, periods_this)
-    if periods_next:
-        log.debug("Anchor next: %s  periods_next: %s", anchor_next_iso, periods_next)
-    return periods_this, anchor_iso, periods_next, anchor_next_iso
+        periods.append({
+            "id":         _nanoid(),
+            "from":       fr,
+            "to":         to,
+            "maxCurrent": max_charging_rate,
+        })
+
+    log.debug("Anchor: %s  periods: %s", anchor_iso, periods)
+    return periods, anchor_iso
 
 
 def _ca_get_chargepoint(
@@ -373,46 +379,35 @@ def _ca_put_schedule(
     token: str,
     entitlements_token: str,
 ) -> None:
-    periods_this, anchor_iso, periods_next, anchor_next_iso = _ca_build_periods(
-        plan, tz_name, max_charging_rate
-    )
-    if not periods_this and not periods_next:
+    periods, anchor_iso = _ca_build_periods(plan, tz_name, max_charging_rate)
+    if not periods:
         raise ValueError("No valid periods generated from plan windows.")
 
-    def _put(periods: list, anchor: str) -> None:
-        """PUT a single week's schedule to Charge Amps."""
-        # A blind PUT replaces the entire weekly schedule with only the new windows —
-        # any periods added manually via the web interface will be cleared.
-        # For automated daily delivery this is intentional: we own the full schedule
-        # state and avoid conflicts with stale or overlapping manual entries.
-        payload = {
-            "scheduleId":      0,
-            "chargePointId":   charge_point_id,
-            "connectorId":     connector_id,
-            "validFrom":       None,
-            "validTo":         None,
-            "defaultCurrent":  0.0,
-            "schedulePeriods": periods,
-            "isActive":        True,
-            "isSynced":        False,
-            "timeZone":        tz_name,
-            "startOfSchedule": anchor,
-        }
-        _ca_request(
-            "/smartChargingSchedules",
-            method="PUT",
-            body=payload,
-            token=token,
-            entitlements_token=entitlements_token,
-        )
+    # A blind PUT replaces the entire weekly schedule with only the new windows —
+    # any periods added manually via the web interface will be cleared.
+    # For automated daily delivery this is intentional: we own the full schedule
+    # state and avoid conflicts with stale or overlapping manual entries.
+    payload = {
+        "scheduleId":      0,
+        "chargePointId":   charge_point_id,
+        "connectorId":     connector_id,
+        "validFrom":       None,
+        "validTo":         None,
+        "defaultCurrent":  0.0,
+        "schedulePeriods": periods,
+        "isActive":        True,
+        "isSynced":        False,
+        "timeZone":        tz_name,
+        "startOfSchedule": anchor_iso,
+    }
 
-    if periods_this:
-        _put(periods_this, anchor_iso)
-
-    if periods_next:
-        log.info("Delivering %d period(s) spanning into next week (anchor %s).",
-                 len(periods_next), anchor_next_iso)
-        _put(periods_next, anchor_next_iso)
+    _ca_request(
+        "/smartChargingSchedules",
+        method="PUT",
+        body=payload,
+        token=token,
+        entitlements_token=entitlements_token,
+    )
 
     windows_str = ", ".join(
         f"{s}–{e}"
