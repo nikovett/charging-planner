@@ -1,6 +1,6 @@
 # Test Suite
 
-244 tests across three files. Run from the repo root:
+246 tests across three files. Run from the repo root:
 
 ```
 python -m unittest test_charging_planner test_deliver_chargeamps test_deliver_easee -v
@@ -10,7 +10,7 @@ Or individually:
 
 ```
 python -m unittest test_charging_planner -v       # 177 tests, 3 skipped
-python -m unittest test_deliver_chargeamps -v     # 41 tests
+python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
 ```
 
@@ -84,7 +84,7 @@ Integration tests against a bundled ENTSO-E XML fixture: prices in plausible ran
 
 ---
 
-## test_deliver_chargeamps.py (41 tests)
+## test_deliver_chargeamps.py (46 tests)
 
 ### TestAnchorCalculation (4)
 Monday anchor is always Monday 00:00 local time expressed as UTC, across timezones and DST transitions.
@@ -95,8 +95,8 @@ Monday anchor is always Monday 00:00 local time expressed as UTC, across timezon
 ### TestPeriodFields (6)
 Each period has required fields, correct types, unique IDs, `from` < `to`.
 
-### TestBuildPeriodsEdgeCases (3)
-Empty plan, `Z`-suffix timestamps, consecutive windows.
+### TestBuildPeriodsEdgeCases (6)
+Empty plan, `Z`-suffix timestamps, consecutive windows. Regression tests for the 604800s weekly limit: `test_window_crossing_monday_midnight_wraps_to_zero` (Sun 23:45→Mon 01:00 wraps to from=0), `test_monday_window_from_any_any_plan` (Monday-only slot preserves offset), `test_normal_window_no_wrapping` (normal weekday unchanged).
 
 ### TestDeliver (14)
 Full `deliver()` call: returns true on success, false on login/GET/PUT failure, passes connector ID and rate from config, reads charger state, mode restore behaviour (was On/Off/Schedule), override not activated when not charging.

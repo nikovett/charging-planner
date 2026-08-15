@@ -764,3 +764,7 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 **229 tests** in `test_charging_planner.py`, 3 skipped. **296 total** (229 + 41 + 26).
 
 **v1.7.4 released.**
+
+### Session 32 — 2026-08-15
+
+**Bug fix: Charge Amps 604800s weekly limit exceeded for Sunday overnight plans** (`delivery/deliver_chargeamps.py`): the `smartChargingSchedules` API rejects any period where `to > 604800s` (7 days from the Monday anchor). This was triggered when a plan's last window ended on Monday local time — e.g. an overnight slot Sun 23:45 → Mon 01:00, or any:any Saturday plans with Monday slots. Fix: for periods where `to > 604800`, two cases: (1) window crosses Sunday→Monday midnight — `from=0, to=original_to-604800`, landing the Monday portion at the week start; (2) window falls entirely on Monday — both `from` and `to` shifted by -604800, preserving the correct offset within Monday. Single PUT, original anchor unchanged. Charge Amps silently dropped the 15-minute 23:45→00:00 remnant (below their 30-minute minimum), which is expected. 2 new tests added (`test_window_crossing_monday_midnight_wraps_to_zero`, `test_monday_window_from_any_any_plan`), 2 existing tests updated. chargeamps test count: 44 → 46.
