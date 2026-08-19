@@ -22,7 +22,7 @@ charging:
       - days: [monday, tuesday, wednesday, thursday, friday]
         preferred_window_start: "21:00"
         preferred_window_end: "06:30"
-        required_hours: 1.5             # Optional: override required_hours for these days
+        required_hours: 3.5             # Optional: override required_hours for these days
       - days: [saturday, sunday]
         preferred_window_start: any     # any + any = no window constraint — pick cheapest slots from all available prices
         preferred_window_end: any
