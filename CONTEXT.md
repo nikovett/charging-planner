@@ -322,6 +322,10 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 
 Append-only. One entry per release. For full context see the session log below.
 
+## v1.7.6 — 2026-08-24
+- **Bug fix:** Charge Amps delivery failed on Sunday overnight plans where the last window ended on Monday — `to` exceeded the 604800s weekly limit. Periods crossing midnight wrap to `from=0`; periods entirely on Monday shift by -604800. Single PUT, original anchor unchanged.
+- **Tests:** 2 regression tests added to `test_deliver_chargeamps.py` (total 46).
+
 ## v1.7.5 — 2026-05-24
 - **Dashboard:** `niceCeil` computed from visible window max with floor of 6 c€/kWh — off-screen spikes don't compress bars; cheap days stay visually flat.
 - **Dashboard:** Negative price bars grow downward from zero baseline; faint zero baseline line when negative prices present.
