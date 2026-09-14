@@ -346,8 +346,9 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     if not is_at_location:
         log.warning(
             "MySkoda: vehicle is not at a saved charging location - preferred charging "
-            "times will be set but location-specific profile settings (target SoC etc.) "
-            "may not be active until the vehicle arrives at the saved location."
+            "times and charge mode may not take effect until the vehicle arrives at the "
+            "saved location. The API accepts the update (202) but the vehicle may ignore "
+            "or revert it when away from home."
         )
 
     # Step 2: Find target profile
