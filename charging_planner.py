@@ -2685,6 +2685,23 @@ def _write_run_outputs(plans: "list[dict]") -> None:
         log.warning("Could not write to GITHUB_OUTPUT: %s", exc)
 
 
+def write_config_json(raw_config: dict, output_dir: str) -> None:
+    """Write the full parsed config as config.json to output_dir.
+
+    Allows the dashboard and other consumers to read structured config data
+    without parsing YAML. The file is a faithful JSON representation of
+    config.yaml — all fields included. Secrets are never in config.yaml so
+    nothing sensitive is written here.
+    """
+    path = os.path.join(output_dir, "config.json")
+    try:
+        with open(path, "w") as f:
+            json.dump(raw_config, f, indent=2)
+        log.info("Config written to %s", path)
+    except OSError as exc:
+        log.warning("Could not write config.json: %s", exc)
+
+
 def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     """Fetch all available prices once, run selection for each profile."""
     try:
@@ -2808,6 +2825,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
 
     write_gha_summary(plans, skipped=skipped)
     _write_run_outputs(plans)
+    write_config_json(raw_config, output_dir)
     return plans
 
 # ===========================================================================
