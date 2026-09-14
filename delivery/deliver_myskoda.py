@@ -36,7 +36,7 @@ config.yaml delivery entry:
         enabled: true
         charge_point_id: SKODA_VIN       # env var holding the VIN (required)
         api_key_env: SKODA_API_KEY        # env var holding the API key (default: SKODA_API_KEY)
-        profile_name: "Home"              # charging profile name to update (default: first profile)
+        profile_name: "Home"              # charging profile name to update (optional if only one profile exists)
         set_charge_mode: true             # set mode to PREFERRED_CHARGING_TIMES (default: true)
 
 Environment variables (names configurable above):
@@ -119,8 +119,10 @@ def _get_charging_profiles(vin: str, api_key: str) -> dict:
 def _find_profile(vehicle_response: dict, profile_name: str | None) -> dict:
     """Find the target charging profile.
 
-    Matches by name (case-insensitive) if profile_name is given,
-    otherwise returns the first profile. Raises ValueError if not found.
+    Matches by name (case-insensitive) if profile_name is given.
+    If profile_name is omitted and there is exactly one profile, uses it directly.
+    If profile_name is omitted and there are multiple profiles, raises ValueError
+    asking the user to set profile_name explicitly.
     """
     profiles = (
         vehicle_response.get("vehicle", {})
@@ -147,11 +149,21 @@ def _find_profile(vehicle_response: dict, profile_name: str | None) -> dict:
             f"Available profiles: {available}"
         )
 
-    profile = profiles[0]
-    log.info(
-        "MySkoda: using first profile '%s' (id=%s)", profile.get("name"), profile.get("id")
+    # No profile_name configured — use the single profile if there is only one,
+    # otherwise require the user to set profile_name explicitly.
+    if len(profiles) == 1:
+        profile = profiles[0]
+        log.info(
+            "MySkoda: one profile found, using '%s' (id=%s)",
+            profile.get("name"), profile.get("id"),
+        )
+        return profile
+
+    available = [p.get("name", "?") for p in profiles]
+    raise ValueError(
+        f"Vehicle has {len(profiles)} charging profiles ({available}). "
+        f"Set profile_name in the delivery config to specify which one to update."
     )
-    return profile
 
 
 def _window_to_local_hhmm(utc_iso: str, tz: ZoneInfo) -> str:
