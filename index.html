@@ -766,8 +766,8 @@ function renderBackFace(profileName) {
         for (var i=0; i<(cfg.schedule||[]).length; i++) {
           if (cfg.schedule[i].days.indexOf(day) !== -1) { entry = cfg.schedule[i]; break; }
         }
-        var rh = (entry && entry.requiredHours !== undefined) ? entry.requiredHours : cfg.requiredHours;
-        if (rh === undefined) return '<div class="sched-cell empty">\u2014</div>';
+        var rh = (entry && entry.requiredHours != null) ? entry.requiredHours : cfg.requiredHours;
+        if (rh == null) return '<div class="sched-cell empty">\u2014</div>';
         return '<div class="sched-cell any">' + rh + 'h</div>';
       }).join("");
 
