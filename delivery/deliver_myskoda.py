@@ -175,15 +175,24 @@ def _window_to_local_hhmm(utc_iso: str, tz: ZoneInfo) -> str:
     return dt_utc.astimezone(tz).strftime("%H:%M")
 
 
-def _build_updated_profile(profile: dict, start_hhmm: str, end_hhmm: str) -> dict:
+def _build_updated_profile(
+    profile: dict,
+    start_hhmm: str,
+    end_hhmm: str,
+    preserve_other_slots: bool = False,
+) -> dict:
     """Return a deep copy of the profile with our charging window applied.
 
     Slot _TARGET_SLOT_INDEX is set to the planned window with enabled=True.
-    All other slots are set to enabled=False (times preserved unchanged).
+    Other slots are set to enabled=False unless preserve_other_slots=True,
+    in which case their enabled state is left unchanged.
 
-    The full profile is always returned unchanged except for the enabled flags
-    and the target slot's times. The API requires the complete profile in the
-    PUT body: 'the vehicle applies the submitted profile as a whole'.
+    preserve_other_slots=True is used when the vehicle is actively charging
+    in PREFERRED_CHARGING_TIMES mode — one of the other slots is driving the
+    current session and disabling it could interrupt the charge.
+
+    The full profile is always returned — the API requires the complete profile
+    in the PUT body: 'the vehicle applies the submitted profile as a whole'.
     """
     updated = copy.deepcopy(profile)
 
@@ -209,6 +218,11 @@ def _build_updated_profile(profile: dict, start_hhmm: str, end_hhmm: str) -> dic
             log.info(
                 "MySkoda: slot %d (id=%s) set to %s-%s enabled=True",
                 i + 1, slot.get("id"), start_hhmm, end_hhmm,
+            )
+        elif preserve_other_slots:
+            log.debug(
+                "MySkoda: slot %d (id=%s) preserved (vehicle charging in PREFERRED_CHARGING_TIMES mode)",
+                i + 1, slot.get("id"),
             )
         else:
             if slot.get("enabled"):
@@ -340,21 +354,76 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     profile_name = entry.get("profile_name")
     profile = _find_profile(vehicle_response, profile_name)
 
-    # Step 3: Build updated profile
-    updated = _build_updated_profile(profile, start_hhmm, end_hhmm)
+    # Step 3: Determine delivery behaviour based on charging state and mode.
+    #
+    # charging.status.state == CHARGING means the car is actively charging.
+    # The safe action depends on the active charge mode (charging.settings.preferredChargeMode):
+    #
+    #   MANUAL / TIMER / TIMER_CHARGING_WITH_CLIMATISATION:
+    #     These modes drive the current session — not preferred times.
+    #     Safe to update slot 4 and disable slots 1–3 (they are not active).
+    #     Do NOT change the charge mode — don't interrupt the current session logic.
+    #
+    #   PREFERRED_CHARGING_TIMES:
+    #     One of slots 1–3 (or slot 4) allowed this session to start.
+    #     Safe to update slot 4, but preserve slots 1–3 enabled state to avoid
+    #     interrupting the active session.
+    #     Do NOT change the charge mode.
+    #
+    #   Unknown mode while charging:
+    #     Skip delivery entirely — safer than guessing.
+    #
+    # If not charging: full delivery — update slot 4, disable slots 1–3, set mode.
 
-    # Step 4: PUT updated profile
+    _SAFE_CHARGING_MODES = {"MANUAL", "TIMER", "TIMER_CHARGING_WITH_CLIMATISATION",
+                            "PREFERRED_CHARGING_TIMES"}
+
+    charging_obj      = vehicle_response.get("vehicle", {}).get("charging", {})
+    charging_state    = charging_obj.get("status", {}).get("state", "")
+    active_mode       = charging_obj.get("settings", {}).get("preferredChargeMode", "")
+    is_charging       = charging_state == "CHARGING"
+    preserve_slots    = False
+    skip_mode_change  = False
+
+    if is_charging:
+        if active_mode not in _SAFE_CHARGING_MODES:
+            log.warning(
+                "MySkoda: vehicle is charging in unknown mode '%s' — skipping delivery "
+                "to avoid interrupting the active session.", active_mode,
+            )
+            return
+        skip_mode_change = True
+        if active_mode == "PREFERRED_CHARGING_TIMES":
+            preserve_slots = True
+            log.info(
+                "MySkoda: vehicle is charging in PREFERRED_CHARGING_TIMES mode — "
+                "updating slot 4 but preserving slots 1–3 to protect the active session."
+            )
+        else:
+            log.info(
+                "MySkoda: vehicle is charging in %s mode — updating slot 4 and "
+                "disabling slots 1–3, but not changing charge mode.", active_mode,
+            )
+
+    # Step 4: Build updated profile
+    updated = _build_updated_profile(profile, start_hhmm, end_hhmm,
+                                     preserve_other_slots=preserve_slots)
+
+    # Step 5: PUT updated profile
     _put_profile(vin, updated, api_key)
 
-    # Step 5: Set charge mode (optional).
+    # Step 6: Set charge mode (optional).
     # set_charge_mode accepts a charge mode string (e.g. PREFERRED_CHARGING_TIMES)
     # or false/omitted to skip. Default: PREFERRED_CHARGING_TIMES.
     # Valid modes per MySkoda Public API v1.0.0: MANUAL, TIMER,
     # TIMER_CHARGING_WITH_CLIMATISATION, PREFERRED_CHARGING_TIMES,
     # ONLY_OWN_CURRENT, IMMEDIATE_DISCHARGING, HOME_STORAGE_CHARGING.
     # New values added by Skoda are passed through as-is.
+    # Skipped when vehicle is actively charging to avoid interrupting the session.
     charge_mode_cfg = entry.get("set_charge_mode", "PREFERRED_CHARGING_TIMES")
-    if charge_mode_cfg and charge_mode_cfg is not False:
+    if skip_mode_change:
+        log.info("MySkoda: skipping charge mode update — vehicle is actively charging.")
+    elif charge_mode_cfg and charge_mode_cfg is not False:
         mode = charge_mode_cfg if isinstance(charge_mode_cfg, str) else "PREFERRED_CHARGING_TIMES"
         _put_charge_mode(vin, api_key, mode)
     else:
