@@ -24,6 +24,7 @@ Fetches day-ahead electricity prices and schedules EV charging for the cheapest 
 | `delivery/deliver.py` | Delivery dispatcher |
 | `delivery/deliver_chargeamps.py` | Charge Amps handler |
 | `delivery/deliver_easee.py` | Easee handler (untested against real hardware) |
+| `delivery/deliver_myskoda.py` | MyŠkoda handler — updates preferred charging time via public API (tested; first delivery with vehicle away from home) |
 | `index.html` | GitHub Pages dashboard |
 | `config.yaml` | Configuration template |
 | `.github/workflows/schedule.yml` | Daily GHA workflow |
@@ -321,6 +322,10 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 # Changelog
 
 Append-only. One entry per release. For full context see the session log below.
+
+## v2.0.0 — DRAFT (not yet released)
+- **New:** `deliver_myskoda.py` — MyŠkoda Public API delivery handler. Updates preferred charging time slot 4 on the vehicle's "Koti" (Home) profile and sets charge mode to `PREFERRED_CHARGING_TIMES`. Requires `SKODA_VIN` and `SKODA_API_KEY` secrets. Compatible only with `continuous_only: true` profiles (single window). Tested against real vehicle — first delivery confirmed correct in MyŠkoda app. Vehicle was away from home at time of delivery; at-home charging behaviour to be observed.
+- **Workflow:** `schedule.yml` updated to expose `SKODA_VIN` and `SKODA_API_KEY` to the delivery step.
 
 ## v1.7.6 — 2026-08-24
 - **Bug fix:** Charge Amps delivery failed on Sunday overnight plans where the last window ended on Monday — `to` exceeded the 604800s weekly limit. Periods crossing midnight wrap to `from=0`; periods entirely on Monday shift by -604800. Single PUT, original anchor unchanged.
@@ -772,3 +777,7 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 ### Session 32 — 2026-08-15
 
 **Bug fix: Charge Amps 604800s weekly limit exceeded for Sunday overnight plans** (`delivery/deliver_chargeamps.py`): the `smartChargingSchedules` API rejects any period where `to > 604800s` (7 days from the Monday anchor). This was triggered when a plan's last window ended on Monday local time — e.g. an overnight slot Sun 23:45 → Mon 01:00, or any:any Saturday plans with Monday slots. Fix: for periods where `to > 604800`, two cases: (1) window crosses Sunday→Monday midnight — `from=0, to=original_to-604800`, landing the Monday portion at the week start; (2) window falls entirely on Monday — both `from` and `to` shifted by -604800, preserving the correct offset within Monday. Single PUT, original anchor unchanged. Charge Amps silently dropped the 15-minute 23:45→00:00 remnant (below their 30-minute minimum), which is expected. 2 new tests added (`test_window_crossing_monday_midnight_wraps_to_zero`, `test_monday_window_from_any_any_plan`), 2 existing tests updated. chargeamps test count: 44 → 46.
+
+### Session 33 — 2026-09-14
+
+**New delivery handler: `deliver_myskoda.py`** — delivers charging plan to a Škoda EV via the official MyŠkoda Public API (`public.api.connect.skoda-auto.cz`). Auth via `X-API-Key` header (key from MyŠkoda app, stored in `SKODA_API_KEY` secret). GET vehicle charging profiles, update slot 4 of the named profile with the planned window (local `HH:MM`), disable slots 1–3, PUT the complete profile back, then set charge mode to `PREFERRED_CHARGING_TIMES`. Only compatible with `continuous_only: true` plans (single window). Rate limit: 20 req/hour, delivery uses 3. Profile name configurable (`profile_name`), defaults to first profile — Finnish vehicle had profile named "Koti" not "Home". `SKODA_VIN` and `SKODA_API_KEY` added to `schedule.yml` delivery step. First live delivery succeeded on 2026-09-14 (vehicle not at home at time of delivery — behaviour on arrival to be observed). First live delivery confirmed correct in MyŠkoda app (slot 4 set, slot 1 disabled, charge mode updated). Vehicle was not at saved location at time of delivery — at-home charging behaviour to be observed on next cycle. **v2.0.0 drafted but not yet released** — running in production under observation; version bump pending confirmation of at-home charging behaviour and other edge cases.

@@ -164,16 +164,19 @@ Days not listed in `schedule` use the top-level preferred window.
 
 ## Charger delivery
 
-Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` block inside each charging profile and dispatches each plan to the correct handler. A Charge Amps handler is included out of the box:
+Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` block inside each charging profile and dispatches each plan to the correct handler. Three handlers are included out of the box:
 
 | Handler | Script | Description |
 |---|---|---|
 | `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API — tested and supported |
 | `easee` | `delivery/deliver_easee.py` | Delivers via the official Easee API — untested |
+| `myskoda` | `delivery/deliver_myskoda.py` | Delivers via the MyŠkoda Public API — updates preferred charging time on the vehicle directly |
 
 The `chargeamps` handler always reads the connector state before delivery. If the car is actively charging, schedule override is activated after delivery so the current session is not interrupted — the override expires automatically when the cable is disconnected.
 
 `restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
+
+The `myskoda` handler updates preferred charging time slot 4 on the vehicle's charging profile and sets the charge mode to `PREFERRED_CHARGING_TIMES`. It requires a `SKODA_VIN` env var (the VIN, via `charge_point_id`) and a `SKODA_API_KEY` env var (API key from the MyŠkoda app at `go.skoda.eu/api-keys`). Only compatible with `continuous_only: true` profiles — the MyŠkoda API accepts a single time window per slot, not multiple windows.
 
 New handlers can be added by creating a `deliver_<n>.py` script in the `delivery/` directory with a single `deliver(plan, charge_point_id, entry, timezone) -> bool` function — the dispatcher handles the rest automatically.
 

@@ -13,6 +13,10 @@ Only compatible with plans that contain a single continuous charging window
 (i.e. profiles configured with continuous_only: true). If the plan contains
 multiple windows the delivery is rejected.
 
+Tested against a real Škoda Enyaq on 2026-09-14. First delivery confirmed
+correct in the MyŠkoda app. Vehicle was away from home at time of delivery
+— at-home charging behaviour to be observed on subsequent runs.
+
 Invoked by delivery/deliver.py when handler: myskoda is set inside a charging
 profile's delivery entry in config.yaml.
 
