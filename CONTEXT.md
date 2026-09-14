@@ -309,6 +309,13 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 
 ## Future work
 
+**`max_windows` parameter** — generalise `continuous_only` to `max_windows: N` where `max_windows: 1` is equivalent to `continuous_only: true` and `max_windows: null` means unlimited splits (current default). The DP state space expands to track windows used; each window must still respect `min_slot_minutes` and `min_gap_minutes`. `continuous_only` becomes a deprecated alias for `max_windows: 1`.
+
+For MyŠkoda delivery, `max_windows: 4` would also require changes to `deliver_myskoda.py` — currently hardcoded to write to slot 4 and disable slots 1–3. To use all 4 vehicle slots, the handler would need to map plan windows dynamically to slots 1–N and only disable unused slots. Both the planner and handler need to change together.
+
+Workaround until implemented: set `min_slot_minutes` so that `required_hours / (min_slot_minutes / 60)` ≤ 4 — e.g. `min_slot_minutes: 60` with `required_hours: 4.0` produces at most 4 × 1h windows.
+
+
 **go-e** — cloud API (`{serial}.api.v3.go-e.io`) works from GHA. Scheduler keys exist in v2 API (`sch_week`, `sch_satur`, `sch_sund`) but the time range object format is undocumented and not found in community reverse-engineering. Blocked until payload structure is discovered from a real charger with a schedule set via the app.
 
 **Wallbox** — weekly recurring schedule model (days bitmask), not per-night. Low priority.
