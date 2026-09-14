@@ -37,7 +37,7 @@ charging:
         restore_mode: true              # Charge Amps only: delivered schedule always changes the charger mode to "Schedule". Enabling this restores charging mode back to what it was before delivery.
 
   - name: overnight
-    required_hours: 3.5                 # Total hours of charging to schedule
+    required_hours: 4.0                 # Total hours of charging to schedule
     continuous_only: true               # One unbroken block, extended leftward if window is too short
     min_slot_minutes: 30
     min_gap_minutes: 15                 # Minimum gap between charging blocks (must be divisible by 15, 0 = no gap constraint)
@@ -54,10 +54,10 @@ charging:
         preferred_window_start: any     # any + any = no window constraint — pick cheapest slots from all available prices
         preferred_window_end: any
     deliveries:
-      - handler: chargeamps             # → delivery/deliver_chargeamps.py
-        enabled: false                  # configured but set to false to temporarily disable this delivery
-        charge_point_id: CHARGER_ID_2   # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
-        connector_id: 1
-    #   charging_rate_unit: A           # Charge Amps API accepts only current (A) so no need to configure it here, just an example
-        max_charging_rate: 16.0         # amps
-        restore_mode: true              # Charge Amps only: delivered schedule always changes the charger mode to "Schedule". Enabling this restores charging mode back to what it was before delivery.
+      - handler: myskoda                # → delivery/deliver_myskoda.py
+        enabled: true                   # configured but set to false to temporarily disable this delivery
+        charge_point_id: SKODA_VIN      # single ID, or a list: [CHARGER_ID_1, CHARGER_ID_2]
+        api_key_env: SKODA_API_KEY      # env var holding the API key (default: SKODA_API_KEY)
+        profile_name: "Home"            # charging profile name to update (default: first profile)
+        set_charge_mode: true           # set mode to PREFERRED_CHARGING_TIMES (default: true)
+ 
