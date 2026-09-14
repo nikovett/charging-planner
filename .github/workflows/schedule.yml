@@ -39,6 +39,9 @@ jobs:
           # Charger IDs — shared across all handlers; add more as needed
           CHARGER_ID_1:     ${{ secrets.CHARGER_ID_1 }}
           CHARGER_ID_2:     ${{ secrets.CHARGER_ID_2 }}
+          # MySkoda credentials (used by deliver_myskoda.py)
+          SKODA_VIN:           ${{ secrets.SKODA_VIN }}
+          SKODA_API_KEY:       ${{ secrets.SKODA_API_KEY }}
         run: python delivery/deliver.py plan-*.json --config config.yaml
 
       - name: Publish plans to data/ for dashboard
