@@ -37,7 +37,7 @@ config.yaml delivery entry:
         charge_point_id: SKODA_VIN       # env var holding the VIN (required)
         api_key_env: SKODA_API_KEY        # env var holding the API key (default: SKODA_API_KEY)
         profile_name: "Home"              # charging profile name to update (optional if only one profile exists)
-        set_charge_mode: true             # set mode to PREFERRED_CHARGING_TIMES (default: true)
+        set_charge_mode: PREFERRED_CHARGING_TIMES  # charge mode to set after profile update, or false to skip
 
 Environment variables (names configurable above):
     SKODA_VIN          Vehicle Identification Number (17 characters)
@@ -234,16 +234,18 @@ def _put_profile(vin: str, profile: dict, api_key: str) -> None:
     log.info("MySkoda: profile update accepted (202) - vehicle will apply asynchronously")
 
 
-def _put_charge_mode(vin: str, api_key: str) -> None:
-    """Set the charge mode to PREFERRED_CHARGING_TIMES.
+def _put_charge_mode(vin: str, api_key: str, mode: str) -> None:
+    """Set the vehicle charge mode.
 
-    Without this the vehicle may remain in MANUAL or TIMER mode and not
-    act on the preferred charging times we just set.
+    mode is any valid ChargeMode value from the MySkoda Public API:
+      MANUAL, TIMER, TIMER_CHARGING_WITH_CLIMATISATION, PREFERRED_CHARGING_TIMES,
+      ONLY_OWN_CURRENT, IMMEDIATE_DISCHARGING, HOME_STORAGE_CHARGING.
+    New values may be added by Skoda over time and are passed through as-is.
     Response is 202 Accepted (async).
     """
     path = f"/api/v1/vehicles/{vin}/charging/mode"
-    log.info("MySkoda: setting charge mode to PREFERRED_CHARGING_TIMES")
-    _request(path, api_key, method="PUT", body={"chargeMode": "PREFERRED_CHARGING_TIMES"})
+    log.info("MySkoda: setting charge mode to %s", mode)
+    _request(path, api_key, method="PUT", body={"chargeMode": mode})
     log.info("MySkoda: charge mode update accepted (202)")
 
 
@@ -344,9 +346,17 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     # Step 4: PUT updated profile
     _put_profile(vin, updated, api_key)
 
-    # Step 5: Set charge mode (optional, default: true)
-    if entry.get("set_charge_mode", True):
-        _put_charge_mode(vin, api_key)
+    # Step 5: Set charge mode (optional).
+    # set_charge_mode accepts a charge mode string (e.g. PREFERRED_CHARGING_TIMES)
+    # or false/omitted to skip. Default: PREFERRED_CHARGING_TIMES.
+    # Valid modes per MySkoda Public API v1.0.0: MANUAL, TIMER,
+    # TIMER_CHARGING_WITH_CLIMATISATION, PREFERRED_CHARGING_TIMES,
+    # ONLY_OWN_CURRENT, IMMEDIATE_DISCHARGING, HOME_STORAGE_CHARGING.
+    # New values added by Skoda are passed through as-is.
+    charge_mode_cfg = entry.get("set_charge_mode", "PREFERRED_CHARGING_TIMES")
+    if charge_mode_cfg and charge_mode_cfg is not False:
+        mode = charge_mode_cfg if isinstance(charge_mode_cfg, str) else "PREFERRED_CHARGING_TIMES"
+        _put_charge_mode(vin, api_key, mode)
     else:
         log.info("MySkoda: skipping charge mode update (set_charge_mode: false)")
 

@@ -39,8 +39,8 @@ charging:
       - handler: myskoda
         charge_point_id: SKODA_VIN
         api_key_env: SKODA_API_KEY
-        profile_name: "Koti"
-        set_charge_mode: true
+        # profile_name: "Koti"           # optional — omit if vehicle has only one charging profile
+        set_charge_mode: PREFERRED_CHARGING_TIMES  # or false to skip, or any other valid mode
 ```
 
 `timezone` is set once in the `entsoe:` block and passed to all handlers automatically.
@@ -130,8 +130,8 @@ MyŠkoda app (slot 4 updated, slot 1 disabled, charge mode set).
 |---|---|---|
 | `charge_point_id` | — | **Required.** Env var whose value is the VIN (17 characters). |
 | `api_key_env` | `SKODA_API_KEY` | Env var holding the MyŠkoda API key |
-| `profile_name` | first profile | Charging profile name to update (e.g. `"Koti"`, `"Home"`) |
-| `set_charge_mode` | `true` | Set charge mode to `PREFERRED_CHARGING_TIMES` after profile update |
+| `profile_name` | — | Charging profile name to update (e.g. `"Koti"`, `"Home"`). Optional when the vehicle has only one charging profile — omit it and the single profile is used automatically. Required when there are multiple profiles. |
+| `set_charge_mode` | `PREFERRED_CHARGING_TIMES` | Charge mode to set after profile update. Any valid MyŠkoda charge mode string (`MANUAL`, `TIMER`, `TIMER_CHARGING_WITH_CLIMATISATION`, `PREFERRED_CHARGING_TIMES`, `ONLY_OWN_CURRENT`, `IMMEDIATE_DISCHARGING`, `HOME_STORAGE_CHARGING`), or `false` to skip. New modes added by Škoda are passed through as-is. |
 
 **Environment variables:**
 
