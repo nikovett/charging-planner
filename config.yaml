@@ -38,7 +38,7 @@ charging:
 
   - name: overnight
     required_hours: 4.0                 # Total hours of charging to schedule
-    max_windows: 1                      # One unbroken block, extended leftward if window is too short
+    max_windows: 4                      # 4 slots max
     min_slot_minutes: 30
     min_gap_minutes: 15                 # Minimum gap between charging blocks (must be divisible by 15, 0 = no gap constraint)
     max_price_cents_kwh: null           # null = no limit, "avg" = daily market average
