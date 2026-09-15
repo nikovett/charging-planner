@@ -12,7 +12,7 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 **Globally optimal scheduling.** `max_windows: 1` finds the cheapest unbroken block ending at departure time. `max_windows: null` (or a higher bound) uses dynamic programming to evaluate every valid combination of blocks across 96 price slots per day. The cheapest combination is rarely obvious to a human eye, and even harder to find manually as prices fluctuate every 15 minutes.
 
-**The planner and the delivery target are fully separate.** The planner only ever produces a plan — a list of cheapest charging windows — with no knowledge of chargers or cars. Delivery is a separate, pluggable step that hands the plan to whichever target is configured. New targets mean a new handler, never a change to the planner.
+**The planner and the delivery target are fully separate.** The planner only ever produces a plan — a list of cheapest charging windows — with no knowledge of chargers or cars. Delivery is a separate, pluggable step: a handler can be as simple as pushing a schedule, or as sophisticated as understanding its target's own state — reading connector status, detecting an active charging session and working around it, restoring a prior mode afterwards. New targets mean a new handler, never a change to the planner.
 
 **Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging window; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and delivery target — all from one config file. Both the preferred charging window and required hours can be configured per day of the week within each profile.
 
