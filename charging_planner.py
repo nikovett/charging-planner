@@ -1930,6 +1930,7 @@ def build_plan(p: PlanParams) -> dict:
       "utc_offset_hours": 2,
       "price_stats": { "min": …, "max": …, "avg": … },
       "required_minutes": 240,
+      "max_windows": null,
       "total_minutes": 240,
       "avg_price_cents_kwh": 1.84,
       "windows": [
@@ -2029,6 +2030,7 @@ def build_plan(p: PlanParams) -> dict:
         "price_stats":            price_stats,
         "required_minutes":       p.required_minutes,
         "retained_minutes":       p.retained_minutes,
+        "max_windows":            p.max_windows,
         "total_minutes":          total_min,
         "avg_price_cents_kwh":    round(overall_avg, 4),
         "avg_optimal_price_cents_kwh": avg_optimal,

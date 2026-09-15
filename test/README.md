@@ -1,27 +1,28 @@
 # Test Suite
 
-246 tests across three files. Run from the repo root:
+347 tests across four files. Run from the repo root:
 
 ```
-python -m unittest test_charging_planner test_deliver_chargeamps test_deliver_easee -v
+python -m unittest test_charging_planner test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
 ```
 
 Or individually:
 
 ```
-python -m unittest test_charging_planner -v       # 177 tests, 3 skipped
+python -m unittest test_charging_planner -v       # 252 tests, 3 skipped
 python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
+python -m unittest test_deliver_myskoda -v        # 23 tests
 ```
 
 The 3 skipped tests require a live ENTSO-E API key in the environment and are marked `@unittest.skip`.
 
 ---
 
-## test_charging_planner.py (177 tests)
+## test_charging_planner.py (252 tests)
 
-### TestConfigValidation (11)
-Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, and `preferred_window`.
+### TestConfigValidation (18)
+Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, `preferred_window`, and `max_windows` (null/positive-int accepted; zero, negative, float, bool, and string rejected — `bool` is a subclass of `int` in Python, so it needs an explicit check).
 
 ### TestAvgPriceCeiling (7)
 `max_price_cents_kwh: avg` — validation accepts it, case-insensitive parsing, `max_price_is_avg` flag set, resolves to market average at plan time, numeric ceilings leave flag false.
@@ -45,21 +46,24 @@ Resolves overnight and same-day windows to UTC start/end datetimes, anchoring to
 Splits a slot list into inside/outside the preferred window. Overnight windows, slots on window boundaries, `any` window sentinel.
 
 ### TestSelectChargingWindows (7)
-High-level slot selection: cheapest slots selected, required minutes met, price ceiling respected, `continuous_only` returns one block, `min_slot_minutes` enforced.
+High-level slot selection: cheapest slots selected, required minutes met, price ceiling respected, `max_windows: 1` returns one block, `min_slot_minutes` enforced.
 
 ### TestBestContinuousWindow (3)
 Returns the cheapest continuous run; respects temporal continuity (index adjacency is not sufficient); handles partial coverage.
 
 ### TestSelectSpillover (5)
-Spillover from outside the preferred window: not triggered when window is satisfied, stays before window end, `continuous_only` extends leftward, handles remaining < min slot.
+Spillover from outside the preferred window: not triggered when window is satisfied, stays before window end, `max_windows: 1` extends leftward, handles remaining < min slot.
 
-### TestSelectWithMinBlock (13)
-Direct tests for `_select_with_min_block`: no blocks shorter than minimum, isolated cheap slot replaced, total minutes correct after disqualification, latest slot preferred on equal price, real price data, gap constraint respected.
+### TestSelectWithMinBlock (14)
+Direct tests for `_select_with_min_block` (the `max_windows: null`, unbounded path): no blocks shorter than minimum, isolated cheap slot replaced, total minutes correct after disqualification, latest slot preferred on equal price, real price data, gap constraint respected, and window-coverage/`cmd_plan` exit-code checks that share this class.
 
 **`test_isolated_cheap_slot_with_price_ceiling`** — regression for the 2026-04-13 production bug: a cheap slot isolated by two above-ceiling neighbours must not be selected when it cannot form a valid block.
 
-### TestBuildPlan (4)
-`build_plan` output structure: required keys present, price stats, windows, OCPP profile.
+### TestSelectWithMaxWindows (10)
+Direct tests for `_select_with_max_windows` (the `max_windows: N ≥ 2` path): uses at most N blocks, picks the cheapest N clusters over more expensive ones, `max_windows: 1` matches `_best_continuous_window` exactly, `max_windows: null` matches the unbounded path exactly, a generously high `max_windows` also matches the unbounded path, `min_gap_minutes`/`min_slot_minutes` enforced identically to the unbounded case, infeasible window budgets return `[]` cleanly, latest-slot tiebreak on equal price.
+
+### TestBuildPlan (6)
+`build_plan` output structure: required keys present (including `max_windows`), price stats, windows, OCPP profile, `max_windows` defaults to `null` and reflects the configured value.
 
 ### TestOcppChargingProfile (13)
 OCPP 1.6, 2.0.1, and 2.1 profile generation: schema validity, `validFrom`/`validTo` match window bounds, periods ordered, `startPeriod` offsets correct for single and multiple windows, duration covers full span.
@@ -81,6 +85,27 @@ Integration tests against a bundled ENTSO-E XML fixture: prices in plausible ran
 
 ### TestAreaFallbackChainIntegration (24)
 `cmd_plan` with all fetchers patched: for each area family (FI, EE, SE1, NO1) — ENTSO-E success, each fallback tried in order when prior fails, sources that should never be called are asserted not called, plan exits when all sources fail.
+
+### TestPrintPlanSummary (23)
+Console plan summary output: header fields, market price stats, charging window count and times, savings vs market (below/above/near), optional fields (retained minutes, plan warning, vs-optimal line), ANSI colour suppression and enabling.
+
+### TestWindowBar (8)
+`_window_bar` rendering: bar block length including minimum-2 floor, duration formatting for hours+minutes/exact hours/minutes-only, price label.
+
+### TestGhaFmtHours (3)
+Duration formatting for GitHub Actions summaries: hours+minutes, exact hours, minutes-only.
+
+### TestGhaSummaryHeader (7)
+GHA step-summary markdown header: date, area, price source, UTC offset, and related fields.
+
+### TestGhaSummaryProfile (7)
+GHA step-summary per-profile section: profile name, required hours, window table, no-windows message, incomplete-plan warning, savings amount.
+
+### TestWriteGhaSummary (4)
+`write_gha_summary`: no-op when `GITHUB_STEP_SUMMARY` is unset, writes to file, skipped-profiles section included, graceful `OSError` handling.
+
+### TestWriteConfigJson (4)
+`write_config_json` secret redaction — regression coverage for a real bug where a real `ENTSOE_API_KEY` merged in from the environment could be written into the committed `data/config.json`. Real key redacted, empty key stays empty, caller's in-memory config not mutated, other fields (including `max_windows`) preserved.
 
 ---
 
@@ -124,3 +149,19 @@ Field values, `repeat: false`, ISO datetime format with `.000Z` suffix.
 
 ### TestDeliverRouting (8)
 Single window → basic plan, multiple windows → weekly plan, empty plan returns true without API call, login failure, API failure for both paths, rate passed through, correct datetimes passed to basic plan.
+
+---
+
+## test_deliver_myskoda.py (23 tests)
+
+### TestBuildUpdatedProfile (10)
+Direct tests for `_build_updated_profile` — the multi-window slot mapping: one window fills slot 1 only, two windows fill slots 1–2, four windows fill all 4 slots, windows are written positionally (window 1 always → slot 1, regardless of window ordering), unused slots disabled by default, `preserve_other_slots=True` leaves unused slots' enabled state *and* times untouched, more windows than the vehicle has slots raises, no `preferredChargingTimes` entries raises, the input profile dict is never mutated, slot `id` fields are preserved through the update.
+
+### TestDeliverValidation (7)
+`deliver()` config/plan validation: `max_windows: null` rejected (unbounded profiles are never safe to deliver, even if today's plan happens to fit), `max_windows > 4` rejected, `max_windows` 1 through 4 all accepted, more than 4 *actual* plan windows rejected as a defensive check independent of the configured `max_windows`, zero scheduled minutes rejected, empty window list rejected, missing API key rejected.
+
+### TestDeliverSlotMapping (2)
+End-to-end: three plan windows land in vehicle slots 1–3 with slot 4 left disabled; UTC window times are correctly converted to the vehicle's local timezone before being written.
+
+### TestDeliverChargingState (4)
+Charging-state safety logic: not charging → full delivery (slot update + mode change); charging in MANUAL/TIMER modes → slot update but no mode change; charging in PREFERRED_CHARGING_TIMES → slot update but unused slots' enabled state and times preserved (one of them may be driving the active session), no mode change; charging in an unknown mode → delivery skipped entirely (still reports success, not failure — skipping is the correct outcome, not an error).

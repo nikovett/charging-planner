@@ -109,12 +109,17 @@ Delivers via the official Easee REST API (`api.easee.com`).
 ### `deliver_myskoda.py`
 
 Delivers via the official MyŠkoda Public API (`public.api.connect.skoda-auto.cz`).
-Fetches the vehicle's current charging profile, updates preferred charging time
-slot 4 with the planned window, disables slots 1–3 (times preserved), and sets
-the charge mode to `PREFERRED_CHARGING_TIMES`.
+Fetches the vehicle's current charging profile, writes each plan window into a
+preferred charging time slot (window 1 → slot 1, window 2 → slot 2, and so
+on), disables any unused slots (times preserved), and sets the charge mode to
+`PREFERRED_CHARGING_TIMES`.
 
-**Only compatible with `max_windows: 1` profiles** — the MyŠkoda API
-accepts a single time window per slot. Plans with multiple windows are rejected.
+**Requires `max_windows` set to a value between 1 and 4** — the vehicle has
+exactly 4 preferred charging time slots. `max_windows: null` (unlimited) is
+rejected even if a given day's plan happens to produce 4 or fewer windows,
+since an unbounded profile could produce more on a different day. Plans that
+somehow still end up with more than 4 windows are also rejected as a
+defensive runtime check.
 
 API keys are created in the MyŠkoda app at `go.skoda.eu/api-keys`. Keys expire —
 check `X-API-Key-Expires-At` in responses and rotate before expiry. Rate limit:

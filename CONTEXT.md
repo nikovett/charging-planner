@@ -24,13 +24,14 @@ Fetches day-ahead electricity prices and schedules EV charging for the cheapest 
 | `delivery/deliver.py` | Delivery dispatcher |
 | `delivery/deliver_chargeamps.py` | Charge Amps handler |
 | `delivery/deliver_easee.py` | Easee handler (untested against real hardware) |
-| `delivery/deliver_myskoda.py` | MyŠkoda handler — updates preferred charging time via public API (tested; first delivery with vehicle away from home) |
+| `delivery/deliver_myskoda.py` | MyŠkoda handler — updates preferred charging time slots 1..N (N = plan windows, max 4) via public API (tested; first delivery with vehicle away from home) |
 | `index.html` | GitHub Pages dashboard |
 | `config.yaml` | Configuration template |
 | `.github/workflows/schedule.yml` | Daily GHA workflow |
 | `test/test_charging_planner.py` | Planner tests |
 | `test/test_deliver_chargeamps.py` | Charge Amps tests |
 | `test/test_deliver_easee.py` | Easee tests |
+| `test/test_deliver_myskoda.py` | MyŠkoda tests |
 | `README.md` | Project documentation |
 | `README_tests.md` | Test suite documentation |
 | `CONTEXT.md` | This file |
@@ -161,6 +162,7 @@ Each run reads `data/plan-{name}.json`, counts future `charging: true` minutes, 
   "price_stats": { "min_cents_kwh": 0.45, "avg_cents_kwh": 1.92, "max_cents_kwh": 4.99 },
   "required_minutes": 270,
   "retained_minutes": 0,
+  "max_windows": 1,
   "total_minutes": 270,
   "avg_price_cents_kwh": 0.70,
   "avg_optimal_price_cents_kwh": 0.56,
@@ -318,11 +320,6 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 ---
 
 ## Future work
-
-**MyŠkoda multi-window support** — `deliver_myskoda.py` is currently hardcoded to write to slot 4 and disable slots 1–3, so it only accepts `max_windows: 1` plans. To use all 4 vehicle slots with `max_windows: N` (N ≥ 2), the handler would need to map plan windows dynamically to slots 1–N and only disable unused slots. Both the planner (already supports arbitrary `max_windows`) and the handler need to change together — planner side is done, handler side is not.
-
-Workaround until the handler is updated: set `min_slot_minutes` so that `required_hours / (min_slot_minutes / 60)` ≤ 1 for MyŠkoda-delivered profiles — i.e. use `max_windows: 1`.
-
 
 **go-e** — cloud API (`{serial}.api.v3.go-e.io`) works from GHA. Scheduler keys exist in v2 API (`sch_week`, `sch_satur`, `sch_sund`) but the time range object format is undocumented and not found in community reverse-engineering. Blocked until payload structure is discovered from a real charger with a schedule set via the app.
 

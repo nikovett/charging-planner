@@ -849,8 +849,18 @@ class TestBuildPlan(unittest.TestCase):
         for key in ("version", "date", "area", "windows",
                     "window_starts_utc", "window_ends_utc",
                     "required_minutes", "total_minutes",
-                    "ocpp_charging_profile"):
+                    "max_windows", "ocpp_charging_profile"):
             self.assertIn(key, plan)
+
+    def test_max_windows_null_by_default(self):
+        plan = self._make()
+        self.assertIsNone(plan["max_windows"])
+
+    def test_max_windows_reflects_config(self):
+        plan = self._make(max_windows=1)
+        self.assertEqual(plan["max_windows"], 1)
+        plan = self._make(max_windows=3)
+        self.assertEqual(plan["max_windows"], 3)
 
     def test_total_minutes_correct(self):
         plan = self._make(n_slots=8)

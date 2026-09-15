@@ -5,13 +5,16 @@ MySkoda Charging Profile Delivery
 Delivers a charging plan to a Skoda EV via the official MySkoda Public API
 (https://public.api.connect.skoda-auto.cz).
 
-The handler reads the current charging profile from the vehicle, updates
-preferred charging time slot 4 with the planned window, disables slots 1-3,
-and sets the charge mode to PREFERRED_CHARGING_TIMES.
+The handler reads the current charging profile from the vehicle, writes each
+plan window into a preferred charging time slot (window 1 -> slot 1, window
+2 -> slot 2, and so on), disables any unused slots, and sets the charge mode
+to PREFERRED_CHARGING_TIMES.
 
-Only compatible with plans that contain a single continuous charging window
-(i.e. profiles configured with max_windows: 1). If the plan contains
-multiple windows the delivery is rejected.
+Compatible with plans that contain 1 to 4 charging windows — the vehicle has
+exactly 4 preferredChargingTimes slots, so plans with more than 4 windows are
+rejected. Configure the charging profile's max_windows to 4 or fewer (never
+null/unlimited) to guarantee this holds; the handler also checks the actual
+window count of each plan as a defensive runtime check.
 
 Tested against a real Škoda Enyaq on 2026-09-14. First delivery confirmed
 correct in the MyŠkoda app. Vehicle was away from home at time of delivery
@@ -59,9 +62,10 @@ log = logging.getLogger(__name__)
 
 _BASE_URL = "https://public.api.connect.skoda-auto.cz"
 
-# Index of the preferredChargingTimes slot we write into (0-based).
-# All other slots are disabled but their times are preserved unchanged.
-_TARGET_SLOT_INDEX = 3  # slot 4 (last of the standard 4)
+# The vehicle has exactly 4 preferredChargingTimes slots (indices 0-3).
+# Plan windows are written starting from slot 1 (index 0) onwards; any slots
+# beyond the number of plan windows are disabled.
+_MAX_VEHICLE_SLOTS = 4
 
 
 # ===========================================================================
@@ -177,19 +181,22 @@ def _window_to_local_hhmm(utc_iso: str, tz: ZoneInfo) -> str:
 
 def _build_updated_profile(
     profile: dict,
-    start_hhmm: str,
-    end_hhmm: str,
+    windows_hhmm: list[tuple[str, str]],
     preserve_other_slots: bool = False,
 ) -> dict:
-    """Return a deep copy of the profile with our charging window applied.
+    """Return a deep copy of the profile with our charging window(s) applied.
 
-    Slot _TARGET_SLOT_INDEX is set to the planned window with enabled=True.
-    Other slots are set to enabled=False unless preserve_other_slots=True,
+    windows_hhmm is an ordered list of (start_hhmm, end_hhmm) tuples, one per
+    plan window (1 to _MAX_VEHICLE_SLOTS entries). Slot index i (0-based) is
+    set to windows_hhmm[i] with enabled=True for i < len(windows_hhmm).
+    Remaining slots are set to enabled=False unless preserve_other_slots=True,
     in which case their enabled state is left unchanged.
 
     preserve_other_slots=True is used when the vehicle is actively charging
-    in PREFERRED_CHARGING_TIMES mode — one of the other slots is driving the
-    current session and disabling it could interrupt the charge.
+    in PREFERRED_CHARGING_TIMES mode — one of the unused slots may be driving
+    the current session and disabling it could interrupt the charge. The
+    slots we're actively writing (0..len(windows_hhmm)-1) are still always
+    overwritten, since those are the ones the plan controls.
 
     The full profile is always returned — the API requires the complete profile
     in the PUT body: 'the vehicle applies the submitted profile as a whole'.
@@ -203,15 +210,17 @@ def _build_updated_profile(
             "Add preferred charging time slots in the MySkoda app first."
         )
 
-    if _TARGET_SLOT_INDEX >= len(slots):
+    if len(windows_hhmm) > len(slots):
         raise ValueError(
-            f"Profile has only {len(slots)} preferred charging time slot(s); "
-            f"cannot write to slot {_TARGET_SLOT_INDEX + 1} (index {_TARGET_SLOT_INDEX}). "
-            f"Add more preferred time slots in the MySkoda app."
+            f"Plan has {len(windows_hhmm)} charging window(s) but the profile "
+            f"has only {len(slots)} preferred charging time slot(s). "
+            f"Add more preferred time slots in the MySkoda app, or reduce "
+            f"max_windows in the charging profile config."
         )
 
     for i, slot in enumerate(slots):
-        if i == _TARGET_SLOT_INDEX:
+        if i < len(windows_hhmm):
+            start_hhmm, end_hhmm = windows_hhmm[i]
             slot["enabled"]   = True
             slot["startTime"] = start_hhmm
             slot["endTime"]   = end_hhmm
@@ -317,21 +326,49 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
             f"minutes ({plan.get('plan_warning', 'no warning')}). Nothing to deliver."
         )
 
-    if len(windows_start) != 1:
+    if len(windows_start) == 0:
         raise ValueError(
-            f"MySkoda delivery requires exactly one continuous charging window "
-            f"(set max_windows: 1 in the charging profile config). "
-            f"This plan has {len(windows_start)} window(s)."
+            f"MySkoda delivery: plan for profile '{plan.get('profile')}' has no "
+            f"charging windows to deliver."
         )
 
-    # Convert window to local HH:MM
+    # Config-level check: the charging profile's max_windows must be set to a
+    # bounded value that fits the vehicle's 4 preferredChargingTimes slots.
+    # max_windows is written into the plan JSON by charging_planner.py.
+    # None (unbounded) is rejected even if today's plan happens to produce
+    # <= 4 windows — an unbounded profile can produce more than 4 windows on
+    # a different day and fail unpredictably at delivery time.
+    max_windows = plan.get("max_windows")
+    if max_windows is None or max_windows > _MAX_VEHICLE_SLOTS:
+        raise ValueError(
+            f"MySkoda delivery requires the charging profile's max_windows to be "
+            f"set to a value between 1 and {_MAX_VEHICLE_SLOTS} "
+            f"(got {max_windows!r}) — the vehicle has {_MAX_VEHICLE_SLOTS} "
+            f"preferred charging time slots. Set max_windows in the charging "
+            f"profile config."
+        )
+
+    # Defensive runtime check: the plan's actual window count must also fit,
+    # independent of the configured max_windows (belt-and-braces in case the
+    # two ever drift, e.g. an older plan.json generated before this check).
+    if len(windows_start) > _MAX_VEHICLE_SLOTS:
+        raise ValueError(
+            f"MySkoda delivery requires at most {_MAX_VEHICLE_SLOTS} charging "
+            f"windows (the vehicle has {_MAX_VEHICLE_SLOTS} preferred charging "
+            f"time slots). This plan has {len(windows_start)} window(s)."
+        )
+
+    # Convert windows to local HH:MM, in plan order (window 1 -> slot 1, etc.)
     tz = ZoneInfo(tz_name)
-    start_hhmm = _window_to_local_hhmm(windows_start[0], tz)
-    end_hhmm   = _window_to_local_hhmm(windows_end[0],   tz)
+    windows_hhmm = [
+        (_window_to_local_hhmm(s, tz), _window_to_local_hhmm(e, tz))
+        for s, e in zip(windows_start, windows_end)
+    ]
 
     log.info(
-        "MySkoda: delivering profile '%s' -> VIN %s  window %s-%s local (%s)  %d min",
-        plan.get("profile"), vin, start_hhmm, end_hhmm, tz_name, total_minutes,
+        "MySkoda: delivering profile '%s' -> VIN %s  %d window(s): %s  (%s)  %d min",
+        plan.get("profile"), vin, len(windows_hhmm),
+        ", ".join(f"{s}-{e}" for s, e in windows_hhmm), tz_name, total_minutes,
     )
 
     # Step 1: GET current charging profiles and charging state
@@ -362,19 +399,23 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     #
     #   MANUAL / TIMER / TIMER_CHARGING_WITH_CLIMATISATION:
     #     These modes drive the current session — not preferred times.
-    #     Safe to update slot 4 and disable slots 1–3 (they are not active).
+    #     Safe to update slots 1..N with the plan windows and disable any
+    #     unused slots (none of them are active).
     #     Do NOT change the charge mode — don't interrupt the current session logic.
     #
     #   PREFERRED_CHARGING_TIMES:
-    #     One of slots 1–3 (or slot 4) allowed this session to start.
-    #     Safe to update slot 4, but preserve slots 1–3 enabled state to avoid
-    #     interrupting the active session.
+    #     One of the vehicle's slots allowed this session to start — it could
+    #     be one of the slots we're about to overwrite, or one of the unused
+    #     ones. Safe to update slots 1..N with the plan windows (the plan is
+    #     the source of truth for those), but preserve the enabled state of
+    #     any unused slots to avoid interrupting the active session.
     #     Do NOT change the charge mode.
     #
     #   Unknown mode while charging:
     #     Skip delivery entirely — safer than guessing.
     #
-    # If not charging: full delivery — update slot 4, disable slots 1–3, set mode.
+    # If not charging: full delivery — update slots 1..N, disable unused
+    # slots, set mode.
 
     _SAFE_CHARGING_MODES = {"MANUAL", "TIMER", "TIMER_CHARGING_WITH_CLIMATISATION",
                             "PREFERRED_CHARGING_TIMES"}
@@ -398,16 +439,18 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
             preserve_slots = True
             log.info(
                 "MySkoda: vehicle is charging in PREFERRED_CHARGING_TIMES mode — "
-                "updating slot 4 but preserving slots 1–3 to protect the active session."
+                "updating slots 1-%d but preserving unused slots to protect the "
+                "active session.", len(windows_hhmm),
             )
         else:
             log.info(
-                "MySkoda: vehicle is charging in %s mode — updating slot 4 and "
-                "disabling slots 1–3, but not changing charge mode.", active_mode,
+                "MySkoda: vehicle is charging in %s mode — updating slots 1-%d and "
+                "disabling unused slots, but not changing charge mode.",
+                active_mode, len(windows_hhmm),
             )
 
     # Step 4: Build updated profile
-    updated = _build_updated_profile(profile, start_hhmm, end_hhmm,
+    updated = _build_updated_profile(profile, windows_hhmm,
                                      preserve_other_slots=preserve_slots)
 
     # Step 5: PUT updated profile
@@ -431,6 +474,7 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
         log.info("MySkoda: skipping charge mode update (set_charge_mode: false)")
 
     log.info(
-        "Delivery succeeded: profile='%s'  handler='myskoda'  vin='%s'  window=%s-%s",
-        plan.get("profile"), vin, start_hhmm, end_hhmm,
+        "Delivery succeeded: profile='%s'  handler='myskoda'  vin='%s'  windows=%s",
+        plan.get("profile"), vin,
+        ", ".join(f"{s}-{e}" for s, e in windows_hhmm),
     )
