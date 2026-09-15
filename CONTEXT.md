@@ -24,7 +24,7 @@ Fetches day-ahead electricity prices and schedules EV charging for the cheapest 
 | `delivery/deliver.py` | Delivery dispatcher |
 | `delivery/deliver_chargeamps.py` | Charge Amps handler |
 | `delivery/deliver_easee.py` | Easee handler (untested against real hardware) |
-| `delivery/deliver_myskoda.py` | MyŠkoda handler — updates preferred charging time slots 1..N (N = plan windows, max 4) via public API (tested; first delivery with vehicle away from home) |
+| `delivery/deliver_myskoda.py` | MyŠkoda handler — updates preferred charging time slots 1..N (N = plan windows, max 4) via public API; detects and routes around an actively-charging slot when in PREFERRED_CHARGING_TIMES mode (tested; first delivery with vehicle away from home) |
 | `index.html` | GitHub Pages dashboard |
 | `config.yaml` | Configuration template |
 | `.github/workflows/schedule.yml` | Daily GHA workflow |

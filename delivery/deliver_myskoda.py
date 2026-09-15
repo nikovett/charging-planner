@@ -10,6 +10,15 @@ plan window into a preferred charging time slot (window 1 -> slot 1, window
 2 -> slot 2, and so on), disables any unused slots, and sets the charge mode
 to PREFERRED_CHARGING_TIMES.
 
+If the vehicle is actively charging in PREFERRED_CHARGING_TIMES mode, the
+handler detects which slot is driving the current session (by checking which
+enabled slot's time window contains the current local time — the MySkoda API
+does not report this directly) and routes the plan's windows around it,
+leaving that one slot completely untouched. If the active slot can't be
+identified with confidence (no unique match), or there isn't enough room to
+route around it (the plan needs all 4 slots), delivery is skipped entirely
+for that run rather than risk interrupting the session.
+
 Compatible with plans that contain 1 to 4 charging windows — the vehicle has
 exactly 4 preferredChargingTimes slots, so plans with more than 4 windows are
 rejected. Configure the charging profile's max_windows to 4 or fewer (never
@@ -170,6 +179,44 @@ def _find_profile(vehicle_response: dict, profile_name: str | None) -> dict:
     )
 
 
+def _hhmm_to_minutes(hhmm: str) -> int:
+    h, m = map(int, hhmm.split(":"))
+    return h * 60 + m
+
+
+def _time_in_window(now_hhmm: str, start_hhmm: str, end_hhmm: str) -> bool:
+    """True if now_hhmm falls within [start_hhmm, end_hhmm), local time-of-day.
+
+    Handles overnight windows (start > end, e.g. 22:00-06:00) by wrapping
+    around midnight. A zero-length window (start == end) never matches.
+    Half-open interval: matches at exactly start_hhmm, not at exactly
+    end_hhmm — consistent with charging stopping right at the window end.
+    """
+    now, start, end = (_hhmm_to_minutes(x) for x in (now_hhmm, start_hhmm, end_hhmm))
+    if start == end:
+        return False
+    if start < end:
+        return start <= now < end
+    return now >= start or now < end
+
+
+def _find_active_slot_index(slots: list[dict], now_hhmm: str) -> int | None:
+    """Return the index of the single enabled slot whose time window contains
+    now_hhmm, or None if zero or more than one slot matches.
+
+    The MySkoda API does not report which preferredChargingTimes slot is
+    actually driving an active PREFERRED_CHARGING_TIMES session — this is
+    inferred from time overlap instead. A non-unique result (no match, or
+    more than one enabled slot's window contains now) is genuinely ambiguous
+    and callers should treat it as "unknown" rather than guess.
+    """
+    matches = [
+        i for i, s in enumerate(slots)
+        if s.get("enabled") and _time_in_window(now_hhmm, s.get("startTime", ""), s.get("endTime", ""))
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _window_to_local_hhmm(utc_iso: str, tz: ZoneInfo) -> str:
     """Convert a UTC ISO timestamp to local HH:MM for the vehicle's timezone.
 
@@ -182,21 +229,26 @@ def _window_to_local_hhmm(utc_iso: str, tz: ZoneInfo) -> str:
 def _build_updated_profile(
     profile: dict,
     windows_hhmm: list[tuple[str, str]],
-    preserve_other_slots: bool = False,
+    target_slot_indices: list[int] | None = None,
+    protected_slot_index: int | None = None,
 ) -> dict:
     """Return a deep copy of the profile with our charging window(s) applied.
 
     windows_hhmm is an ordered list of (start_hhmm, end_hhmm) tuples, one per
-    plan window (1 to _MAX_VEHICLE_SLOTS entries). Slot index i (0-based) is
-    set to windows_hhmm[i] with enabled=True for i < len(windows_hhmm).
-    Remaining slots are set to enabled=False unless preserve_other_slots=True,
-    in which case their enabled state is left unchanged.
+    plan window. target_slot_indices gives the slot index each window is
+    written to, in the same order (default: positional, 0..len(windows_hhmm)-1
+    — window 1 -> slot 1, window 2 -> slot 2, ...).
 
-    preserve_other_slots=True is used when the vehicle is actively charging
-    in PREFERRED_CHARGING_TIMES mode — one of the unused slots may be driving
-    the current session and disabling it could interrupt the charge. The
-    slots we're actively writing (0..len(windows_hhmm)-1) are still always
-    overwritten, since those are the ones the plan controls.
+    protected_slot_index, if given, is left completely untouched — no enable/
+    disable, no time change — regardless of whether it appears in
+    target_slot_indices (it never should; callers route around it). This is
+    used when the vehicle is actively charging in PREFERRED_CHARGING_TIMES
+    mode via that specific slot: we know precisely which one it is, so we can
+    manage every other slot normally instead of blanket-preserving all of
+    them "just in case."
+
+    Every slot that is neither a target nor protected is disabled (its time
+    is irrelevant once disabled, so it's left as-is).
 
     The full profile is always returned — the API requires the complete profile
     in the PUT body: 'the vehicle applies the submitted profile as a whole'.
@@ -210,28 +262,41 @@ def _build_updated_profile(
             "Add preferred charging time slots in the MySkoda app first."
         )
 
-    if len(windows_hhmm) > len(slots):
+    if target_slot_indices is None:
+        target_slot_indices = list(range(len(windows_hhmm)))
+
+    if len(target_slot_indices) != len(windows_hhmm):
         raise ValueError(
-            f"Plan has {len(windows_hhmm)} charging window(s) but the profile "
-            f"has only {len(slots)} preferred charging time slot(s). "
+            f"target_slot_indices has {len(target_slot_indices)} entries but "
+            f"windows_hhmm has {len(windows_hhmm)} — must match one-to-one."
+        )
+
+    max_target = max(target_slot_indices, default=-1)
+    if max_target >= len(slots):
+        raise ValueError(
+            f"Plan requires slot {max_target + 1} but the profile has only "
+            f"{len(slots)} preferred charging time slot(s). "
             f"Add more preferred time slots in the MySkoda app, or reduce "
             f"max_windows in the charging profile config."
         )
 
+    window_by_slot = dict(zip(target_slot_indices, windows_hhmm))
+
     for i, slot in enumerate(slots):
-        if i < len(windows_hhmm):
-            start_hhmm, end_hhmm = windows_hhmm[i]
+        if i == protected_slot_index:
+            log.info(
+                "MySkoda: slot %d (id=%s) protected — actively driving the "
+                "current charging session, left untouched",
+                i + 1, slot.get("id"),
+            )
+        elif i in window_by_slot:
+            start_hhmm, end_hhmm = window_by_slot[i]
             slot["enabled"]   = True
             slot["startTime"] = start_hhmm
             slot["endTime"]   = end_hhmm
             log.info(
                 "MySkoda: slot %d (id=%s) set to %s-%s enabled=True",
                 i + 1, slot.get("id"), start_hhmm, end_hhmm,
-            )
-        elif preserve_other_slots:
-            log.debug(
-                "MySkoda: slot %d (id=%s) preserved (vehicle charging in PREFERRED_CHARGING_TIMES mode)",
-                i + 1, slot.get("id"),
             )
         else:
             if slot.get("enabled"):
@@ -398,17 +463,22 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     # The safe action depends on the active charge mode (charging.settings.preferredChargeMode):
     #
     #   MANUAL / TIMER / TIMER_CHARGING_WITH_CLIMATISATION:
-    #     These modes drive the current session — not preferred times.
-    #     Safe to update slots 1..N with the plan windows and disable any
-    #     unused slots (none of them are active).
+    #     These modes drive the current session directly — not via a
+    #     preferredChargingTimes slot. Safe to update slots 1..N with the
+    #     plan windows and disable any unused slots.
     #     Do NOT change the charge mode — don't interrupt the current session logic.
     #
     #   PREFERRED_CHARGING_TIMES:
-    #     One of the vehicle's slots allowed this session to start — it could
-    #     be one of the slots we're about to overwrite, or one of the unused
-    #     ones. Safe to update slots 1..N with the plan windows (the plan is
-    #     the source of truth for those), but preserve the enabled state of
-    #     any unused slots to avoid interrupting the active session.
+    #     One specific slot is driving this session, but the API doesn't say
+    #     which one — inferred by checking which enabled slot's time window
+    #     contains the current local time (charging stops at window end, so
+    #     this is a reliable signal, not a guess). If exactly one slot
+    #     matches, plan windows are routed around it (that one slot is left
+    #     completely untouched; every other slot — including ones outside
+    #     the plan's usual 1..N range — is managed normally). If the active
+    #     slot can't be identified, or the plan needs all 4 slots so there's
+    #     no room to route around it, delivery is skipped entirely rather
+    #     than risk touching the active slot.
     #     Do NOT change the charge mode.
     #
     #   Unknown mode while charging:
@@ -424,7 +494,8 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     charging_state    = charging_obj.get("status", {}).get("state", "")
     active_mode       = charging_obj.get("settings", {}).get("preferredChargeMode", "")
     is_charging       = charging_state == "CHARGING"
-    preserve_slots    = False
+    target_indices    = None  # None = positional default (0..N-1)
+    protected_index   = None
     skip_mode_change  = False
 
     if is_charging:
@@ -436,11 +507,38 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
             return
         skip_mode_change = True
         if active_mode == "PREFERRED_CHARGING_TIMES":
-            preserve_slots = True
+            profile_slots = profile.get("preferredChargingTimes", [])
+            now_hhmm = datetime.now(tz).strftime("%H:%M")
+            active_idx = _find_active_slot_index(profile_slots, now_hhmm)
+
+            if active_idx is None:
+                log.warning(
+                    "MySkoda: vehicle is charging in PREFERRED_CHARGING_TIMES mode but "
+                    "the active slot could not be identified (no unique time-window "
+                    "match at %s local) — skipping delivery to avoid interrupting the "
+                    "active session.", now_hhmm,
+                )
+                return
+
+            available = [i for i in range(len(profile_slots)) if i != active_idx]
+            if len(windows_hhmm) > len(available):
+                log.warning(
+                    "MySkoda: vehicle is charging via slot %d (active at %s local) — "
+                    "plan needs %d window(s) but only %d slot(s) remain available "
+                    "with slot %d protected. Skipping delivery to avoid interrupting "
+                    "the active session.",
+                    active_idx + 1, now_hhmm, len(windows_hhmm), len(available),
+                    active_idx + 1,
+                )
+                return
+
+            target_indices  = available[:len(windows_hhmm)]
+            protected_index = active_idx
             log.info(
-                "MySkoda: vehicle is charging in PREFERRED_CHARGING_TIMES mode — "
-                "updating slots 1-%d but preserving unused slots to protect the "
-                "active session.", len(windows_hhmm),
+                "MySkoda: vehicle is charging via slot %d (active at %s local) — "
+                "routing plan window(s) to slot(s) %s, leaving slot %d untouched.",
+                active_idx + 1, now_hhmm,
+                ", ".join(str(i + 1) for i in target_indices), active_idx + 1,
             )
         else:
             log.info(
@@ -451,7 +549,8 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
 
     # Step 4: Build updated profile
     updated = _build_updated_profile(profile, windows_hhmm,
-                                     preserve_other_slots=preserve_slots)
+                                     target_slot_indices=target_indices,
+                                     protected_slot_index=protected_index)
 
     # Step 5: PUT updated profile
     _put_profile(vin, updated, api_key)

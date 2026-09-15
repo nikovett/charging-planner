@@ -114,6 +114,21 @@ preferred charging time slot (window 1 → slot 1, window 2 → slot 2, and so
 on), disables any unused slots (times preserved), and sets the charge mode to
 `PREFERRED_CHARGING_TIMES`.
 
+**Active-session protection.** If the vehicle is actively charging in
+PREFERRED_CHARGING_TIMES mode, the API doesn't say which slot is driving the
+session — the handler infers it by checking which enabled slot's time window
+contains the current local time (charging stops right at the window end, so
+this is a reliable signal). If exactly one slot matches, plan windows are
+routed around it — that slot is left completely untouched (not even its
+enabled flag) while every other slot is managed normally. If the active slot
+can't be identified (no match, or more than one enabled slot's window
+overlaps "now"), or the plan needs all 4 slots so there's no room to route
+around it, delivery is skipped entirely for that run rather than risk
+interrupting the session. Charging in any other mode (MANUAL, TIMER,
+TIMER_CHARGING_WITH_CLIMATISATION) doesn't go through preferredChargingTimes
+slots at all, so all 4 are managed freely — only the charge mode itself is
+left unchanged, to avoid disturbing whatever's driving that session.
+
 **Requires `max_windows` set to a value between 1 and 4** — the vehicle has
 exactly 4 preferred charging time slots. `max_windows: null` (unlimited) is
 rejected even if a given day's plan happens to produce 4 or fewer windows,
@@ -126,8 +141,10 @@ check `X-API-Key-Expires-At` in responses and rotate before expiry. Rate limit:
 20 requests/hour per VIN; delivery uses 3 requests (GET profiles + PUT profile +
 PUT charge mode).
 
-Tested against a real Škoda Enyaq. First delivery confirmed correct in the
-MyŠkoda app (slot 4 updated, slot 1 disabled, charge mode set).
+Tested against a real Škoda Enyaq with a single-window plan. First delivery
+confirmed correct in the MyŠkoda app (slot 1 updated, other slots disabled,
+charge mode set). Multi-window slot routing and active-slot detection are
+covered by unit tests but not yet verified against real hardware.
 
 **Config keys:**
 

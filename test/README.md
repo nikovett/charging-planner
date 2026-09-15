@@ -1,6 +1,6 @@
 # Test Suite
 
-347 tests across four files. Run from the repo root:
+365 tests across four files. Run from the repo root:
 
 ```
 python -m unittest test_charging_planner test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -12,7 +12,7 @@ Or individually:
 python -m unittest test_charging_planner -v       # 252 tests, 3 skipped
 python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
-python -m unittest test_deliver_myskoda -v        # 23 tests
+python -m unittest test_deliver_myskoda -v        # 41 tests
 ```
 
 The 3 skipped tests require a live ENTSO-E API key in the environment and are marked `@unittest.skip`.
@@ -152,10 +152,16 @@ Single window → basic plan, multiple windows → weekly plan, empty plan retur
 
 ---
 
-## test_deliver_myskoda.py (23 tests)
+## test_deliver_myskoda.py (41 tests)
 
-### TestBuildUpdatedProfile (10)
-Direct tests for `_build_updated_profile` — the multi-window slot mapping: one window fills slot 1 only, two windows fill slots 1–2, four windows fill all 4 slots, windows are written positionally (window 1 always → slot 1, regardless of window ordering), unused slots disabled by default, `preserve_other_slots=True` leaves unused slots' enabled state *and* times untouched, more windows than the vehicle has slots raises, no `preferredChargingTimes` entries raises, the input profile dict is never mutated, slot `id` fields are preserved through the update.
+### TestTimeInWindow (8)
+`_time_in_window` — the core primitive for active-slot detection: same-day windows (inside/outside), start is inclusive, end is exclusive (matches charging stopping exactly at window end, not overrunning it), overnight wraparound (both sides of midnight), zero-length windows never match.
+
+### TestFindActiveSlotIndex (5)
+`_find_active_slot_index` — infers which slot is driving an active PREFERRED_CHARGING_TIMES session from time-window overlap (the API doesn't report this directly): a single enabled matching slot is returned, no match returns `None`, a disabled slot with a matching time window never counts, more than one matching enabled slot is treated as ambiguous (`None`) rather than guessed at, empty slot list returns `None`.
+
+### TestBuildUpdatedProfile (12)
+Direct tests for `_build_updated_profile` — the slot mapping: one window fills slot 1 only, two windows fill slots 1–2, four windows fill all 4 slots, windows are written positionally by default (window 1 → slot 1, regardless of window ordering), unused slots disabled by default (times preserved), `protected_slot_index` leaves a specific slot completely untouched (enabled flag *and* both times) even while other slots are written or disabled around it, `target_slot_indices` supports explicit non-contiguous routing (e.g. windows → slots 0 and 2, skipping 1), a `target_slot_indices`/`windows_hhmm` length mismatch raises, more windows than the vehicle has slots raises, no `preferredChargingTimes` entries raises, the input profile dict is never mutated, slot `id` fields are preserved through the update.
 
 ### TestDeliverValidation (7)
 `deliver()` config/plan validation: `max_windows: null` rejected (unbounded profiles are never safe to deliver, even if today's plan happens to fit), `max_windows > 4` rejected, `max_windows` 1 through 4 all accepted, more than 4 *actual* plan windows rejected as a defensive check independent of the configured `max_windows`, zero scheduled minutes rejected, empty window list rejected, missing API key rejected.
@@ -163,5 +169,5 @@ Direct tests for `_build_updated_profile` — the multi-window slot mapping: one
 ### TestDeliverSlotMapping (2)
 End-to-end: three plan windows land in vehicle slots 1–3 with slot 4 left disabled; UTC window times are correctly converted to the vehicle's local timezone before being written.
 
-### TestDeliverChargingState (4)
-Charging-state safety logic: not charging → full delivery (slot update + mode change); charging in MANUAL/TIMER modes → slot update but no mode change; charging in PREFERRED_CHARGING_TIMES → slot update but unused slots' enabled state and times preserved (one of them may be driving the active session), no mode change; charging in an unknown mode → delivery skipped entirely (still reports success, not failure — skipping is the correct outcome, not an error).
+### TestDeliverChargingState (7)
+Charging-state safety logic, including active-slot detection: not charging → full delivery (slot update + mode change); charging in MANUAL/TIMER modes → slot update but no mode change (these modes don't use preferredChargingTimes slots at all, so nothing needs protecting); charging in PREFERRED_CHARGING_TIMES with a uniquely identifiable active slot → plan windows routed around it, that slot left completely untouched, other slots managed normally, no mode change; no time-window match → delivery skipped entirely; an ambiguous match (two enabled slots both overlap "now") → also skipped; active slot identified but the plan needs all 4 slots (no room to route around it) → skipped; charging in an unknown mode → delivery skipped entirely (still reports success, not failure — skipping is the correct outcome, not an error).

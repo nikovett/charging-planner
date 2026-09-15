@@ -3,8 +3,10 @@ Tests for deliver_myskoda.py
 =============================
 Focuses on the multi-window slot mapping (window 1 -> slot 1, window 2 ->
 slot 2, ...), the max_windows / vehicle-slot-count validation, and the
-charging-state safety logic that decides whether to preserve unused slots
-or change the charge mode.
+charging-state safety logic — including active-slot detection when the
+vehicle is charging in PREFERRED_CHARGING_TIMES mode (which specific slot
+is driving the session is inferred from time-window overlap, since the API
+doesn't report it directly).
 
 Run from the repo root:
     python -m unittest test_deliver_myskoda.py -v
@@ -14,12 +16,19 @@ import copy
 import sys
 import unittest
 import unittest.mock as mock
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 sys.path.insert(0, ".")
 sys.path.insert(0, "..")
 
 import deliver_myskoda
-from deliver_myskoda import _build_updated_profile, deliver
+from deliver_myskoda import (
+    _build_updated_profile,
+    _find_active_slot_index,
+    _time_in_window,
+    deliver,
+)
 
 
 # ===========================================================================
@@ -76,6 +85,83 @@ def make_vehicle_response(
             },
         }
     }
+
+
+def frozen_datetime_at(local_dt: datetime) -> type:
+    """A datetime subclass whose .now(tz) always returns local_dt (converted
+    to tz if given). fromisoformat is inherited unchanged, so window
+    conversion elsewhere in the module keeps working normally when this
+    replaces deliver_myskoda.datetime wholesale via mock.patch."""
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return local_dt.astimezone(tz) if tz else local_dt
+    return _Frozen
+
+
+HELSINKI = ZoneInfo("Europe/Helsinki")
+
+
+# ===========================================================================
+# _time_in_window / _find_active_slot_index — pure detection logic
+# ===========================================================================
+
+class TestTimeInWindow(unittest.TestCase):
+
+    def test_same_day_window_inside(self):
+        self.assertTrue(_time_in_window("22:00", "21:00", "23:00"))
+
+    def test_same_day_window_outside(self):
+        self.assertFalse(_time_in_window("20:00", "21:00", "23:00"))
+
+    def test_start_is_inclusive(self):
+        self.assertTrue(_time_in_window("21:00", "21:00", "23:00"))
+
+    def test_end_is_exclusive(self):
+        self.assertFalse(_time_in_window("23:00", "21:00", "23:00"))
+
+    def test_overnight_window_late_side(self):
+        self.assertTrue(_time_in_window("23:30", "22:00", "06:00"))
+
+    def test_overnight_window_early_side(self):
+        self.assertTrue(_time_in_window("02:00", "22:00", "06:00"))
+
+    def test_overnight_window_outside(self):
+        self.assertFalse(_time_in_window("12:00", "22:00", "06:00"))
+
+    def test_zero_length_window_never_matches(self):
+        self.assertFalse(_time_in_window("00:00", "00:00", "00:00"))
+
+
+class TestFindActiveSlotIndex(unittest.TestCase):
+
+    def _slots(self, *, enabled_windows: dict[int, tuple[str, str]], n: int = 4) -> list[dict]:
+        slots = [{"id": f"s{i}", "enabled": False, "startTime": "00:00", "endTime": "00:00"}
+                 for i in range(n)]
+        for i, (start, end) in enabled_windows.items():
+            slots[i] = {"id": f"s{i}", "enabled": True, "startTime": start, "endTime": end}
+        return slots
+
+    def test_single_match_returns_index(self):
+        slots = self._slots(enabled_windows={2: ("21:00", "23:00")})
+        self.assertEqual(_find_active_slot_index(slots, "22:00"), 2)
+
+    def test_no_match_returns_none(self):
+        slots = self._slots(enabled_windows={2: ("21:00", "23:00")})
+        self.assertIsNone(_find_active_slot_index(slots, "12:00"))
+
+    def test_disabled_slot_never_matches(self):
+        slots = self._slots(enabled_windows={})
+        slots[1]["startTime"], slots[1]["endTime"] = "21:00", "23:00"
+        # slot 1 has a matching time window but enabled=False
+        self.assertIsNone(_find_active_slot_index(slots, "22:00"))
+
+    def test_multiple_matches_ambiguous_returns_none(self):
+        slots = self._slots(enabled_windows={0: ("21:00", "23:00"), 2: ("20:00", "23:30")})
+        self.assertIsNone(_find_active_slot_index(slots, "22:00"))
+
+    def test_empty_slots_returns_none(self):
+        self.assertIsNone(_find_active_slot_index([], "22:00"))
 
 
 # ===========================================================================
@@ -138,20 +224,50 @@ class TestBuildUpdatedProfile(unittest.TestCase):
         self.assertFalse(slots[2]["enabled"])
         self.assertFalse(slots[3]["enabled"])
 
-    def test_preserve_other_slots_leaves_unused_slots_untouched(self):
+    def test_protected_slot_index_left_completely_untouched(self):
         profile = make_profile(4)
         profile["preferredChargingTimes"][2]["enabled"] = True
         profile["preferredChargingTimes"][2]["startTime"] = "10:00"
+        profile["preferredChargingTimes"][2]["endTime"] = "12:00"
         updated = _build_updated_profile(
-            profile, [("21:00", "23:00")], preserve_other_slots=True
+            profile, [("21:00", "23:00")],
+            target_slot_indices=[0], protected_slot_index=2,
         )
         slots = updated["preferredChargingTimes"]
-        # Slot we wrote to is still overwritten
+        # Target slot is written as normal
         self.assertTrue(slots[0]["enabled"])
         self.assertEqual(slots[0]["startTime"], "21:00")
-        # Unused slot is untouched — enabled state AND time preserved
+        # Protected slot is untouched — enabled AND both times preserved exactly
         self.assertTrue(slots[2]["enabled"])
         self.assertEqual(slots[2]["startTime"], "10:00")
+        self.assertEqual(slots[2]["endTime"], "12:00")
+        # Slot that is neither target nor protected is disabled as normal
+        self.assertFalse(slots[1]["enabled"])
+        self.assertFalse(slots[3]["enabled"])
+
+    def test_target_slot_indices_custom_non_contiguous_routing(self):
+        # Two plan windows routed to slots 0 and 2 (skipping 1, e.g. because
+        # slot 1 is protected) — mapping is by explicit index, not position.
+        profile = make_profile(4)
+        updated = _build_updated_profile(
+            profile, [("21:00", "22:00"), ("23:00", "00:00")],
+            target_slot_indices=[0, 2],
+        )
+        slots = updated["preferredChargingTimes"]
+        self.assertTrue(slots[0]["enabled"])
+        self.assertEqual((slots[0]["startTime"], slots[0]["endTime"]), ("21:00", "22:00"))
+        self.assertFalse(slots[1]["enabled"])
+        self.assertTrue(slots[2]["enabled"])
+        self.assertEqual((slots[2]["startTime"], slots[2]["endTime"]), ("23:00", "00:00"))
+        self.assertFalse(slots[3]["enabled"])
+
+    def test_mismatched_target_indices_length_raises(self):
+        profile = make_profile(4)
+        with self.assertRaises(ValueError):
+            _build_updated_profile(
+                profile, [("21:00", "22:00"), ("23:00", "00:00")],
+                target_slot_indices=[0],  # only 1 index for 2 windows
+            )
 
     def test_more_windows_than_slots_raises(self):
         profile = make_profile(2)  # only 2 slots configured on vehicle
@@ -318,26 +434,116 @@ class TestDeliverChargingState(unittest.TestCase):
         mock_put.assert_called_once()
         mock_mode.assert_not_called()
 
-    def test_charging_in_preferred_times_preserves_unused_slots(self):
+    def test_charging_in_preferred_times_routes_around_detected_active_slot(self):
+        # Slot 2 is enabled with a window bracketing "now" — that's the one
+        # driving the session. Plan needs 1 window; it should land on the
+        # first available non-active slot (0), and slot 2 must be completely
+        # untouched (not even its enabled flag), while 1 and 3 get disabled.
         profiles = [make_profile(4)]
-        profiles[0]["preferredChargingTimes"][2]["enabled"] = True
-        profiles[0]["preferredChargingTimes"][2]["startTime"] = "10:00"
+        profiles[0]["preferredChargingTimes"][2] = {
+            "id": "s2", "enabled": True, "startTime": "20:00", "endTime": "23:00",
+        }
         vresp = make_vehicle_response(
             profiles=profiles, charging_state="CHARGING",
             active_mode="PREFERRED_CHARGING_TIMES",
         )
-        plan = make_plan(["2026-09-15T21:00:00Z"], ["2026-09-15T23:00:00Z"],
+        plan = make_plan(["2026-09-15T18:00:00Z"], ["2026-09-15T19:00:00Z"],
                          max_windows=1)
+        frozen_now = datetime(2026, 9, 15, 21, 30, tzinfo=HELSINKI)  # inside slot 2's window
         with mock.patch.dict("os.environ", {"SKODA_API_KEY": "key"}), \
              mock.patch("deliver_myskoda._get_charging_profiles", return_value=vresp), \
              mock.patch("deliver_myskoda._put_profile") as mock_put, \
-             mock.patch("deliver_myskoda._put_charge_mode") as mock_mode:
+             mock.patch("deliver_myskoda._put_charge_mode") as mock_mode, \
+             mock.patch("deliver_myskoda.datetime", frozen_datetime_at(frozen_now)):
             result = deliver(plan, "VIN123", make_entry(), "Europe/Helsinki")
         self.assertTrue(result)
         mock_mode.assert_not_called()
-        profile_arg = mock_put.call_args[0][1]
-        self.assertTrue(profile_arg["preferredChargingTimes"][2]["enabled"])
-        self.assertEqual(profile_arg["preferredChargingTimes"][2]["startTime"], "10:00")
+        mock_put.assert_called_once()
+        slots = mock_put.call_args[0][1]["preferredChargingTimes"]
+        # Protected slot 2: completely untouched, exact original times
+        self.assertTrue(slots[2]["enabled"])
+        self.assertEqual(slots[2]["startTime"], "20:00")
+        self.assertEqual(slots[2]["endTime"], "23:00")
+        # Plan window routed to first available slot (0)
+        self.assertTrue(slots[0]["enabled"])
+        # Unused slots disabled
+        self.assertFalse(slots[1]["enabled"])
+        self.assertFalse(slots[3]["enabled"])
+
+    def test_charging_in_preferred_times_no_match_skips_delivery(self):
+        # No enabled slot's window contains "now" — can't identify the
+        # active slot, so delivery must be skipped entirely.
+        profiles = [make_profile(4)]
+        profiles[0]["preferredChargingTimes"][2] = {
+            "id": "s2", "enabled": True, "startTime": "01:00", "endTime": "02:00",
+        }
+        vresp = make_vehicle_response(
+            profiles=profiles, charging_state="CHARGING",
+            active_mode="PREFERRED_CHARGING_TIMES",
+        )
+        plan = make_plan(["2026-09-15T18:00:00Z"], ["2026-09-15T19:00:00Z"],
+                         max_windows=1)
+        frozen_now = datetime(2026, 9, 15, 21, 30, tzinfo=HELSINKI)  # matches nothing
+        with mock.patch.dict("os.environ", {"SKODA_API_KEY": "key"}), \
+             mock.patch("deliver_myskoda._get_charging_profiles", return_value=vresp), \
+             mock.patch("deliver_myskoda._put_profile") as mock_put, \
+             mock.patch("deliver_myskoda._put_charge_mode") as mock_mode, \
+             mock.patch("deliver_myskoda.datetime", frozen_datetime_at(frozen_now)):
+            result = deliver(plan, "VIN123", make_entry(), "Europe/Helsinki")
+        self.assertTrue(result)  # skip is not a failure
+        mock_put.assert_not_called()
+        mock_mode.assert_not_called()
+
+    def test_charging_in_preferred_times_ambiguous_match_skips_delivery(self):
+        # Two enabled slots both bracket "now" — genuinely ambiguous.
+        profiles = [make_profile(4)]
+        profiles[0]["preferredChargingTimes"][0] = {
+            "id": "s0", "enabled": True, "startTime": "20:00", "endTime": "23:00",
+        }
+        profiles[0]["preferredChargingTimes"][2] = {
+            "id": "s2", "enabled": True, "startTime": "19:00", "endTime": "23:30",
+        }
+        vresp = make_vehicle_response(
+            profiles=profiles, charging_state="CHARGING",
+            active_mode="PREFERRED_CHARGING_TIMES",
+        )
+        plan = make_plan(["2026-09-15T18:00:00Z"], ["2026-09-15T19:00:00Z"],
+                         max_windows=1)
+        frozen_now = datetime(2026, 9, 15, 21, 30, tzinfo=HELSINKI)
+        with mock.patch.dict("os.environ", {"SKODA_API_KEY": "key"}), \
+             mock.patch("deliver_myskoda._get_charging_profiles", return_value=vresp), \
+             mock.patch("deliver_myskoda._put_profile") as mock_put, \
+             mock.patch("deliver_myskoda._put_charge_mode") as mock_mode, \
+             mock.patch("deliver_myskoda.datetime", frozen_datetime_at(frozen_now)):
+            result = deliver(plan, "VIN123", make_entry(), "Europe/Helsinki")
+        self.assertTrue(result)
+        mock_put.assert_not_called()
+        mock_mode.assert_not_called()
+
+    def test_charging_in_preferred_times_no_room_skips_delivery(self):
+        # Active slot identified, but the plan needs all 4 slots — only 3
+        # remain available once the active one is protected. No room.
+        profiles = [make_profile(4)]
+        profiles[0]["preferredChargingTimes"][2] = {
+            "id": "s2", "enabled": True, "startTime": "20:00", "endTime": "23:00",
+        }
+        vresp = make_vehicle_response(
+            profiles=profiles, charging_state="CHARGING",
+            active_mode="PREFERRED_CHARGING_TIMES",
+        )
+        starts = [f"2026-09-15T{h:02d}:00:00Z" for h in (10, 11, 12, 13)]
+        ends   = [f"2026-09-15T{h:02d}:30:00Z" for h in (10, 11, 12, 13)]
+        plan = make_plan(starts, ends, max_windows=4, total_minutes=120)
+        frozen_now = datetime(2026, 9, 15, 21, 30, tzinfo=HELSINKI)
+        with mock.patch.dict("os.environ", {"SKODA_API_KEY": "key"}), \
+             mock.patch("deliver_myskoda._get_charging_profiles", return_value=vresp), \
+             mock.patch("deliver_myskoda._put_profile") as mock_put, \
+             mock.patch("deliver_myskoda._put_charge_mode") as mock_mode, \
+             mock.patch("deliver_myskoda.datetime", frozen_datetime_at(frozen_now)):
+            result = deliver(plan, "VIN123", make_entry(), "Europe/Helsinki")
+        self.assertTrue(result)
+        mock_put.assert_not_called()
+        mock_mode.assert_not_called()
 
     def test_charging_in_unknown_mode_skips_delivery_entirely(self):
         result, mock_put, mock_mode = self._run("CHARGING", "SOME_NEW_MODE")
