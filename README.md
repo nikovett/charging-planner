@@ -6,21 +6,19 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 ## What makes this different
 
-**Build once, deliver once, charge unsupervised.** Day-ahead prices are published every afternoon for the following day — only information needed to plan the entire next charging cycle in one go. The result is a charging profile delivered directly to the charger. No further monitoring, no on/off toggling, no always-on process needed.
+**Build once, deliver once, charge unsupervised.** Day-ahead prices are published every afternoon for the following day — only information needed to plan the entire next charging cycle in one go. The result is a plan delivered once to whatever target is configured. No further monitoring, no on/off toggling, no always-on process needed.
 
 **Zero extra hardware required.** Runs as a GitHub Actions cron job — no server, no hub, no Raspberry Pi. Day-ahead prices publish on a predictable schedule, making this a natural fit for a cloud cron. Local cron works too if preferred.
 
-**Globally optimal scheduling.** Continuous mode finds the cheapest unbroken block ending at departure time. Split mode uses dynamic programming to evaluate every valid combination of blocks across 96 price slots per day. The cheapest combination is rarely obvious to a human eye, and even harder to find manually as prices fluctuate every 15 minutes.
+**Globally optimal scheduling.** `max_windows: 1` finds the cheapest unbroken block ending at departure time. `max_windows: null` (or a higher bound) uses dynamic programming to evaluate every valid combination of blocks across 96 price slots per day. The cheapest combination is rarely obvious to a human eye, and even harder to find manually as prices fluctuate every 15 minutes.
 
-**Works with any car.** The planner schedules the charger, not the car. No car integration, no brand-specific API, no pairing required. Swap cars and nothing changes — the charger infrastructure stays the same and the planner keeps working exactly as before.
+**The planner and the delivery target are fully separate.** The planner only ever produces a plan — a list of cheapest charging windows — with no knowledge of chargers or cars. Delivery is a separate, pluggable step that hands the plan to whichever target is configured. New targets mean a new handler, never a change to the planner.
 
-**Modular charger delivery.** Each charger type is a small handler script with a single deliver function. Charge Amps and Easee handlers are included out of the box — a home automation system, a custom API, or any other target can be added without touching the core planner.
+**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging window; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and delivery target — all from one config file. Both the preferred charging window and required hours can be configured per day of the week within each profile.
 
-**Fits any setup, any schedule.** A 3.7 kW charger needs long overnight charging window; a 22 kW charger benefits from hunting the cheapest short charging windows wherever they fall. Run multiple profiles simultaneously — weekday topup, weekend overnight, each with its own duration, window, mode, and charger — all from one config file. Both the preferred charging window and required hours can be configured per day of the week within each profile.
+**Realistic charging behaviour built in.** Independent minimum charging length and minimum gap between charging blocks prevent short on/off cycling — by default the planner won't schedule 15 minutes on, 15 minutes off, on again. The minimum block length and gap are both configurable; the gap can be set to zero if no pause between blocks is needed.
 
-**Realistic charger behaviour built in.** Independent minimum charging length and minimum gap between charging blocks prevent short on/off cycling — by default the planner won't schedule 15 minutes on, 15 minutes off, on again. The minimum block length and gap are both configurable; the gap can be set to zero if no pause between blocks is needed.
-
-**Previously committed charging is never lost.** If a new plan is built before all charging slots from the previous plan have taken place, the remaining uncommitted charging time is added on top of the new plan's requirement. The scheduler then finds the cheapest slots for the full combined need — so the charger never loses charging time it was already told to expect.
+**Previously committed charging is never lost.** If a new plan is built before all charging slots from the previous plan have taken place, the remaining uncommitted charging time is added on top of the new plan's requirement. The scheduler then finds the cheapest slots for the full combined need — so nothing already committed to a delivery target is lost.
 
 **Area-aware price source fallback.** The fallback chain is built from the configured area: FI uses ENTSO-E → Elering → Sähkötin → forecast; EE/LV/LT use ENTSO-E → Elering; SE1–SE4 use ENTSO-E → elprisetjustnu.se; NO1–NO5 use ENTSO-E → hvakosterstrommen.no. Sources outside the area's chain are never tried. The dashboard warns when the plan is based on forecast rather than confirmed prices.
 
@@ -67,7 +65,7 @@ No other dependencies. The script otherwise uses only the standard library, incl
 
 ## Configuration
 
-All configuration lives in a single `config.yaml` file. Deliveries are configured inside each charging profile, so the relationship between a plan and its chargers is explicit and co-located.
+All configuration lives in a single `config.yaml` file. Deliveries are configured inside each charging profile, so the relationship between a plan and its delivery targets is explicit and co-located.
 
 ### Multiple profiles with deliveries
 
@@ -130,8 +128,8 @@ charging:
 | `charging.min_slot_minutes` | `30` | Minimum continuous block length. The charger should not run for less than this duration. Must be 15 minutes or more and a multiple of 15 (the price slot resolution) |
 | `charging.min_gap_minutes` | `15` | Minimum gap between charging blocks. Prevents the charger toggling off and straight back on. Must be a multiple of 15. `0` = no gap constraint. Can be set independently of `min_slot_minutes` — e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling. `"avg"` = dynamic daily market average — ceiling is set to today's average price at plan time |
-| `charging.preferred_window_start` | `any` | Start of preferred charging window (`HH:MM`), or `any`. `any` start = use all slots from script run time. `any` + `HH:MM` end = charge anytime until departure time. Both `any` = no constraint. |
-| `charging.preferred_window_end` | `any` | End of preferred charging window (`HH:MM`), or `any`. If earlier than `preferred_window_start` the window wraps midnight. Use `23:45` for end of day. `HH:MM` start + `any` end = charge from that time until last available price. Both `any` = no constraint. |
+| `charging.preferred_window_start` | `00:00` | Start of preferred charging window (`HH:MM`), or `any`. `any` start = use all slots from script run time. `any` + `HH:MM` end = charge anytime until departure time. Both `any` = no constraint. |
+| `charging.preferred_window_end` | `23:59` | End of preferred charging window (`HH:MM`), or `any`. If earlier than `preferred_window_start` the window wraps midnight. Use `23:45` for end of day. `HH:MM` start + `any` end = charge from that time until last available price. Both `any` = no constraint. |
 | `deliveries[].enabled` | `true` | Set to `false` to temporarily disable a delivery entry without removing it from config. |
 | `charging.schedule` | `[]` | Optional list of day-specific overrides. Each entry has a `days` list (`monday`–`sunday`) and optionally `preferred_window_start`, `preferred_window_end`, and `required_hours`. Any of these can be omitted to fall back to the top-level value. The first matching entry for the target day is used. |
 
@@ -159,26 +157,6 @@ Days not listed in `schedule` use the top-level preferred window.
 **Dynamic price ceiling** — setting `max_price_cents_kwh: "avg"` uses today's market average as the ceiling, resolved at plan time from the available price data. This avoids hardcoding a number that may become stale as market conditions change. A partial plan is still possible if all slots in the window happen to be above the average, but this is uncommon in practice.
 
 **Guaranteed charge until departure time** — setting `required_hours` longer than the window with `max_windows: 1` ensures the block always ends exactly at `preferred_window_end`. Not applicable when using `any`.
-
----
-
-## Charger delivery
-
-Delivery is handled by `delivery/deliver.py`, which reads the `deliveries:` block inside each charging profile and dispatches each plan to the correct handler. Three handlers are included out of the box:
-
-| Handler | Script | Description |
-|---|---|---|
-| `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API — tested and supported |
-| `easee` | `delivery/deliver_easee.py` | Delivers via the official Easee API — untested |
-| `myskoda` | `delivery/deliver_myskoda.py` | Delivers via the MyŠkoda Public API — updates preferred charging time on the vehicle directly |
-
-The `chargeamps` handler always reads the connector state before delivery. If the car is actively charging, schedule override is activated after delivery so the current session is not interrupted — the override expires automatically when the cable is disconnected.
-
-`restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
-
-The `myskoda` handler writes each plan window into a preferred charging time slot on the vehicle's charging profile (window 1 → slot 1, window 2 → slot 2, and so on, up to the vehicle's 4 slots), disables any unused slots, and sets the charge mode to `PREFERRED_CHARGING_TIMES`. If the vehicle is actively charging via a preferred-times slot, the handler detects which one (by time-window overlap with the current local time, since the API doesn't report this directly) and routes plan windows around it, leaving that slot completely untouched — delivery is skipped entirely if the active slot can't be identified or there's no room to avoid it. It requires a `SKODA_VIN` env var (the VIN, via `charge_point_id`) and a `SKODA_API_KEY` env var (API key from the MyŠkoda app at `go.skoda.eu/api-keys`). Requires `max_windows` set to a value between 1 and 4 — the vehicle has exactly 4 preferred charging time slots, so `max_windows: null` (unlimited) is rejected even if a given day's plan happens to fit.
-
-New handlers can be added by creating a `deliver_<n>.py` script in the `delivery/` directory with a single `deliver(plan, charge_point_id, entry, timezone) -> bool` function — the dispatcher handles the rest automatically.
 
 ---
 
@@ -218,7 +196,7 @@ After every successful real-price fetch, the planner always fetches up to 24 hou
 
 ## Dashboard
 
-A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan JSONs from `data/` and `config.yaml` directly from the repository — no token or backend needed.
+A GitHub Pages dashboard is included at `index.html`. It fetches the latest plan JSONs and `config.json` from `data/` directly from the repository — no token or backend needed.
 
 Features:
 
@@ -240,6 +218,26 @@ Features:
 
 To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose `main` and `/ (root)`. The site will be live at `https://<username>.github.io/<repo>/`.
 
+
+---
+
+## Delivery
+
+The planner never talks to a charger or a vehicle — it only writes plan JSON. `delivery/deliver.py` is the separate step that reads the `deliveries:` block inside each charging profile and dispatches the plan to the right handler. Three handlers are included out of the box:
+
+| Handler | Script | Description |
+|---|---|---|
+| `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API — tested and supported |
+| `easee` | `delivery/deliver_easee.py` | Delivers via the official Easee API — untested |
+| `myskoda` | `delivery/deliver_myskoda.py` | Delivers via the MyŠkoda Public API — writes to the vehicle's own charging profile instead of a charger |
+
+The `chargeamps` handler always reads the connector state before delivery. If the car is actively charging, schedule override is activated after delivery so the current session is not interrupted — the override expires automatically when the cable is disconnected.
+
+`restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
+
+The `myskoda` handler writes each plan window into a preferred charging time slot on the vehicle's charging profile (window 1 → slot 1, window 2 → slot 2, and so on, up to the vehicle's 4 slots), disables any unused slots, and sets the charge mode to `PREFERRED_CHARGING_TIMES`. If the vehicle is actively charging via a preferred-times slot, the handler detects which one (by time-window overlap with the current local time, since the API doesn't report this directly) and routes plan windows around it, leaving that slot completely untouched — delivery is skipped entirely if the active slot can't be identified or there's no room to avoid it. It requires a `SKODA_VIN` env var (the VIN, via `charge_point_id`) and a `SKODA_API_KEY` env var (API key from the MyŠkoda app at `go.skoda.eu/api-keys`). Requires `max_windows` set to a value between 1 and 4 — the vehicle has exactly 4 preferred charging time slots, so `max_windows: null` (unlimited) is rejected even if a given day's plan happens to fit.
+
+New handlers can be added by creating a `deliver_<n>.py` script in the `delivery/` directory with a single `deliver(plan, charge_point_id, entry, timezone) -> bool` function — the dispatcher handles the rest automatically.
 
 ---
 
@@ -273,10 +271,14 @@ Settings → Secrets and variables → Actions → New repository secret
 | `CHARGER_PASSWORD` | Charge Amps or Easee login password |
 | `CHARGER_ID_1` | First charger ID |
 | `CHARGER_ID_2` | Second charger ID (if applicable) |
+| `SKODA_VIN` | Vehicle VIN — only needed for the `myskoda` handler |
+| `SKODA_API_KEY` | MyŠkoda app API key — only needed for the `myskoda` handler |
+
+Which secrets you actually need depends on which handlers are configured — see Delivery above.
 
 Never commit secrets to the repository. All sensitive values are injected at runtime as environment variables — `config.yaml` keeps only empty placeholders.
 
-The workflow runs daily at 10:30 UTC. GHA consistently delays ~1 hour, landing at ~14:30 Helsinki time in summer (EEST, UTC+3). Prices publish at ~11:00 UTC so even without GHA delay the run lands after publication.
+The workflow runs daily at 12:27 UTC (15:27 EEST / 14:27 EET). GHA typically delays 30–60 minutes, landing around 16:00 local time in summer. Prices publish at ~11:00 UTC so the run lands well after publication even without any GHA delay.
 
 If ENTSO-E is unavailable or prices aren't published yet, the planner automatically tries Elering, then Sähkötin, then the nordpool-predict-fi forecast. If all sources fail, the run exits with a non-zero code — the GHA job is marked as failed and the operator receives an email. Once prices are available the next scheduled run will succeed.
 
@@ -308,6 +310,7 @@ One `plan-{name}.json` file is written per profile:
   },
   "required_minutes": 360,
   "retained_minutes": 30,
+  "max_windows": 1,
   "total_minutes": 390,
   "avg_price_cents_kwh": 0.91,
   "avg_optimal_price_cents_kwh": 0.91,
@@ -328,6 +331,7 @@ One `plan-{name}.json` file is written per profile:
     { "start_utc": "2026-03-14T22:00:00+00:00", "price_cents_kwh": 0.91, "charging": true, "optimal": true },
     ...
   ],
+  "plan_warning": null,
   "ocpp_charging_profile": { ... }
 }
 ```
