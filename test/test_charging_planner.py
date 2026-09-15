@@ -44,6 +44,7 @@ from charging_planner import (
     _resolve_schedule_window,
     _resolve_window_utc,
     _select_spillover,
+    _select_with_max_windows,
     _gha_fmt_hours,
     _gha_summary_header,
     _gha_summary_profile,
@@ -56,6 +57,7 @@ from charging_planner import (
     print_plan_summary,
     select_charging_windows,
     validate_plan_config,
+    write_config_json,
     write_gha_summary,
 )
 
@@ -93,7 +95,7 @@ def make_config(**overrides) -> Config:
     defaults = dict(
         api_key="test", area="FI", name="test",
         required_minutes=120,
-        continuous_only=False,
+        max_windows=None,
         min_slot_minutes=30,
         max_price_eur=None,
         preferred_window_start="00:00",
@@ -197,6 +199,35 @@ class TestConfigValidation(unittest.TestCase):
 
     def test_null_price_ceiling_valid(self):
         validate_plan_config(self._cfg(max_price_cents_kwh=None))
+
+    def test_null_max_windows_valid(self):
+        validate_plan_config(self._cfg(max_windows=None))
+
+    def test_positive_int_max_windows_valid(self):
+        validate_plan_config(self._cfg(max_windows=1))
+        validate_plan_config(self._cfg(max_windows=3))
+
+    def test_zero_max_windows_raises(self):
+        with self.assertRaises(ConfigError):
+            validate_plan_config(self._cfg(max_windows=0))
+
+    def test_negative_max_windows_raises(self):
+        with self.assertRaises(ConfigError):
+            validate_plan_config(self._cfg(max_windows=-1))
+
+    def test_float_max_windows_raises(self):
+        with self.assertRaises(ConfigError):
+            validate_plan_config(self._cfg(max_windows=1.5))
+
+    def test_bool_max_windows_raises(self):
+        # bool is a subclass of int in Python — must be explicitly rejected
+        # so a YAML `max_windows: true` doesn't silently become 1.
+        with self.assertRaises(ConfigError):
+            validate_plan_config(self._cfg(max_windows=True))
+
+    def test_string_max_windows_raises(self):
+        with self.assertRaises(ConfigError):
+            validate_plan_config(self._cfg(max_windows="unlimited"))
 
 
 class TestAvgPriceCeiling(unittest.TestCase):
@@ -637,10 +668,10 @@ class TestSelectChargingWindows(unittest.TestCase):
         cheap_starts = {slots[i].start for i in [4, 5, 6, 7]}
         self.assertTrue(all(s.start in cheap_starts for s in selected))
 
-    def test_continuous_only_returns_one_block(self):
+    def test_max_windows_1_returns_one_block(self):
         slots = self._slots(24)
         selected = select_charging_windows(slots, required_minutes=60,
-                                           continuous_only=True)
+                                           max_windows=1)
         groups = _group_continuous(sorted(selected, key=lambda s: s.start))
         self.assertEqual(len(groups), 1)
 
@@ -727,7 +758,7 @@ class TestSelectSpillover(unittest.TestCase):
         ws, we = self._window_utc("00:00", "06:00")
         result = _select_spillover(
             outside=[], selected=selected,
-            continuous_only=False, win_end_utc=we, win_end_local="06:00",
+            max_windows=None, win_end_utc=we, win_end_local="06:00",
             required_minutes=120, remaining=0,
             max_price_eur=None, min_slot_minutes=30, all_prices=selected,
         )
@@ -741,7 +772,7 @@ class TestSelectSpillover(unittest.TestCase):
         inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 8)
         result = _select_spillover(
             outside=outside, selected=inside,
-            continuous_only=False, win_end_utc=we, win_end_local="04:00",
+            max_windows=None, win_end_utc=we, win_end_local="04:00",
             required_minutes=240, remaining=120,
             max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
         )
@@ -757,7 +788,7 @@ class TestSelectSpillover(unittest.TestCase):
         outside = slots_from(outside_base, 8)
         result = _select_spillover(
             outside=outside, selected=inside,
-            continuous_only=True, win_end_utc=we, win_end_local="05:00",
+            max_windows=1, win_end_utc=we, win_end_local="05:00",
             required_minutes=300, remaining=120,
             max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
         )
@@ -776,7 +807,7 @@ class TestSelectSpillover(unittest.TestCase):
         inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 7)  # 7 slots = 105 min
         result = _select_spillover(
             outside=outside, selected=inside,
-            continuous_only=False, win_end_utc=we, win_end_local="04:00",
+            max_windows=None, win_end_utc=we, win_end_local="04:00",
             required_minutes=120, remaining=15,
             max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
         )
@@ -791,7 +822,7 @@ class TestSelectSpillover(unittest.TestCase):
         inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 4)
         result = _select_spillover(
             outside=outside, selected=inside,
-            continuous_only=False, win_end_utc=we, win_end_local="04:00",
+            max_windows=None, win_end_utc=we, win_end_local="04:00",
             required_minutes=120, remaining=60,
             max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
         )
@@ -1295,6 +1326,171 @@ class TestSelectWithMinBlock(unittest.TestCase):
                 }, output_dir="/tmp")
         self.assertEqual(ctx.exception.code, 1)
 
+
+# ===========================================================================
+# 9b. Bounded window-count selection (max_windows >= 2)
+# ===========================================================================
+
+class TestSelectWithMaxWindows(unittest.TestCase):
+    """Direct tests for _select_with_max_windows (max_windows >= 2) and its
+    dispatch from select_charging_windows / _select_with_max_windows equivalence
+    to the max_windows=1 and max_windows=None paths at their boundaries."""
+
+    def _slots(self, count=32, price_cents=5.0):
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        return slots_from(base, count, price_cents=price_cents)
+
+    def test_uses_at_most_max_windows_blocks(self):
+        # Four separated cheap clusters, but max_windows=2 — only 2 may be used.
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        cluster = lambda offset_min, price: slots_from(
+            base + timedelta(minutes=offset_min), 2, price_cents=price)
+        filler = lambda offset_min, count: slots_from(
+            base + timedelta(minutes=offset_min), count, price_cents=9.0)
+        slots = (
+            cluster(0,   1.0) + filler(30,  1) +
+            cluster(45,  1.1) + filler(75,  1) +
+            cluster(90,  1.2) + filler(120, 1) +
+            cluster(135, 1.3) + filler(165, 1)
+        )
+        selected = select_charging_windows(
+            slots, required_minutes=120, max_windows=2, min_slot_minutes=30,
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        self.assertLessEqual(len(groups), 2)
+        total = sum(s.duration_minutes for s in selected)
+        self.assertEqual(total, 120)
+
+    def test_picks_cheapest_two_of_four_clusters(self):
+        # Same four clusters as above, ranked by price — with max_windows=2 the
+        # two CHEAPEST clusters (1.0 and 1.1 c/kWh) should be chosen over the
+        # two more expensive ones (1.2 and 1.3 c/kWh).
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        cluster = lambda offset_min, price: slots_from(
+            base + timedelta(minutes=offset_min), 2, price_cents=price)
+        filler = lambda offset_min, count: slots_from(
+            base + timedelta(minutes=offset_min), count, price_cents=9.0)
+        c1 = cluster(0,   1.0)
+        c2 = cluster(45,  1.1)
+        c3 = cluster(90,  1.2)
+        c4 = cluster(135, 1.3)
+        slots = c1 + filler(30, 1) + c2 + filler(75, 1) + c3 + filler(120, 1) + c4
+
+        selected = select_charging_windows(
+            slots, required_minutes=60, max_windows=2, min_slot_minutes=30,
+        )
+        selected_starts = {s.start for s in selected}
+        expected_starts = {s.start for s in c1 + c2}
+        self.assertEqual(selected_starts, expected_starts)
+
+    def test_max_windows_1_matches_best_continuous_window(self):
+        slots = self._slots(32, price_cents=5.0)
+        for i in [10, 11, 12, 13]:
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        via_dispatch = select_charging_windows(
+            slots, required_minutes=60, max_windows=1,
+        )
+        direct = _best_continuous_window(slots, slots, n_slots=4)
+        self.assertEqual(
+            [s.start for s in via_dispatch], [s.start for s in direct]
+        )
+
+    def test_max_windows_none_matches_unbounded(self):
+        slots = self._slots(32, price_cents=5.0)
+        for i in [4, 5, 20, 21]:
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        via_none = select_charging_windows(
+            slots, required_minutes=60, max_windows=None, min_slot_minutes=30,
+        )
+        via_unbounded_call = select_charging_windows(
+            slots, required_minutes=60, min_slot_minutes=30,
+        )
+        self.assertEqual(
+            [s.start for s in via_none], [s.start for s in via_unbounded_call]
+        )
+
+    def test_generous_max_windows_matches_unbounded_result(self):
+        # max_windows set far higher than could ever be used should give the
+        # same result as the unbounded (max_windows=None) path.
+        slots = self._slots(32, price_cents=5.0)
+        for i in [4, 5, 20, 21]:
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        via_generous = select_charging_windows(
+            slots, required_minutes=60, max_windows=50, min_slot_minutes=30,
+        )
+        via_unbounded = select_charging_windows(
+            slots, required_minutes=60, max_windows=None, min_slot_minutes=30,
+        )
+        self.assertEqual(
+            [s.start for s in via_generous], [s.start for s in via_unbounded]
+        )
+
+    def test_min_gap_minutes_respected_across_windows(self):
+        # Two cheap clusters separated by a gap shorter than min_gap_minutes —
+        # with max_windows=2 the algorithm must still respect the gap floor
+        # (same rule as the unbounded DP).
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        block_a = slots_from(base, 2, price_cents=1.0)
+        gap     = slots_from(base + timedelta(minutes=30), 1, price_cents=9.0)
+        block_b = slots_from(base + timedelta(minutes=45), 2, price_cents=1.0)
+        rest    = slots_from(base + timedelta(minutes=75), 8, price_cents=5.0)
+        all_slots = block_a + gap + block_b + rest
+
+        selected = select_charging_windows(
+            all_slots, required_minutes=60, max_windows=2,
+            min_slot_minutes=30, min_gap_minutes=30,
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for i in range(len(groups) - 1):
+            gap_min = int(
+                (groups[i + 1][0].start - groups[i][-1].end).total_seconds() / 60
+            )
+            self.assertGreaterEqual(
+                gap_min, 30,
+                f"Gap of {gap_min} min between blocks violates min_gap_minutes=30"
+            )
+
+    def test_min_slot_minutes_respected_per_block(self):
+        slots = self._slots(32, price_cents=5.0)
+        selected = select_charging_windows(
+            slots, required_minutes=120, max_windows=3, min_slot_minutes=30,
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for group in groups:
+            self.assertGreaterEqual(len(group) * 15, 30)
+
+    def test_infeasible_window_budget_returns_empty(self):
+        # 8 isolated single 15-min cheap slots (none adjacent), min_slot_minutes=30
+        # means every block needs 2 slots — with max_windows=1 that's impossible
+        # since no two candidates are contiguous. Should return [] cleanly, not raise.
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        slots = []
+        for i in range(8):
+            cheap = slots_from(base + timedelta(minutes=i * 30), 1, price_cents=1.0)
+            slots += cheap
+        selected = _select_with_max_windows(
+            slots, n_slots=2, min_slots_per_block=2, min_slots_per_gap=0, max_windows=1,
+        )
+        self.assertEqual(selected, [])
+
+    def test_all_same_price_latest_preferred(self):
+        # Mirrors TestSelectWithMinBlock's tiebreak test — with all slots at the
+        # same price, later slots should be preferred.
+        slots = self._slots(16, price_cents=3.0)
+        selected = select_charging_windows(
+            slots, required_minutes=30, max_windows=2, min_slot_minutes=30,
+        )
+        srt = sorted(selected, key=lambda s: s.start)
+        self.assertEqual(srt[0].start, slots[-2].start)
+
+    def test_empty_candidates_returns_empty(self):
+        self.assertEqual(
+            _select_with_max_windows([], n_slots=4, min_slots_per_block=2,
+                                     min_slots_per_gap=0, max_windows=2),
+            [],
+        )
+
+
 # ===========================================================================
 # 10. End-to-end pipeline
 # ===========================================================================
@@ -1333,7 +1529,7 @@ class TestEndToEnd(unittest.TestCase):
             {
                 "name": "topup",
                 "required_hours": 2,
-                "continuous_only": False,
+                "max_windows": None,
                 "min_slot_minutes": 30,
                 "preferred_window_start": "00:00",
                 "preferred_window_end": "06:30",
@@ -1341,7 +1537,7 @@ class TestEndToEnd(unittest.TestCase):
             {
                 "name": "overnight",
                 "required_hours": 6,
-                "continuous_only": True,
+                "max_windows": 1,
                 "min_slot_minutes": 30,
                 "preferred_window_start": "22:00",
                 "preferred_window_end": "06:30",
@@ -1925,7 +2121,7 @@ class TestRealEntsoEData(unittest.TestCase):
         ws, we = _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=anchor)
         inside, _ = filter_preferred_window(slots, ws, we, "00:00", "06:30")
         selected = select_charging_windows(inside, required_minutes=360,
-                                           continuous_only=True,
+                                           max_windows=1,
                                            min_slot_minutes=30)
         self.assertEqual(sum(s.duration_minutes for s in selected), 360)
         for s in selected:
@@ -2677,6 +2873,61 @@ class TestWriteGhaSummary(unittest.TestCase):
         with mock.patch.dict("os.environ",
                              {"GITHUB_STEP_SUMMARY": "/nonexistent/path/summary.md"}):
             write_gha_summary([_make_output_plan()])  # must not raise
+
+
+class TestWriteConfigJson(unittest.TestCase):
+    """Regression coverage: config.json is committed to the repo by the GHA
+    workflow, so a real ENTSOE_API_KEY merged in from the environment
+    (see load_config) must never reach the written file."""
+
+    def _read(self, tmpdir):
+        with open(os.path.join(tmpdir, "config.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_real_api_key_is_redacted(self):
+        raw_config = {
+            "entsoe": {"api_key": "super-secret-real-key", "area": "FI"},
+            "charging": [{"name": "topup", "required_hours": 2}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_config_json(raw_config, tmpdir)
+            written = self._read(tmpdir)
+        self.assertNotIn("super-secret-real-key", json.dumps(written))
+        self.assertEqual(written["entsoe"]["api_key"], "***REDACTED***")
+
+    def test_empty_api_key_stays_empty(self):
+        # config.yaml as committed has an empty api_key — should stay empty,
+        # not become the redaction placeholder (nothing to hide).
+        raw_config = {
+            "entsoe": {"api_key": "", "area": "FI"},
+            "charging": [{"name": "topup", "required_hours": 2}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_config_json(raw_config, tmpdir)
+            written = self._read(tmpdir)
+        self.assertEqual(written["entsoe"]["api_key"], "")
+
+    def test_original_dict_not_mutated(self):
+        # write_config_json must not redact the caller's in-memory config —
+        # cmd_plan still needs the real key for subsequent fetches.
+        raw_config = {
+            "entsoe": {"api_key": "super-secret-real-key", "area": "FI"},
+            "charging": [{"name": "topup", "required_hours": 2}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_config_json(raw_config, tmpdir)
+        self.assertEqual(raw_config["entsoe"]["api_key"], "super-secret-real-key")
+
+    def test_other_fields_preserved(self):
+        raw_config = {
+            "entsoe": {"api_key": "secret", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{"name": "topup", "required_hours": 2, "max_windows": 1}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_config_json(raw_config, tmpdir)
+            written = self._read(tmpdir)
+        self.assertEqual(written["entsoe"]["area"], "FI")
+        self.assertEqual(written["charging"][0]["max_windows"], 1)
 
 
 if __name__ == "__main__":

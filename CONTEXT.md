@@ -104,11 +104,13 @@ Both ENTSO-E and Sähkötin return all slots including historical (from the prev
 
 ## Slot selection algorithm
 
-### `continuous_only: true`
-Slides a window of `required_hours` over all candidates, picks the cheapest contiguous block.
+`select_charging_windows` dispatches on `max_windows`:
 
-### `continuous_only: false`
-Dynamic programming: finds the globally cheapest combination of blocks covering exactly `required_hours`.
+### `max_windows: 1`
+Slides a window of `required_hours` over all candidates, picks the cheapest contiguous block (`_best_continuous_window`).
+
+### `max_windows: null` (unlimited, default)
+Dynamic programming: finds the globally cheapest combination of blocks covering exactly `required_hours`, with no cap on how many blocks (`_select_with_min_block`).
 
 **DP formulation:**
 - State: `dp[i][r]` = minimum cost to schedule `r` more slots from position `i` onwards
@@ -118,11 +120,19 @@ Dynamic programming: finds the globally cheapest combination of blocks covering 
 - Reconstruction: forward scan finding the **latest** valid block at each step (latest-preferred tiebreaker for equal-price ties)
 - Globally optimal — no greedy approximation
 
-**`min_slot_minutes`** controls the minimum individual block length.
+### `max_windows: N` (N ≥ 2)
+Same DP, extended with a window-count budget (`_select_with_max_windows`):
+- State: `dp[w][i][r]` = minimum cost to schedule `r` more slots using at most `w` more window-starts, from position `i` onwards
+- Skip transition leaves `w` unchanged; starting a block spends exactly one unit of `w`
+- Same `run_end` / `first_valid_after` machinery and same latest-preferred reconstruction as the unbounded case
+- `max_windows` is internally capped at `ceil(n_slots / min_slots_per_block)` — the most blocks that could ever be needed — to keep the DP small when configured generously higher than useful
+- Complexity: `O(max_windows × n² × n_slots)` — fine for realistic sizes (max_windows in the low single digits, n_slots ≤ ~30)
 
-**`min_gap_minutes`** controls the minimum gap between blocks (default 15, divisible by 15, can be 0).
+**`min_slot_minutes`** controls the minimum individual block length — applies in all three cases (for `max_windows: 1` the whole required duration is one block, so it's moot there).
 
-**Spillover:** When the preferred window doesn't have enough slots, the planner fills the deficit from outside the window (never past `preferred_window_end`).
+**`min_gap_minutes`** controls the minimum gap between blocks (default 15, divisible by 15, can be 0) — identical semantics across `max_windows: null` and `max_windows: N`.
+
+**Spillover:** When the preferred window doesn't have enough slots, the planner fills the deficit from outside the window (never past `preferred_window_end`). `max_windows: 1` extends the existing block leftward; `null` and `N ≥ 2` both fall back to the cheapest-fill path — spillover slots extend an already-selected block and don't enforce their own window budget.
 
 ---
 
@@ -266,7 +276,7 @@ entsoe:
 charging:
   - name: topup
     required_hours: 1.5
-    continuous_only: false
+    max_windows: null
     min_slot_minutes: 30
     min_gap_minutes: 15
     max_price_cents_kwh: null
@@ -309,11 +319,9 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 
 ## Future work
 
-**`max_windows` parameter** — generalise `continuous_only` to `max_windows: N` where `max_windows: 1` is equivalent to `continuous_only: true` and `max_windows: null` means unlimited splits (current default). The DP state space expands to track windows used; each window must still respect `min_slot_minutes` and `min_gap_minutes`. `continuous_only` becomes a deprecated alias for `max_windows: 1`.
+**MyŠkoda multi-window support** — `deliver_myskoda.py` is currently hardcoded to write to slot 4 and disable slots 1–3, so it only accepts `max_windows: 1` plans. To use all 4 vehicle slots with `max_windows: N` (N ≥ 2), the handler would need to map plan windows dynamically to slots 1–N and only disable unused slots. Both the planner (already supports arbitrary `max_windows`) and the handler need to change together — planner side is done, handler side is not.
 
-For MyŠkoda delivery, `max_windows: 4` would also require changes to `deliver_myskoda.py` — currently hardcoded to write to slot 4 and disable slots 1–3. To use all 4 vehicle slots, the handler would need to map plan windows dynamically to slots 1–N and only disable unused slots. Both the planner and handler need to change together.
-
-Workaround until implemented: set `min_slot_minutes` so that `required_hours / (min_slot_minutes / 60)` ≤ 4 — e.g. `min_slot_minutes: 60` with `required_hours: 4.0` produces at most 4 × 1h windows.
+Workaround until the handler is updated: set `min_slot_minutes` so that `required_hours / (min_slot_minutes / 60)` ≤ 1 for MyŠkoda-delivered profiles — i.e. use `max_windows: 1`.
 
 
 **go-e** — cloud API (`{serial}.api.v3.go-e.io`) works from GHA. Scheduler keys exist in v2 API (`sch_week`, `sch_satur`, `sch_sund`) but the time range object format is undocumented and not found in community reverse-engineering. Blocked until payload structure is discovered from a real charger with a schedule set via the app.

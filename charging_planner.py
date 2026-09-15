@@ -14,6 +14,7 @@ Run daily after ~12:00 UTC when ENTSO-E publishes next-day prices.
 
 import argparse
 import bisect
+import copy
 from dataclasses import dataclass, field
 import json
 import logging
@@ -77,7 +78,7 @@ CHARGING_DEFAULTS = {
     "name":                   "default",
     "required_hours":         4,
     "max_price_cents_kwh":    None,
-    "continuous_only":        False,
+    "max_windows":            None,   # None = unlimited blocks (DP-optimal split); 1 = single unbroken block
     "min_slot_minutes":       30,
     "min_gap_minutes":        15,
     "preferred_window_start": "00:00",
@@ -242,6 +243,13 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
     elif int(min_gap) % 15 != 0:
         errors.append(f"charging.min_gap_minutes={min_gap} must be divisible by 15.")
 
+    max_windows = ch.get("max_windows")
+    if max_windows is not None:
+        if isinstance(max_windows, bool) or not isinstance(max_windows, int) or max_windows < 1:
+            errors.append(
+                f"charging.max_windows must be a positive integer or null (unlimited), got: {max_windows!r}."
+            )
+
     ceil = ch.get("max_price_cents_kwh")
     if ceil is not None:
         if isinstance(ceil, str) and ceil.lower() == "avg":
@@ -306,11 +314,11 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
         # s_min > e_min is an overnight window (e.g. 22:00–06:30) — allowed
 
 
-def _warn_if_continuous_overflows_window(ch: dict) -> None:
-    """Log an advisory warning when continuous_only and required_hours exceeds window length."""
+def _warn_if_single_window_overflows_preferred_window(ch: dict) -> None:
+    """Log an advisory warning when max_windows=1 and required_hours exceeds window length."""
     win_start = ch.get("preferred_window_start")
     win_end   = ch.get("preferred_window_end")
-    if not (ch.get("continuous_only") and win_start and win_end):
+    if not (ch.get("max_windows") == 1 and win_start and win_end):
         return
     if win_start is None or win_end is None or str(win_start).lower() == "any" or str(win_end).lower() == "any":
         return
@@ -323,7 +331,7 @@ def _warn_if_continuous_overflows_window(ch: dict) -> None:
         req_minutes = int(ch.get("required_hours", 0) * 60)
         if req_minutes > win_minutes > 0:
             log.warning(
-                "continuous_only=true but required_hours=%.1f (%.0f min) exceeds "
+                "max_windows=1 but required_hours=%.1f (%.0f min) exceeds "
                 "preferred window %s–%s (%.0f min). "
                 "Charging will start before the window.",
                 ch["required_hours"], req_minutes, win_start, win_end, win_minutes,
@@ -338,7 +346,7 @@ def validate_plan_config(config: dict) -> None:
     _validate_entsoe_config(config.get("entsoe", {}), errors)
     _validate_charging_profile(config.get("charging", {}), errors)
     _emit_errors(errors)
-    _warn_if_continuous_overflows_window(config.get("charging", {}))
+    _warn_if_single_window_overflows_preferred_window(config.get("charging", {}))
 
 
 def _emit_errors(errors: list) -> None:
@@ -377,7 +385,7 @@ class Config:
 
     # Charging
     required_minutes:       int
-    continuous_only:        bool
+    max_windows:            Optional[int]     # None = unlimited blocks; 1 = single unbroken block; N = at most N blocks
     min_slot_minutes:       int
     min_gap_minutes:        int
     max_price_eur:          Optional[float]   # None = no ceiling
@@ -410,7 +418,7 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         timezone_str=tz_str,
         name=str(ch.get("name", "default")),
         required_minutes=int(ch["required_hours"] * 60),
-        continuous_only=bool(ch.get("continuous_only", False)),
+        max_windows=ch.get("max_windows"),
         min_slot_minutes=int(ch.get("min_slot_minutes", 30)),
         min_gap_minutes=int(ch.get("min_gap_minutes", 30)),
         max_price_eur=None if (ceil_cents is None or ceil_is_avg) else ceil_cents / 100.0,
@@ -1279,12 +1287,21 @@ def _resolve_tz(config_tz: str | None, ref_date: date) -> "TzInfo":
 def select_charging_windows(
     prices: list[Slot],
     required_minutes: int,
-    continuous_only: bool = False,
+    max_windows: Optional[int] = None,
     max_price: Optional[float] = None,
     min_slot_minutes: int = 15,
     min_gap_minutes: int = 15,
     _log: bool = True,
 ) -> list[Slot]:
+    """Select the cheapest slots totalling required_minutes.
+
+    max_windows controls how many separate charging blocks may be used:
+      None → unlimited (DP-optimal split across any number of blocks — the
+             classic behaviour; every block still respects min_slot_minutes
+             and min_gap_minutes)
+      1    → a single unbroken block (cheapest continuous run)
+      N≥2  → at most N separate blocks (DP-optimal, window-count-bounded)
+    """
     if not prices:
         return []
 
@@ -1309,7 +1326,7 @@ def select_charging_windows(
         log.error("No candidate slots available for charging!")
         return []
 
-    if continuous_only:
+    if max_windows == 1:
         return _best_continuous_window(candidates, prices, n_slots)
 
     min_slots_per_block = max(1, (min_slot_minutes + slot_dur - 1) // slot_dur)
@@ -1320,12 +1337,16 @@ def select_charging_windows(
 
     min_slots_per_gap = max(0, min_gap_minutes // slot_dur)
 
-    if min_slots_per_block <= 1 and min_slots_per_gap == 0:
-        selected = sorted(candidates, key=lambda x: (x.price_eur_kwh, -x.start.timestamp()))[:n_slots]
-        selected.sort(key=lambda x: x.start)
-        return selected
+    if max_windows is None:
+        if min_slots_per_block <= 1 and min_slots_per_gap == 0:
+            selected = sorted(candidates, key=lambda x: (x.price_eur_kwh, -x.start.timestamp()))[:n_slots]
+            selected.sort(key=lambda x: x.start)
+            return selected
+        return _select_with_min_block(candidates, n_slots, min_slots_per_block, min_slots_per_gap)
 
-    return _select_with_min_block(candidates, n_slots, min_slots_per_block, min_slots_per_gap)
+    return _select_with_max_windows(
+        candidates, n_slots, min_slots_per_block, min_slots_per_gap, max_windows
+    )
 
 
 def _select_with_min_block(
@@ -1457,6 +1478,154 @@ def _select_with_min_block(
     if short:
         log.error("DP produced a block shorter than %d min — this is a bug.",
                   min_block_min)
+    for i2 in range(len(final_blocks) - 1):
+        gap_min = int(
+            (final_blocks[i2 + 1][0].start - final_blocks[i2][-1].end
+             ).total_seconds() / 60)
+        min_gap_min = min_slots_per_gap * slot_dur
+        if gap_min < min_gap_min:
+            log.warning("Gap of %d min between blocks is shorter than min_gap_minutes=%d min.",
+                        gap_min, min_gap_min)
+    return sorted(selected, key=lambda x: x.start)
+
+
+def _select_with_max_windows(
+    candidates: list[Slot],
+    n_slots: int,
+    min_slots_per_block: int,
+    min_slots_per_gap: int,
+    max_windows: int,
+) -> list[Slot]:
+    """Select n_slots from candidates at minimum total cost, where every block is
+    ≥ min_slots_per_block long, every gap between blocks is ≥ min_slots_per_gap
+    long, and at most max_windows separate blocks are used.
+
+    Same time-aware DP as _select_with_min_block (see its docstring for the
+    run_end / first_valid_after machinery), extended with a window-count
+    dimension:
+
+      dp[w][i][r] = minimum total price to schedule exactly r more slots,
+                    using at most w more window-starts, considering only
+                    candidates[i:]
+
+    Transitions at (w, i, r):
+      Skip:          dp[w][i][r] = dp[w][i+1][r]
+      Start block k: dp[w][i][r] = block_cost(i, k) + dp[w-1][next_i][r-k]
+                     for k in [min_slots_per_block .. run_end[i]-i+1],
+                     only when w >= 1.
+
+    Reconstruction walks forward finding the latest valid block at each step
+    (latest-preferred tiebreaker on equal-price ties), matching
+    _select_with_min_block's convention.
+    """
+    if not candidates:
+        return []
+    if max_windows < 1:
+        raise ValueError(f"max_windows must be >= 1, got {max_windows}")
+
+    ordered = sorted(candidates, key=lambda x: x.start)
+    n = len(ordered)
+    slot_dur = ordered[0].duration_minutes
+    INF = float("inf")
+
+    # Cap the window-count dimension at the maximum number of blocks that
+    # could ever be needed for n_slots — keeps the DP small when max_windows
+    # is set generously higher than required_minutes could ever use.
+    max_possible_blocks = (n_slots + min_slots_per_block - 1) // min_slots_per_block
+    max_windows = min(max_windows, max_possible_blocks)
+
+    prefix = [0.0] * (n + 1)
+    for i, s in enumerate(ordered):
+        prefix[i + 1] = prefix[i] + s.price_eur_kwh
+
+    def block_cost(i: int, k: int) -> float:
+        return prefix[i + k] - prefix[i]
+
+    run_end = [0] * n
+    run_end[n - 1] = n - 1
+    for i in range(n - 2, -1, -1):
+        if ordered[i + 1].start == ordered[i].end:
+            run_end[i] = run_end[i + 1]
+        else:
+            run_end[i] = i
+
+    gap_dur = timedelta(minutes=slot_dur * min_slots_per_gap)
+    starts = [s.start for s in ordered]
+    first_valid_after = [
+        bisect.bisect_left(starts, ordered[j].end + gap_dur)
+        for j in range(n)
+    ]
+
+    # dp[w][i][r]: min cost to schedule r more slots from position i onwards,
+    # using at most w more window-starts.
+    dp = [[[INF] * (n_slots + 1) for _ in range(n + 1)] for _ in range(max_windows + 1)]
+    for w in range(max_windows + 1):
+        for i in range(n + 1):
+            dp[w][i][0] = 0.0
+
+    for w in range(1, max_windows + 1):
+        for i in range(n - 1, -1, -1):
+            for r in range(1, n_slots + 1):
+                # Option 1: skip slot i — window budget unchanged
+                best = dp[w][i + 1][r]
+
+                # Option 2: start a block of length k here — spends one window.
+                max_k = min(r, run_end[i] - i + 1)
+                for k in range(min_slots_per_block, max_k + 1):
+                    next_i = first_valid_after[i + k - 1]
+                    if next_i > n:
+                        next_i = n
+                    if dp[w - 1][next_i][r - k] < INF:
+                        cost = block_cost(i, k) + dp[w - 1][next_i][r - k]
+                        if cost < best:
+                            best = cost
+
+                dp[w][i][r] = best
+
+    if dp[max_windows][0][n_slots] == INF:
+        log.warning(
+            "No valid solution found for n_slots=%d min_slots_per_block=%d "
+            "max_windows=%d — not enough eligible slots, or window budget too tight.",
+            n_slots, min_slots_per_block, max_windows,
+        )
+        return []
+
+    # Reconstruct: at each step, find the latest valid block start matching
+    # the DP value at the current (w, i, r) — same "latest-preferred" approach
+    # as _select_with_min_block, with w decremented by exactly one per block.
+    selected: list[Slot] = []
+    r = n_slots
+    w = max_windows
+    i = 0
+    while r > 0:
+        target = dp[w][i][r]
+        best_i = None
+        best_k = None
+        for i2 in range(i, n):
+            max_k = min(r, run_end[i2] - i2 + 1)
+            for k in range(min_slots_per_block, max_k + 1):
+                next_i = min(first_valid_after[i2 + k - 1], n)
+                if dp[w - 1][next_i][r - k] >= INF:
+                    continue
+                cost = block_cost(i2, k) + dp[w - 1][next_i][r - k]
+                if abs(cost - target) < 1e-9:
+                    best_i, best_k = i2, k
+        if best_i is None:
+            break
+        selected.extend(ordered[best_i:best_i + best_k])
+        i = first_valid_after[best_i + best_k - 1]
+        r -= best_k
+        w -= 1
+
+    min_block_min = min_slots_per_block * slot_dur
+    final_blocks  = _group_continuous(sorted(selected, key=lambda x: x.start))
+    short = [b for b in final_blocks if len(b) < min_slots_per_block]
+    if short:
+        log.error("DP produced a block shorter than %d min — this is a bug.",
+                  min_block_min)
+    if len(final_blocks) > max_windows:
+        log.error("DP produced %d blocks, exceeding max_windows=%d — this is a bug.",
+                  len(final_blocks), max_windows)
     for i2 in range(len(final_blocks) - 1):
         gap_min = int(
             (final_blocks[i2 + 1][0].start - final_blocks[i2][-1].end
@@ -1617,7 +1786,7 @@ def filter_preferred_window(
 def _select_spillover(
     outside: list[Slot],
     selected: list[Slot],
-    continuous_only: bool,
+    max_windows: Optional[int],
     win_end_utc: datetime,
     win_end_local: str,
     required_minutes: int,
@@ -1632,8 +1801,11 @@ def _select_spillover(
 
     Rules:
     - Never spill after win_end_utc.
-    - continuous_only: extend the existing block leftward (earlier slots only).
-    - non-continuous: pick cheapest slots from eligible outside slots.
+    - max_windows == 1: extend the existing block leftward (earlier slots only).
+    - max_windows is None or >= 2: pick cheapest slots from eligible outside
+      slots (spillover slots extend an already-selected block, so they don't
+      need their own window budget enforced — the window-count constraint
+      applies to the main selection pass, not the fill-in pass).
 
     win_end_local is passed only for log messages.
     """
@@ -1648,7 +1820,7 @@ def _select_spillover(
         win_end_local, len(candidates),
     )
 
-    if continuous_only:
+    if max_windows == 1:
         if selected:
             # Extend leftward: take the slots immediately before the block start.
             block_start_utc = min(s.start for s in selected)
@@ -1661,7 +1833,7 @@ def _select_spillover(
             n_extra  = (remaining + slot_dur - 1) // slot_dur
             spillover = list(reversed(before[:n_extra]))
             log.info(
-                "continuous_only spill: extending block %d min earlier (%d slots)",
+                "max_windows=1 spill: extending block %d min earlier (%d slots)",
                 remaining, len(spillover),
             )
             return spillover
@@ -1683,7 +1855,7 @@ def _select_spillover(
     return select_charging_windows(
         candidates,
         required_minutes=remaining,
-        continuous_only=False,
+        max_windows=None,
         max_price=max_price_eur,
         min_slot_minutes=slot_dur,
     )
@@ -1737,7 +1909,7 @@ class PlanParams:
     max_price_eur:          Optional[float] = None
     min_slot_minutes:       int             = 30
     min_gap_minutes:        int             = 30
-    continuous_only:        bool            = False
+    max_windows:            Optional[int]   = None
     forecast_slots:         list            = None  # display-only, not used for selection
     supplement_starts:      object          = None  # set of starts of forecast supplement slots
     retained_minutes:       int             = 0     # future charging minutes carried over from previous plan
@@ -1802,14 +1974,14 @@ def build_plan(p: PlanParams) -> dict:
     selected_starts = {s.start for s in p.selected}
 
     # Compute optimal slots: cheapest possible ignoring window constraints only.
-    # Respects continuous_only and min_slot_minutes so comparison is fair.
+    # Respects max_windows and min_slot_minutes so comparison is fair.
     # Uses future_prices — no window constraint, no historical or forecast slots.
     # Includes retained_minutes so optimal covers the same total as scheduled.
     optimal_required = p.required_minutes + p.retained_minutes
     optimal_selected = select_charging_windows(
         p.future_prices or p.display_prices,
         required_minutes=optimal_required,
-        continuous_only=p.continuous_only,
+        max_windows=p.max_windows,
         max_price=p.max_price_eur,
         min_slot_minutes=p.min_slot_minutes,
         min_gap_minutes=p.min_gap_minutes,
@@ -2341,7 +2513,7 @@ def _select_slots(
     selected = select_charging_windows(
         inside,
         required_minutes=req_min,
-        continuous_only=cfg.continuous_only,
+        max_windows=cfg.max_windows,
         max_price=_eff_max,
         min_slot_minutes=cfg.min_slot_minutes,
         min_gap_minutes=cfg.min_gap_minutes,
@@ -2354,7 +2526,7 @@ def _select_slots(
         spillover = _select_spillover(
             outside=outside,
             selected=selected,
-            continuous_only=cfg.continuous_only,
+            max_windows=cfg.max_windows,
             win_end_utc=win_end_utc,
             win_end_local=win_end_str,
             required_minutes=req_min,
@@ -2604,7 +2776,7 @@ def _plan_one_profile(
             comparison = select_charging_windows(
                 [s for s in candidate_prices if s.start >= win_start_utc and s.start < win_end_utc],
                 required_minutes=effective_required,
-                continuous_only=cfg.continuous_only,
+                max_windows=cfg.max_windows,
                 max_price=None,
                 min_slot_minutes=cfg.min_slot_minutes,
                 min_gap_minutes=cfg.min_gap_minutes,
@@ -2648,7 +2820,7 @@ def _plan_one_profile(
         max_price_eur=resolved_max_price_eur,
         min_slot_minutes=cfg.min_slot_minutes,
         min_gap_minutes=cfg.min_gap_minutes,
-        continuous_only=cfg.continuous_only,
+        max_windows=cfg.max_windows,
         forecast_slots=forecast_display_slots,
         supplement_starts=supplement_starts,
         plan_warning=plan_warning,
@@ -2686,17 +2858,26 @@ def _write_run_outputs(plans: "list[dict]") -> None:
 
 
 def write_config_json(raw_config: dict, output_dir: str) -> None:
-    """Write the full parsed config as config.json to output_dir.
+    """Write the parsed config as config.json to output_dir, secrets redacted.
 
     Allows the dashboard and other consumers to read structured config data
-    without parsing YAML. The file is a faithful JSON representation of
-    config.yaml — all fields included. Secrets are never in config.yaml so
-    nothing sensitive is written here.
+    without parsing YAML.
+
+    IMPORTANT: raw_config at this point may have entsoe.api_key populated from
+    the ENTSOE_API_KEY environment variable (see load_config) — config.yaml
+    itself never contains a real key, but the in-memory dict does once the env
+    var has been merged in. This file is committed to the repo by the GHA
+    workflow (`cp config.json data/`), so the key must be redacted here rather
+    than relying on it having been empty in the source YAML.
     """
+    safe_config = copy.deepcopy(raw_config)
+    if safe_config.get("entsoe", {}).get("api_key"):
+        safe_config["entsoe"]["api_key"] = "***REDACTED***"
+
     path = os.path.join(output_dir, "config.json")
     try:
         with open(path, "w") as f:
-            json.dump(raw_config, f, indent=2)
+            json.dump(safe_config, f, indent=2)
         log.info("Config written to %s", path)
     except OSError as exc:
         log.warning("Could not write config.json: %s", exc)

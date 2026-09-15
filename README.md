@@ -80,7 +80,7 @@ entsoe:
 charging:
   - name: topup
     required_hours: 1.5
-    continuous_only: false
+    max_windows: null
     min_slot_minutes: 30
     min_gap_minutes: 15
     preferred_window_start: "22:00"
@@ -103,7 +103,7 @@ charging:
 
   - name: overnight
     required_hours: 4.5
-    continuous_only: true
+    max_windows: 1
     preferred_window_start: "21:00"
     preferred_window_end: "06:30"
     deliveries:
@@ -126,7 +126,7 @@ charging:
 | `entsoe.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from system. Applies to all profiles |
 | `charging.name` | `"default"` | Profile name — used in the output filename (`plan-{name}.json`) |
 | `charging.required_hours` | `4` | Hours of charging to schedule |
-| `charging.continuous_only` | `false` | `true` = one unbroken block; `false` = cheapest individual slots (may be split) |
+| `charging.max_windows` | `null` | `null` = unlimited blocks (cheapest individual slots, DP-optimal, may be split across the window); `1` = one unbroken block; `N` (≥2) = at most N separate blocks, DP-optimal within that budget |
 | `charging.min_slot_minutes` | `30` | Minimum continuous block length. The charger should not run for less than this duration. Must be 15 minutes or more and a multiple of 15 (the price slot resolution) |
 | `charging.min_gap_minutes` | `15` | Minimum gap between charging blocks. Prevents the charger toggling off and straight back on. Must be a multiple of 15. `0` = no gap constraint. Can be set independently of `min_slot_minutes` — e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps |
 | `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling. `"avg"` = dynamic daily market average — ceiling is set to today's average price at plan time |
@@ -150,7 +150,7 @@ A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — i
 
 Days not listed in `schedule` use the top-level preferred window.
 
-**Slot selection** — for `continuous_only: true`, the planner evaluates all possible contiguous blocks of `required_hours` length and picks the cheapest. For `continuous_only: false`, it uses dynamic programming to find the globally cheapest combination of blocks that together cover exactly `required_hours`, where every block is ≥ `min_slot_minutes` and every gap between blocks is ≥ `min_gap_minutes`. Adjacent selected blocks are merged into a single charging window automatically.
+**Slot selection** — for `max_windows: 1`, the planner evaluates all possible contiguous blocks of `required_hours` length and picks the cheapest. For `max_windows: null` (unlimited) or `max_windows: N` (N ≥ 2), it uses dynamic programming to find the globally cheapest combination of blocks that together cover exactly `required_hours` — unlimited or capped at N separate blocks respectively — where every block is ≥ `min_slot_minutes` and every gap between blocks is ≥ `min_gap_minutes`. Adjacent selected blocks are merged into a single charging window automatically.
 
 **Per-day required hours** — `required_hours` can be overridden per day within a `schedule` entry, independently of the window override. This allows a single profile to act as a true per-car profile: 1.5h on weekdays for a short commute, 4.5h on weekends for a longer charge. The top-level `required_hours` is the fallback when no schedule entry specifies it.
 
@@ -158,7 +158,7 @@ Days not listed in `schedule` use the top-level preferred window.
 
 **Dynamic price ceiling** — setting `max_price_cents_kwh: "avg"` uses today's market average as the ceiling, resolved at plan time from the available price data. This avoids hardcoding a number that may become stale as market conditions change. A partial plan is still possible if all slots in the window happen to be above the average, but this is uncommon in practice.
 
-**Guaranteed charge until departure time** — setting `required_hours` longer than the window with `continuous_only: true` ensures the block always ends exactly at `preferred_window_end`. Not applicable when using `any`.
+**Guaranteed charge until departure time** — setting `required_hours` longer than the window with `max_windows: 1` ensures the block always ends exactly at `preferred_window_end`. Not applicable when using `any`.
 
 ---
 
@@ -176,7 +176,7 @@ The `chargeamps` handler always reads the connector state before delivery. If th
 
 `restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
 
-The `myskoda` handler updates preferred charging time slot 4 on the vehicle's charging profile and sets the charge mode to `PREFERRED_CHARGING_TIMES`. It requires a `SKODA_VIN` env var (the VIN, via `charge_point_id`) and a `SKODA_API_KEY` env var (API key from the MyŠkoda app at `go.skoda.eu/api-keys`). Only compatible with `continuous_only: true` profiles — the MyŠkoda API accepts a single time window per slot, not multiple windows.
+The `myskoda` handler updates preferred charging time slot 4 on the vehicle's charging profile and sets the charge mode to `PREFERRED_CHARGING_TIMES`. It requires a `SKODA_VIN` env var (the VIN, via `charge_point_id`) and a `SKODA_API_KEY` env var (API key from the MyŠkoda app at `go.skoda.eu/api-keys`). Only compatible with `max_windows: 1` profiles — the MyŠkoda API accepts a single time window per slot, not multiple windows.
 
 New handlers can be added by creating a `deliver_<n>.py` script in the `delivery/` directory with a single `deliver(plan, charge_point_id, entry, timezone) -> bool` function — the dispatcher handles the rest automatically.
 
@@ -336,7 +336,7 @@ One `plan-{name}.json` file is written per profile:
 
 `window_starts_utc` and `window_ends_utc` are UTC ISO 8601 timestamps for each charging window — use these to start and stop charging in downstream systems.
 
-`price_slots` contains all available price slots from the previous evening onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `continuous_only` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. `price_stats` (min/avg/max) reflects the full range of slots available to the scheduler at run time — the basis for the "vs market" difference shown on the dashboard.
+`price_slots` contains all available price slots from the previous evening onwards, each with `start_utc`, `price_cents_kwh`, `charging: true/false`, and `optimal: true/false`. The `optimal` flag marks the theoretically cheapest slots for the same required duration, respecting `max_windows` and `min_slot_minutes` but ignoring any preferred window constraint. `avg_optimal_price_cents_kwh` is the average price across optimal slots. `price_stats` (min/avg/max) reflects the full range of slots available to the scheduler at run time — the basis for the "vs market" difference shown on the dashboard.
 
 `retained_minutes` is the number of future charging minutes carried forward from the previous plan. When non-zero, `total_minutes` will exceed `required_minutes` by the same amount.
 
@@ -348,7 +348,7 @@ Slots with `"forecasted": true` are display-only — they extend the histogram b
 
 Every time a plan is built, the planner runs two background comparisons.
 
-**Optimal comparison** — finds the cheapest possible slots ignoring the preferred window constraint, with all other settings (price ceiling, `continuous_only`, `min_slot_minutes`, `min_gap_minutes`) kept intact. The result is `avg_optimal_price_cents_kwh` and the `optimal` flag on each slot in `price_slots`. The dashboard shows `vs optimal +X.XX c€/kWh` when the window constraint forced suboptimal choices — if scheduled and optimal are the same, the window contained the cheapest slots anyway and no comparison is shown.
+**Optimal comparison** — finds the cheapest possible slots ignoring the preferred window constraint, with all other settings (price ceiling, `max_windows`, `min_slot_minutes`, `min_gap_minutes`) kept intact. The result is `avg_optimal_price_cents_kwh` and the `optimal` flag on each slot in `price_slots`. The dashboard shows `vs optimal +X.XX c€/kWh` when the window constraint forced suboptimal choices — if scheduled and optimal are the same, the window contained the cheapest slots anyway and no comparison is shown.
 
 **Price ceiling comparison** — only runs when the plan is partial (`total_minutes < required_minutes`) and `max_price_cents_kwh` is set. Runs the same plan without the price ceiling. If it succeeds, the ceiling was the limiting factor → `plan_warning: "partial plan — price limit X c€/kWh"` (or `"partial plan — price limit avg (X c€/kWh)"` when using the dynamic ceiling). If it also fails, the shortage is due to insufficient slots in the window → `plan_warning: "partial plan — required hours exceed boundaries"`.
 

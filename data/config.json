@@ -1,6 +1,6 @@
 {
   "entsoe": {
-    "api_key": "53b04c6b-caa5-4cc2-a6b1-1afb18b8e0bb",
+    "api_key": "",
     "area": "FI",
     "timezone": "Europe/Helsinki"
   },
@@ -9,7 +9,7 @@
       "name": "topup",
       "required_hours": 2,
       "max_price_cents_kwh": null,
-      "continuous_only": false,
+      "max_windows": null,
       "min_slot_minutes": 30,
       "min_gap_minutes": 15,
       "preferred_window_start": "21:00",
@@ -52,7 +52,7 @@
       "name": "overnight",
       "required_hours": 4.0,
       "max_price_cents_kwh": null,
-      "continuous_only": true,
+      "max_windows": 1,
       "min_slot_minutes": 30,
       "min_gap_minutes": 15,
       "preferred_window_start": "21:00",

@@ -27,7 +27,7 @@ entsoe:
 
 charging:
   - name: overnight
-    continuous_only: true
+    max_windows: 1
     ...
     deliveries:
       - handler: chargeamps
@@ -113,7 +113,7 @@ Fetches the vehicle's current charging profile, updates preferred charging time
 slot 4 with the planned window, disables slots 1–3 (times preserved), and sets
 the charge mode to `PREFERRED_CHARGING_TIMES`.
 
-**Only compatible with `continuous_only: true` profiles** — the MyŠkoda API
+**Only compatible with `max_windows: 1` profiles** — the MyŠkoda API
 accepts a single time window per slot. Plans with multiple windows are rejected.
 
 API keys are created in the MyŠkoda app at `go.skoda.eu/api-keys`. Keys expire —

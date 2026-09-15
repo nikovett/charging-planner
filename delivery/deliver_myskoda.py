@@ -10,7 +10,7 @@ preferred charging time slot 4 with the planned window, disables slots 1-3,
 and sets the charge mode to PREFERRED_CHARGING_TIMES.
 
 Only compatible with plans that contain a single continuous charging window
-(i.e. profiles configured with continuous_only: true). If the plan contains
+(i.e. profiles configured with max_windows: 1). If the plan contains
 multiple windows the delivery is rejected.
 
 Tested against a real Škoda Enyaq on 2026-09-14. First delivery confirmed
@@ -320,7 +320,7 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     if len(windows_start) != 1:
         raise ValueError(
             f"MySkoda delivery requires exactly one continuous charging window "
-            f"(set continuous_only: true in the charging profile config). "
+            f"(set max_windows: 1 in the charging profile config). "
             f"This plan has {len(windows_start)} window(s)."
         )
 
