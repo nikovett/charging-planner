@@ -223,21 +223,9 @@ To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose
 
 ## Delivery
 
-The planner never talks to a charger or a vehicle — it only writes plan JSON. `delivery/deliver.py` is the separate step that reads the `deliveries:` block inside each charging profile and dispatches the plan to the right handler. Three handlers are included out of the box:
+`delivery/deliver.py` reads the `deliveries:` block inside each charging profile and dispatches the plan to the right handler. Three are included out of the box — `chargeamps` (tested), `easee` (untested), `myskoda` (tested, delivers to the vehicle instead of a charger) — and adding a new one requires no changes to the planner or the dispatcher.
 
-| Handler | Script | Description |
-|---|---|---|
-| `chargeamps` | `delivery/deliver_chargeamps.py` | Delivers via the `my.charge.space` API — tested and supported |
-| `easee` | `delivery/deliver_easee.py` | Delivers via the official Easee API — untested |
-| `myskoda` | `delivery/deliver_myskoda.py` | Delivers via the MyŠkoda Public API — writes to the vehicle's own charging profile instead of a charger |
-
-The `chargeamps` handler always reads the connector state before delivery. If the car is actively charging, schedule override is activated after delivery so the current session is not interrupted — the override expires automatically when the cable is disconnected.
-
-`restore_mode` (default `false`) — when `true`, reads the connector mode before delivery and restores it afterwards if it was not already `Schedule`. Useful if the charger is normally kept in `On` or `Off` mode and should return to that state after the schedule is pushed.
-
-The `myskoda` handler writes each plan window into a preferred charging time slot on the vehicle's charging profile (window 1 → slot 1, window 2 → slot 2, and so on, up to the vehicle's 4 slots), disables any unused slots, and sets the charge mode to `PREFERRED_CHARGING_TIMES`. If the vehicle is actively charging via a preferred-times slot, the handler detects which one (by time-window overlap with the current local time, since the API doesn't report this directly) and routes plan windows around it, leaving that slot completely untouched — delivery is skipped entirely if the active slot can't be identified or there's no room to avoid it. It requires a `SKODA_VIN` env var (the VIN, via `charge_point_id`) and a `SKODA_API_KEY` env var (API key from the MyŠkoda app at `go.skoda.eu/api-keys`). Requires `max_windows` set to a value between 1 and 4 — the vehicle has exactly 4 preferred charging time slots, so `max_windows: null` (unlimited) is rejected even if a given day's plan happens to fit.
-
-New handlers can be added by creating a `deliver_<n>.py` script in the `delivery/` directory with a single `deliver(plan, charge_point_id, entry, timezone) -> bool` function — the dispatcher handles the rest automatically.
+See [`delivery/README.md`](delivery/README.md) for handler config keys, environment variables, and per-handler behaviour.
 
 ---
 
