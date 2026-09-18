@@ -1718,40 +1718,21 @@ def _resolve_window_utc(
     start_hhmm: str,
     end_hhmm: str,
     tz,
-    _anchor_date: Optional[date] = None,
+    _anchor_date: date,
 ) -> tuple[datetime, datetime]:
-    """Resolve preferred window HH:MM strings to UTC datetimes.
+    """Resolve preferred window HH:MM strings to UTC datetimes for a specific date.
 
-    Determines the anchor date automatically from the clock:
-    - Same-day windows (start < end): tomorrow if window start has passed, today otherwise.
-    - Overnight windows (start > end, e.g. 22:00–06:30): today if the window
-      start is still in the future; tomorrow otherwise.
+    Purely mechanical — no dependency on the current time. _anchor_date is the
+    local calendar date the window's start falls on; for overnight windows
+    (start > end) win_end_utc is resolved against _anchor_date + 1 day.
 
-    _anchor_date overrides the clock-based anchor (used in tests only).
-    For overnight windows, win_end_utc is resolved against anchor + 1 day.
+    Deciding *which* date to anchor to (today, tomorrow, or the tail of an
+    already-open overnight window from yesterday) is the job of
+    _resolve_planning_horizon, not this function.
     """
-    if _anchor_date is not None:
-        anchor = _anchor_date
-        overnight = _is_overnight(start_hhmm, end_hhmm)
-    else:
-        now_utc   = datetime.now(tz=timezone.utc)
-        local_now = now_utc.astimezone(tz)
-        overnight = _is_overnight(start_hhmm, end_hhmm)
-        if overnight:
-            sh, sm = map(int, start_hhmm.split(":"))
-            win_start_today = local_now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-            anchor = local_now.date() if local_now < win_start_today                      else (local_now + timedelta(days=1)).date()
-            log.info("Overnight window %s–%s: anchor=%s (local now %s)",
-                     start_hhmm, end_hhmm, anchor, local_now.strftime("%H:%M"))
-        else:
-            # Same-day window: use today if the window start is still in the
-            # future today, otherwise plan for tomorrow.
-            sh, sm = map(int, start_hhmm.split(":"))
-            win_start_today = local_now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-            anchor = local_now.date() if local_now < win_start_today                      else (local_now + timedelta(days=1)).date()
-
-    win_start_utc = _hhmm_to_utc(start_hhmm, anchor, tz)
-    win_end_utc   = _hhmm_to_utc(end_hhmm, anchor + timedelta(days=1), tz) if overnight                     else _hhmm_to_utc(end_hhmm, anchor, tz)
+    overnight = _is_overnight(start_hhmm, end_hhmm)
+    win_start_utc = _hhmm_to_utc(start_hhmm, _anchor_date, tz)
+    win_end_utc   = _hhmm_to_utc(end_hhmm, _anchor_date + timedelta(days=1), tz) if overnight                     else _hhmm_to_utc(end_hhmm, _anchor_date, tz)
     return win_start_utc, win_end_utc
 
 
@@ -2433,6 +2414,7 @@ def _check_window_coverage(
     win_start_utc: datetime,
     win_end_utc: datetime,
     profile_name: str,
+    now_utc: Optional[datetime] = None,
 ) -> bool:
     """Check if fetched prices cover the window. Returns True if coverage is sufficient.
 
@@ -2440,10 +2422,18 @@ def _check_window_coverage(
     full window length. If coverage is below 90%, prices for this window have
     not been published yet — returns False so the caller can supplement with
     forecast slots rather than skipping the profile entirely.
+
+    now_utc, if given, clamps the denominator to the still-useful portion of
+    the window (max(win_start_utc, now_utc) .. win_end_utc). Without this, a
+    live window (one already in progress — see _resolve_planning_horizon)
+    would always appear under-covered by exactly its already-elapsed
+    duration, which isn't a "prices not yet published" situation at all —
+    that time is simply in the past and was correctly excluded upstream.
     """
-    window_minutes  = int((win_end_utc - win_start_utc).total_seconds() / 60)
+    effective_start = max(win_start_utc, now_utc) if now_utc is not None else win_start_utc
+    window_minutes  = int((win_end_utc - effective_start).total_seconds() / 60)
     covered_minutes = sum(s.duration_minutes for s in inside)
-    coverage        = covered_minutes / window_minutes if window_minutes else 0.0
+    coverage        = covered_minutes / window_minutes if window_minutes else 1.0
 
     if coverage < 0.90:
         log.warning(
@@ -2467,6 +2457,7 @@ def _select_slots(
     win_end_utc:      datetime,
     win_start_str:    str,
     win_end_str:      str,
+    now_utc:          datetime,
     required_minutes_override: int = None,
     forecast_slots:   list = None,
     max_price_override: Optional[float] = None,
@@ -2476,6 +2467,12 @@ def _select_slots(
     Pipeline:
       filter preferred window → check coverage (supplement with forecast if partial)
       → cheapest select → spillover fill
+
+    now_utc clamps both the coverage-check denominator and the forecast
+    supplement to the still-useful portion of the window (see
+    _check_window_coverage and _resolve_planning_horizon) — a live window's
+    already-elapsed time should never register as "missing" prices, and a
+    forecast supplement should never backfill already-elapsed time either.
     """
     inside, outside = filter_preferred_window(
         candidate_prices,
@@ -2485,13 +2482,15 @@ def _select_slots(
         window_end_local=win_end_str,
     )
 
+    effective_win_start_utc = max(win_start_utc, now_utc)
+
     used_forecast = False
-    if not _check_window_coverage(inside, win_start_utc, win_end_utc, cfg.name):
+    if not _check_window_coverage(inside, win_start_utc, win_end_utc, cfg.name, now_utc=now_utc):
         if forecast_slots:
             # Supplement candidate_prices with forecast slots and re-filter
             forecast_in_window = [
                 s for s in forecast_slots
-                if s.start >= win_start_utc and s.start < win_end_utc
+                if s.start >= effective_win_start_utc and s.start < win_end_utc
             ]
             log.info("Profile '%s': supplementing with %d forecast slots.",
                      cfg.name, len(forecast_in_window))
@@ -2627,6 +2626,132 @@ def _load_retained_minutes(output_dir: str, profile_name: str, now_utc: datetime
     return 0
 
 
+def _classify_window_instance(
+    start_str: str,
+    end_str: str,
+    req: Optional[int],
+    target_date: date,
+    now_utc: datetime,
+    any_end_cap: datetime,
+    cfg: "Config",
+    tz,
+) -> Optional[tuple[datetime, datetime, str, str, Optional[int]]]:
+    """Resolve start_str/end_str for one specific target_date to concrete UTC
+    bounds, and classify the resulting instance against now_utc.
+
+    Returns (win_start_utc, win_end_utc, win_start_str, win_end_str, req) if
+    this instance is upcoming (now < start) or live (start <= now < end) —
+    a usable target. Returns None if it has already elapsed, so the caller
+    should try the next candidate date.
+
+    "Elapsed" depends on the window shape, since not every shape has a fixed
+    end:
+      - both "any"           -> never elapsed (trivially live, start = now)
+      - "any" start           -> elapsed once today's occurrence of end_str
+                                  has passed (end's date is the only ambiguity)
+      - "any" end              -> elapsed once required_minutes no longer
+                                  fits between now and any_end_cap (no fixed
+                                  clock-time end exists to compare against)
+      - both fixed             -> elapsed once now >= the resolved end_utc
+    """
+    if start_str == "any" and end_str == "any":
+        return now_utc, any_end_cap, "any", "any", req
+
+    if start_str == "any":
+        end_utc = _hhmm_to_utc(end_str, target_date, tz)
+        if now_utc < end_utc:
+            return now_utc, end_utc, "any", end_str, req
+        return None
+
+    if end_str == "any":
+        start_utc = _hhmm_to_utc(start_str, target_date, tz)
+        if now_utc < start_utc:
+            return start_utc, any_end_cap, start_str, "any", req
+        required = req if req is not None else cfg.required_minutes
+        remaining_minutes = (any_end_cap - now_utc).total_seconds() / 60
+        if remaining_minutes >= required:
+            return start_utc, any_end_cap, start_str, "any", req
+        return None
+
+    start_utc, end_utc = _resolve_window_utc(start_str, end_str, tz, _anchor_date=target_date)
+    if now_utc < end_utc:
+        return start_utc, end_utc, start_str, end_str, req
+    return None
+
+
+def _resolve_planning_horizon(
+    cfg: "Config",
+    now_utc: datetime,
+    tz,
+    all_prices: list[Slot],
+) -> tuple[datetime, datetime, str, str, date, Optional[int]]:
+    """Determine which window instance this plan should target.
+
+    Checks up to three candidate calendar dates, in priority order, and
+    targets the first one that is currently live or still upcoming:
+
+      1. Yesterday — only a valid candidate for a fixed overnight window
+         shape (e.g. 21:00-06:30): it may still be open past midnight, into
+         this morning. Same-day and "any"-ended shapes can't still be open
+         a full calendar day later, so this candidate is skipped for those.
+      2. Today — the normal case (upcoming) and the "delayed run, window
+         already started but not yet closed" case (live).
+      3. Tomorrow — the fallback once today has elapsed. Can never itself
+         classify as elapsed, since now_utc is by definition still within
+         today.
+
+    Each candidate date's window shape is resolved independently via
+    _resolve_schedule_window, since a schedule can vary by weekday (e.g.
+    weekday overnight vs weekend "any"/"any") — there is no single "the
+    window shape" independent of which specific date is being asked about.
+
+    win_start_utc/win_end_utc are returned as the *configured* bounds of
+    whichever instance was chosen — NOT pre-clamped to now_utc. The caller
+    is responsible for never selecting a slot that starts before now_utc,
+    uniformly, regardless of which instance was chosen here (this is what
+    actually makes catching a live window's remainder safe).
+
+    Returns (win_start_utc, win_end_utc, win_start_str, win_end_str,
+             plan_date, required_minutes_override).
+    """
+    local_now = now_utc.astimezone(tz)
+    today     = local_now.date()
+    yesterday = today - timedelta(days=1)
+    tomorrow  = today + timedelta(days=1)
+
+    last_price_utc   = max((s.end for s in all_prices), default=now_utc)
+    plan_horizon_utc = datetime(today.year, today.month, today.day,
+                                23, 0, tzinfo=timezone.utc) + timedelta(days=1)
+    any_end_cap = min(last_price_utc, plan_horizon_utc)
+
+    y_start_str, y_end_str, y_req = _resolve_schedule_window(cfg, yesterday)
+    if y_start_str != "any" and y_end_str != "any" and _is_overnight(y_start_str, y_end_str):
+        result = _classify_window_instance(
+            y_start_str, y_end_str, y_req, yesterday, now_utc, any_end_cap, cfg, tz,
+        )
+        if result is not None:
+            log.info("Profile '%s': targeting yesterday's still-open window (%s–%s local).",
+                     cfg.name, y_start_str, y_end_str)
+            ws, we, ss, es, req = result
+            return ws, we, ss, es, yesterday, req
+
+    t_start_str, t_end_str, t_req = _resolve_schedule_window(cfg, today)
+    result = _classify_window_instance(
+        t_start_str, t_end_str, t_req, today, now_utc, any_end_cap, cfg, tz,
+    )
+    if result is not None:
+        ws, we, ss, es, req = result
+        return ws, we, ss, es, today, req
+
+    tm_start_str, tm_end_str, tm_req = _resolve_schedule_window(cfg, tomorrow)
+    result = _classify_window_instance(
+        tm_start_str, tm_end_str, tm_req, tomorrow, now_utc, any_end_cap, cfg, tz,
+    )
+    assert result is not None, "tomorrow's window instance can never classify as elapsed"
+    ws, we, ss, es, req = result
+    return ws, we, ss, es, tomorrow, req
+
+
 def _plan_one_profile(
     cfg:                    "Config",
     tz:                     "TzInfo",
@@ -2639,96 +2764,17 @@ def _plan_one_profile(
     """Run selection and build a plan dict for a single profile."""
     log.info("=== Profile: %s ===", cfg.name)
 
-    # Resolve window using top-level defaults first to determine plan_date,
-    # then re-resolve with day-specific schedule entry if one matches.
-    # If top-level window is "any", plan_date = today (tomorrow will be the target).
-    def _resolve_any_window(start_str, end_str, anchor_date, tomorrow_date):
-        """Resolve window bounds supporting 'any' on either or both sides.
+    now_utc = datetime.now(tz=timezone.utc)
 
-        The 'any' end is capped at the planning horizon (tomorrow 23:00 UTC) —
-        the same boundary used for ENTSO-E price data. This prevents any:any
-        windows from selecting forecast slots days into the future when the
-        fallback price source provides extended data.
-        """
-        s_any = str(start_str).lower() == "any"
-        e_any = str(end_str).lower() == "any"
-        now_utc      = datetime.now(tz=timezone.utc)
-        today_date   = now_utc.date()
-        plan_horizon = datetime(today_date.year, today_date.month, today_date.day,
-                                23, 0, tzinfo=timezone.utc) + timedelta(days=1)
-        if s_any and e_any:
-            last_price = max(s.end for s in all_prices) if all_prices else now_utc
-            return now_utc, min(last_price, plan_horizon)
-        elif s_any:
-            # any start = from now, fixed end
-            _, end_utc = _resolve_window_utc(
-                "00:00", end_str, tz.zone,
-                _anchor_date=tomorrow_date if not _is_overnight("00:00", end_str) else anchor_date,
-            )
-            return now_utc, end_utc
-        elif e_any:
-            # fixed start, any end = capped at planning horizon
-            start_utc, _ = _resolve_window_utc(
-                start_str, "23:45", tz.zone,
-                _anchor_date=anchor_date if _is_overnight(start_str, "23:45") else tomorrow_date,
-            )
-            last_price = max(s.end for s in all_prices) if all_prices else start_utc
-            return start_utc, min(last_price, plan_horizon)
-        else:
-            if _is_overnight(start_str, end_str):
-                return _resolve_window_utc(start_str, end_str, tz.zone, _anchor_date=anchor_date)
-            else:
-                return _resolve_window_utc(start_str, end_str, tz.zone, _anchor_date=tomorrow_date)
-
-    if cfg.preferred_window_any:
-        plan_date     = datetime.now(tz=timezone.utc).astimezone(tz.zone).date()
-        win_start_utc = datetime.now(tz=timezone.utc)
-        _ph = datetime(plan_date.year, plan_date.month, plan_date.day,
-                       23, 0, tzinfo=timezone.utc) + timedelta(days=1)
-        last_price    = max(s.end for s in all_prices) if all_prices else win_start_utc
-        win_end_utc   = min(last_price, _ph)
-        win_start_str, win_end_str = "any", "any"
-    else:
-        win_start_utc, win_end_utc = _resolve_window_utc(
-            cfg.preferred_window_start if not cfg.window_start_any else "00:00",
-            cfg.preferred_window_end   if not cfg.window_end_any   else "23:45",
-            tz.zone
-        )
-        plan_date = win_start_utc.astimezone(tz.zone).date()
-
-    if cfg.schedule or cfg.preferred_window_any or cfg.window_start_any or cfg.window_end_any:
-        tomorrow = plan_date + timedelta(days=1)
-        win_start_str, win_end_str, sched_required_minutes = _resolve_schedule_window(cfg, tomorrow)
-        s_any = str(win_start_str).lower() == "any"
-        e_any = str(win_end_str).lower() == "any"
-        if s_any or e_any:
-            win_start_utc, win_end_utc = _resolve_any_window(
-                win_start_str, win_end_str, plan_date, tomorrow
-            )
-            log.info("Profile '%s': partial/full any window — %s – %s",
-                     cfg.name, win_start_utc.isoformat(), win_end_utc.isoformat())
-        elif _is_overnight(win_start_str, win_end_str):
-            win_start_utc, win_end_utc = _resolve_window_utc(
-                win_start_str, win_end_str, tz.zone, _anchor_date=plan_date,
-            )
-        else:
-            win_start_utc, win_end_utc = _resolve_window_utc(
-                win_start_str, win_end_str, tz.zone, _anchor_date=tomorrow,
-            )
-        plan_date = win_start_utc.astimezone(tz.zone).date()
-    else:
-        win_start_str, win_end_str = cfg.preferred_window_start, cfg.preferred_window_end
-        sched_required_minutes = None
+    win_start_utc, win_end_utc, win_start_str, win_end_str, plan_date, sched_required_minutes = \
+        _resolve_planning_horizon(cfg, now_utc, tz.zone, all_prices)
 
     log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
-
-    # plan_date: the local calendar date the window starts on
-    plan_date = win_start_utc.astimezone(tz.zone).date()
 
     # display_prices: slots up to (today+1) 23:00 UTC — the same end boundary as
     # the ENTSO-E request, so optimal selection always compares against the same
     # pool of prices regardless of whether the source is ENTSO-E or a fallback.
-    today_utc   = datetime.now(tz=timezone.utc).date()
+    today_utc   = now_utc.date()
     horizon_utc = datetime(today_utc.year, today_utc.month, today_utc.day,
                            23, 0, tzinfo=timezone.utc) + timedelta(days=1)
     display_prices = [s for s in all_prices if s.start < horizon_utc]
@@ -2738,22 +2784,28 @@ def _plan_one_profile(
     # slots don't skew the average downward.
     resolved_max_price_eur = cfg.max_price_eur
     if cfg.max_price_is_avg and all_prices:
-        future_prices_for_avg = [s for s in all_prices if s.start >= datetime.now(tz=timezone.utc)]
+        future_prices_for_avg = [s for s in all_prices if s.start >= now_utc]
         prices_eur = [s.price_eur_kwh for s in future_prices_for_avg or all_prices]
         resolved_max_price_eur = sum(prices_eur) / len(prices_eur)
         log.info("Profile '%s': dynamic price ceiling = avg %.4f c\u20ac/kWh",
                  cfg.name, resolved_max_price_eur * 100)
 
+    # Candidates are never earlier than win_start_utc - required_minutes
+    # (gives the DP some room before the window opens), and — regardless of
+    # which window instance _resolve_planning_horizon targeted — never
+    # earlier than now. This second floor is what makes catching the tail
+    # of an already-open window safe: an elapsed slot can never be selected
+    # even when win_start_utc itself is in the past (the live-window case).
     earliest_useful  = win_start_utc - timedelta(minutes=sched_required_minutes or cfg.required_minutes)
-    candidate_prices = [s for s in all_prices if s.start >= earliest_useful]
+    candidate_prices = [s for s in all_prices if s.start >= earliest_useful and s.start >= now_utc]
 
-    now_utc_plan  = datetime.now(tz=timezone.utc)
-    retained_minutes = _load_retained_minutes(output_dir, cfg.name, now_utc_plan)
+    retained_minutes = _load_retained_minutes(output_dir, cfg.name, now_utc)
     base_required = sched_required_minutes if sched_required_minutes is not None else cfg.required_minutes
     effective_required = base_required + retained_minutes
 
     selected, used_forecast = _select_slots(
         cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str,
+        now_utc=now_utc,
         required_minutes_override=effective_required,
         forecast_slots=forecast_display_slots,
         max_price_override=resolved_max_price_eur,
@@ -2803,7 +2855,7 @@ def _plan_one_profile(
 
     windows = merge_continuous_slots(selected)
 
-    future_prices = [s for s in display_prices if s.start >= now_utc_plan]
+    future_prices = [s for s in display_prices if s.start >= now_utc]
 
     plan = build_plan(PlanParams(
         target_date=plan_date,

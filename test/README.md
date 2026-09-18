@@ -1,6 +1,6 @@
 # Test Suite
 
-365 tests across four files. Run from the repo root:
+386 tests across four files. Run from the repo root:
 
 ```
 python -m unittest test_charging_planner test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ python -m unittest test_charging_planner test_deliver_chargeamps test_deliver_ea
 Or individually:
 
 ```
-python -m unittest test_charging_planner -v       # 252 tests, 3 skipped
+python -m unittest test_charging_planner -v       # 273 tests, 3 skipped
 python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
 python -m unittest test_deliver_myskoda -v        # 41 tests
@@ -19,7 +19,7 @@ The 3 skipped tests require a live ENTSO-E API key in the environment and are ma
 
 ---
 
-## test_charging_planner.py (252 tests)
+## test_charging_planner.py (273 tests)
 
 ### TestConfigValidation (18)
 Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, `preferred_window`, and `max_windows` (null/positive-int accepted; zero, negative, float, bool, and string rejected — `bool` is a subclass of `int` in Python, so it needs an explicit check).
@@ -40,7 +40,10 @@ Converts `HH:MM` local strings to UTC datetimes, positive/negative offsets, over
 Detects overnight windows (end ≤ start) vs same-day windows.
 
 ### TestResolveWindowUtc (4)
-Resolves overnight and same-day windows to UTC start/end datetimes, anchoring to the correct calendar day.
+Resolves overnight and same-day HH:MM windows to UTC start/end datetimes for a specific anchor date. Purely mechanical — no dependency on current time (see TestResolvePlanningHorizon for the "which date" decision).
+
+### TestResolvePlanningHorizon (16)
+The full scenario matrix for `_resolve_planning_horizon`: which window instance (yesterday's still-open overnight tail, today's, or tomorrow's) a plan targets, for every window shape (overnight/same-day fixed, `any`/`any`, mixed `any`) crossed with before/live/elapsed timing. Covers the fix for a real bug — a delayed cron run firing after a window's start used to skip straight to the next occurrence, discarding whatever remained of a still-usable window. Includes schedule weekday-boundary cases (a live overnight window spanning into a day with a differently-shaped schedule entry must resolve via the correct day's own entry) and the `required_minutes_override` threading through to the target date.
 
 ### TestFilterPreferredWindow (5)
 Splits a slot list into inside/outside the preferred window. Overnight windows, slots on window boundaries, `any` window sentinel.
@@ -54,8 +57,8 @@ Returns the cheapest continuous run; respects temporal continuity (index adjacen
 ### TestSelectSpillover (5)
 Spillover from outside the preferred window: not triggered when window is satisfied, stays before window end, `max_windows: 1` extends leftward, handles remaining < min slot.
 
-### TestSelectWithMinBlock (14)
-Direct tests for `_select_with_min_block` (the `max_windows: null`, unbounded path): no blocks shorter than minimum, isolated cheap slot replaced, total minutes correct after disqualification, latest slot preferred on equal price, real price data, gap constraint respected, and window-coverage/`cmd_plan` exit-code checks that share this class.
+### TestSelectWithMinBlock (17)
+Direct tests for `_select_with_min_block` (the `max_windows: null`, unbounded path): no blocks shorter than minimum, isolated cheap slot replaced, total minutes correct after disqualification, latest slot preferred on equal price, real price data, gap constraint respected, and window-coverage/`cmd_plan` exit-code checks that share this class — including `now_utc` clamping the coverage-check denominator and forecast-supplement filter to a live window's still-useful portion (a live window's already-elapsed time must never register as "missing" coverage, and a forecast supplement must never backfill it).
 
 **`test_isolated_cheap_slot_with_price_ceiling`** — regression for the 2026-04-13 production bug: a cheap slot isolated by two above-ceiling neighbours must not be selected when it cannot form a valid block.
 
@@ -71,8 +74,8 @@ OCPP 1.6, 2.0.1, and 2.1 profile generation: schema validity, `validFrom`/`valid
 ### TestXmlParsing (10)
 ENTSO-E XML parsing: slot count, 15-min duration, sort order, ordinal sequencing, no duplicate starts, forward-fill between explicit points, resolution detection.
 
-### TestEndToEnd (6)
-Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable.
+### TestEndToEnd (8)
+Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable. Plus two delayed-run regression tests: a run firing mid-window still targets tonight's live window rather than skipping to the next night, and — with an artificially-cheap already-elapsed slot planted to tempt the DP — confirms it's never selected.
 
 ### TestPriceSourceRules (9)
 Price source selection rules (rules 1–4): real prices used when sufficient, forecast display appended, forecast supplement used when window not covered, `price_source` field set correctly, supplement slots tagged `forecasted: true`.

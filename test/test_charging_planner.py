@@ -43,6 +43,8 @@ from charging_planner import (
     _parse_entsoe_xml,
     _resolve_schedule_window,
     _resolve_window_utc,
+    _resolve_planning_horizon,
+    _classify_window_instance,
     _select_spillover,
     _select_with_max_windows,
     _gha_fmt_hours,
@@ -97,9 +99,14 @@ def make_config(**overrides) -> Config:
         required_minutes=120,
         max_windows=None,
         min_slot_minutes=30,
+        min_gap_minutes=15,
         max_price_eur=None,
         preferred_window_start="00:00",
         preferred_window_end="06:00",
+        preferred_window_any=False,
+        window_start_any=False,
+        window_end_any=False,
+        schedule=[],
         timezone_str="Europe/Helsinki",
     )
     defaults.update(overrides)
@@ -592,6 +599,204 @@ class TestResolveWindowUtc(unittest.TestCase):
                                           _anchor_date=REF_DATE)
         self.assertEqual(start, datetime(2026, 3, 15, 20, 0,  tzinfo=UTC))
         self.assertEqual(end,   datetime(2026, 3, 16, 4,  30, tzinfo=UTC))
+
+
+# ===========================================================================
+# 2b. Planning horizon resolution
+# ===========================================================================
+
+class TestResolvePlanningHorizon(unittest.TestCase):
+    """Covers the scenario matrix worked out for the 'delayed run' fix: which
+    window instance (yesterday's still-open tail, today's, or tomorrow's)
+    _resolve_planning_horizon targets, for every window shape and every
+    before/live/elapsed timing relative to now.
+
+    All dates below are in EET (UTC+2, before the 2026-03-29 DST transition)
+    unless noted. now_utc is passed explicitly — no datetime mocking needed.
+    """
+
+    DAY1 = date(2026, 3, 17)   # Tuesday
+    DAY2 = date(2026, 3, 18)   # Wednesday
+
+    def _far_future_prices(self):
+        # Reaches well past any plan_horizon_utc used in these tests, so
+        # any_end_cap is governed by plan_horizon, not by data availability.
+        return [make_slot(datetime(2026, 3, 21, 0, 0, tzinfo=UTC))]
+
+    # --- Overnight, fixed (21:00-06:30 EET = 19:00-04:30 UTC) ---
+
+    def test_overnight_before_start_targets_today(self):
+        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
+        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)   # 12:00 EET, well before 19:00Z
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1)
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+
+    def test_overnight_live_evening_half_still_targets_today(self):
+        # The bug this whole fix is for: a delayed run firing after start.
+        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
+        now = datetime(2026, 3, 17, 21, 0, tzinfo=UTC)   # 23:00 EET — after 19:00Z start
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1, "must NOT skip to tomorrow")
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+
+    def test_overnight_live_early_morning_tail_targets_yesterday(self):
+        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
+        now = datetime(2026, 3, 18, 2, 0, tzinfo=UTC)    # 04:00 EET — inside 3/17's tail
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1, "must catch yesterday's still-open window")
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+
+    def test_overnight_after_both_closed_targets_tonight(self):
+        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
+        now = datetime(2026, 3, 18, 6, 0, tzinfo=UTC)    # 08:00 EET — well past 04:30Z end
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY2)
+        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 19, 4, 30, tzinfo=UTC))
+
+    # --- Same-day, fixed (09:00-17:00 EET = 07:00-15:00 UTC) ---
+
+    def test_same_day_before_start_targets_today(self):
+        cfg = make_config(preferred_window_start="09:00", preferred_window_end="17:00")
+        now = datetime(2026, 3, 17, 5, 0, tzinfo=UTC)    # 07:00 EET, before 07:00Z start
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1)
+        self.assertEqual(ws, datetime(2026, 3, 17, 7, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 17, 15, 0, tzinfo=UTC))
+
+    def test_same_day_live_still_targets_today(self):
+        cfg = make_config(preferred_window_start="09:00", preferred_window_end="17:00")
+        now = datetime(2026, 3, 17, 8, 0, tzinfo=UTC)    # 10:00 EET — inside 07:00-15:00Z
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1, "must NOT skip to tomorrow")
+        self.assertEqual(ws, datetime(2026, 3, 17, 7, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 17, 15, 0, tzinfo=UTC))
+
+    def test_same_day_after_end_targets_tomorrow(self):
+        cfg = make_config(preferred_window_start="09:00", preferred_window_end="17:00")
+        now = datetime(2026, 3, 17, 16, 0, tzinfo=UTC)   # 18:00 EET — after 15:00Z end
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY2)
+        self.assertEqual(ws, datetime(2026, 3, 18, 7, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 15, 0, tzinfo=UTC))
+
+    # --- any / any ---
+
+    def test_any_any_always_live_from_now(self):
+        cfg = make_config(preferred_window_any=True,
+                          preferred_window_start="any", preferred_window_end="any")
+        now = datetime(2026, 3, 17, 8, 0, tzinfo=UTC)
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(ws, now)
+        self.assertEqual(ss, "any")
+        self.assertEqual(es, "any")
+
+    # --- any start, fixed end ---
+
+    def test_any_start_fixed_end_before_todays_end(self):
+        cfg = make_config(window_start_any=True, preferred_window_end="06:30")
+        now = datetime(2026, 3, 17, 2, 0, tzinfo=UTC)    # 04:00 EET, before 04:30Z end
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1)
+        self.assertEqual(ws, now)
+        self.assertEqual(we, datetime(2026, 3, 17, 4, 30, tzinfo=UTC))
+
+    def test_any_start_fixed_end_after_todays_end_rolls_to_tomorrow(self):
+        cfg = make_config(window_start_any=True, preferred_window_end="06:30")
+        now = datetime(2026, 3, 17, 5, 0, tzinfo=UTC)    # 07:00 EET, after 04:30Z end
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY2)
+        self.assertEqual(ws, now)
+        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+
+    # --- fixed start, any end ---
+
+    def test_fixed_start_any_end_before_start(self):
+        cfg = make_config(preferred_window_start="21:00", window_end_any=True)
+        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)   # before 19:00Z start
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(plan_date, self.DAY1)
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(es, "any")
+
+    def test_fixed_start_any_end_live_when_required_still_fits(self):
+        cfg = make_config(preferred_window_start="21:00", window_end_any=True,
+                          required_minutes=60)
+        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)   # after 19:00Z start
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(plan_date, self.DAY1, "must NOT skip to tomorrow — plenty of time left")
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(es, "any")
+
+    def test_fixed_start_any_end_elapsed_when_required_no_longer_fits(self):
+        # required_minutes deliberately larger than what remains before
+        # any_end_cap (plan_horizon, ~27h out from this now) — this is the
+        # case the user specifically asked for: elapsed iff required_hours
+        # no longer fits before the cap.
+        cfg = make_config(preferred_window_start="21:00", window_end_any=True,
+                          required_minutes=40 * 60)
+        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)   # after 19:00Z start, ~27h before cap
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(plan_date, self.DAY2, "40h no longer fits — must roll to tomorrow")
+        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
+
+    # --- schedule spanning a weekday/weekend-shape boundary ---
+
+    def test_schedule_yesterday_tail_uses_yesterdays_own_schedule_entry(self):
+        # Tuesday: fixed overnight 21:00-06:30. Wednesday: any/any (a
+        # different shape). Now is early Wednesday morning, inside Tuesday's
+        # still-open overnight window — must resolve via TUESDAY's entry,
+        # not assume today's (Wednesday's) shape applies retroactively.
+        cfg = make_config(schedule=[
+            {"days": ["tuesday"],   "preferred_window_start": "21:00", "preferred_window_end": "06:30"},
+            {"days": ["wednesday"], "preferred_window_start": "any",   "preferred_window_end": "any"},
+        ])
+        now = datetime(2026, 3, 18, 2, 0, tzinfo=UTC)    # 04:00 EET Wednesday
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(plan_date, self.DAY1, "Tuesday's window, not Wednesday's any/any")
+        self.assertEqual(ss, "21:00")
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+
+    def test_schedule_elapsed_today_rolls_to_tomorrows_own_shape(self):
+        # Tuesday: same-day 09:00-17:00, already elapsed. Wednesday: any/any.
+        # Must resolve via WEDNESDAY's entry for the rollover, not assume
+        # Tuesday's shape carries forward.
+        cfg = make_config(schedule=[
+            {"days": ["tuesday"],   "preferred_window_start": "09:00", "preferred_window_end": "17:00"},
+            {"days": ["wednesday"], "preferred_window_start": "any",   "preferred_window_end": "any"},
+        ])
+        now = datetime(2026, 3, 17, 16, 0, tzinfo=UTC)   # 18:00 EET Tuesday — after 15:00Z end
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(plan_date, self.DAY2)
+        self.assertEqual(ss, "any")
+        self.assertEqual(es, "any")
+        self.assertEqual(ws, now)
+
+    def test_schedule_required_hours_override_follows_target_date(self):
+        cfg = make_config(schedule=[
+            {"days": ["tuesday"], "preferred_window_start": "21:00",
+             "preferred_window_end": "06:30", "required_hours": 3.5},
+        ])
+        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(req, 210)   # 3.5h
+
 
 
 # ===========================================================================
@@ -1316,6 +1521,57 @@ class TestSelectWithMinBlock(unittest.TestCase):
         from charging_planner import _check_window_coverage
         _check_window_coverage(slots, ws, we, "test")  # must not raise
 
+    def test_now_utc_clamps_denominator_to_still_useful_portion(self):
+        # A live window (now inside it, per _resolve_planning_horizon) has
+        # its already-elapsed portion correctly absent from `inside` — that
+        # must NOT register as "missing" coverage. Window is 6.5h; "now" is
+        # 2h in, leaving 4.5h still useful; slots cover only that remainder.
+        ws, we = self._window()
+        now = ws + timedelta(hours=2)
+        remaining_min = int((we - now).total_seconds() // 60)
+        slots = slots_from(now, remaining_min // 15)  # covers now..we fully
+        from charging_planner import _check_window_coverage
+        self.assertTrue(
+            _check_window_coverage(slots, ws, we, "test", now_utc=now),
+            "elapsed portion of a live window must not count against coverage",
+        )
+
+    def test_without_now_utc_same_slots_read_as_undercovered(self):
+        # Same data as above, but without now_utc the elapsed 2h reads as
+        # "missing" against the full window — confirms the fix is actually
+        # doing something, not just always returning True.
+        ws, we = self._window()
+        now = ws + timedelta(hours=2)
+        remaining_min = int((we - now).total_seconds() // 60)
+        slots = slots_from(now, remaining_min // 15)
+        from charging_planner import _check_window_coverage
+        self.assertFalse(_check_window_coverage(slots, ws, we, "test"))
+
+    def test_forecast_supplement_never_backfills_elapsed_time(self):
+        # Even when a forecast supplement is genuinely needed (no real prices
+        # at all here), it must not be used to fill the already-elapsed
+        # portion of a live window — that time is gone regardless of what
+        # the forecast says about it.
+        from charging_planner import _select_slots
+        ws, we = self._window()          # 00:00-06:30 local -> UTC
+        now = ws + timedelta(hours=2)    # 2h into the window
+        # Forecast covers the WHOLE window, including the elapsed part,
+        # deliberately cheap so the DP would want the elapsed slots if the
+        # clamp weren't applied.
+        forecast = slots_from(ws, int((we - ws).total_seconds() // 900), price_cents=0.5)
+        cfg = make_config(preferred_window_start="00:00", preferred_window_end="06:30",
+                          required_minutes=60, min_slot_minutes=30)
+        selected, used_forecast = _select_slots(
+            cfg, candidate_prices=[], win_start_utc=ws, win_end_utc=we,
+            win_start_str="00:00", win_end_str="06:30", now_utc=now,
+            forecast_slots=forecast,
+        )
+        self.assertTrue(used_forecast)
+        self.assertTrue(selected)
+        for s in selected:
+            self.assertGreaterEqual(s.start, now,
+                                    "forecast backfilled already-elapsed time")
+
     def test_cmd_plan_exits_when_prices_missing(self):
         """cmd_plan exits cleanly if fetched prices don't cover any profile's window."""
         from charging_planner import cmd_plan
@@ -1598,6 +1854,73 @@ class TestEndToEnd(unittest.TestCase):
         for plan in plans:
             self.assertIn("ocpp_charging_profile", plan)
             self.assertIn("chargingSchedule", plan["ocpp_charging_profile"])
+
+    def test_delayed_run_mid_window_still_targets_tonight(self):
+        # The actual bug this whole matrix was built for: a cron run firing
+        # late, after the overnight window has already started. "now" =
+        # 22:00Z (00:00 Helsinki) — 2h after the 20:00Z/22:00 Helsinki start,
+        # 6.5h still remain before the 04:30Z/06:30 Helsinki end, comfortably
+        # enough for the 6h required. Must NOT skip to the following night.
+        import charging_planner as cp
+        import tempfile
+
+        delayed_now = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=self._make_prices()):
+            plans = cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+
+        overnight = plans[1]
+        self.assertEqual(overnight["profile"], "overnight")
+        self.assertGreaterEqual(overnight["total_minutes"], 360,
+                                "6h should still fit in the 6.5h remaining tonight")
+        starts = [datetime.fromisoformat(s) for s in overnight["window_starts_utc"]]
+        self.assertTrue(starts, "must have scheduled something tonight, not skipped to next night")
+        # Every scheduled slot must fall on 2026-03-14's overnight instance
+        # (before 2026-03-15 04:30Z), not the following night.
+        for s in starts:
+            self.assertLess(s, datetime(2026, 3, 15, 4, 30, tzinfo=UTC),
+                            "slot belongs to the following night — the bug this test guards against")
+
+    def test_delayed_run_never_selects_an_elapsed_slot(self):
+        # Same delayed scenario, but the already-elapsed portion of tonight's
+        # window (20:00Z-22:00Z, before "now") is made artificially the
+        # CHEAPEST price in the whole dataset — if the candidate floor isn't
+        # working, the DP would be drawn to it since it's optimal by price.
+        import charging_planner as cp
+        import tempfile
+
+        delayed_now = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        prices = self._make_prices()
+        prices = [
+            replace(s, price_eur_kwh=0.001)
+            if datetime(2026, 3, 14, 20, 0, tzinfo=UTC) <= s.start < delayed_now
+            else s
+            for s in prices
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            plans = cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+
+        overnight = plans[1]
+        starts = [datetime.fromisoformat(s) for s in overnight["window_starts_utc"]]
+        for s in starts:
+            self.assertGreaterEqual(s, delayed_now,
+                                    "an already-elapsed slot was selected — the candidate floor failed")
 
     def test_plan_json_written_to_output_dir(self):
         import tempfile, os

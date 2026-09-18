@@ -149,6 +149,31 @@ Each run reads `data/plan-{name}.json`, counts future `charging: true` minutes, 
 
 ---
 
+## Planning horizon resolution
+
+`_resolve_planning_horizon` decides which window *instance* a plan targets — today's, or (if a run fires unusually late) an already-open window still worth catching the tail of. Added to fix a real bug: a delayed cron run firing after a window's configured start used to skip straight to the *next* occurrence, discarding however many hours of a still-usable window remained.
+
+**Three candidate dates, checked in priority order:**
+1. **Yesterday** — only a valid candidate for a fixed *overnight* window (e.g. `21:00–06:30`); it may still be open past midnight. Same-day and `any`-ended shapes can never still be open a full calendar day later, so this candidate is skipped for those.
+2. **Today** — the normal case (upcoming) and the delayed-run case (live: already started, not yet ended).
+3. **Tomorrow** — the fallback once today has elapsed. Can never itself classify as elapsed (`now` is by definition still within today).
+
+Each candidate date's window shape is resolved independently via `_resolve_schedule_window(cfg, date)`, since a `schedule:` can vary by weekday (e.g. weekday overnight vs. weekend `any`/`any`) — there is no single "the window shape" independent of which date is being asked about. A live overnight window spanning a weekday→weekend boundary correctly uses *yesterday's* schedule entry for the still-open tail, not today's.
+
+**Classification** (`_classify_window_instance`) — "elapsed" depends on shape, since not every shape has a fixed end:
+- both `any` → never elapsed (trivially live, start = now)
+- `any` start → elapsed once today's occurrence of the fixed end time has passed
+- `any` end → elapsed once `required_minutes` no longer fits between now and `any_end_cap` (`min(last available price, plan_horizon)`) — there's no fixed clock-time end to compare against, so "does it still fit" is the only sensible boundary
+- both fixed → elapsed once `now >= end_utc`
+
+**`win_start_utc`/`win_end_utc` are returned unclamped** — they represent the *configured* bounds of whichever instance was targeted, used as-is for the plan's displayed `preferred_window_start`/`preferred_window_end`. Clamping is the caller's job, applied uniformly regardless of which instance was chosen:
+- `_plan_one_profile` floors `candidate_prices` to `now_utc` (in addition to the existing `win_start_utc - required_minutes` floor) — this is what makes catching a live window's remainder safe; without it, an elapsed-but-still-known price could otherwise be selected.
+- `_check_window_coverage` and the forecast-supplement filter in `_select_slots` both take `now_utc` and clamp their effective window start to `max(win_start_utc, now_utc)` — without this, a live window's already-elapsed portion would always register as "missing" coverage (misdiagnosed as "prices not yet published"), and a forecast supplement could backfill already-elapsed time.
+
+`_resolve_window_utc` itself is now purely mechanical — given a start/end HH:MM and a specific anchor date, it returns UTC bounds with no dependency on the current time at all. Deciding *which* date to anchor to is entirely `_resolve_planning_horizon`'s job; the previous version's own auto-anchor heuristic (guessing "today or tomorrow" from the clock) was the actual bug and has been removed rather than left dormant.
+
+---
+
 ## Plan JSON structure
 
 ```json
