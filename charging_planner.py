@@ -28,17 +28,17 @@ import urllib.request
 import urllib.error
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Optional dependencies
-# ---------------------------------------------------------------------------
+# ===========================================================================
 try:
     import yaml
 except ImportError:
     yaml = None
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Logging
-# ---------------------------------------------------------------------------
+# ===========================================================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -653,11 +653,11 @@ def fetch_sahkotin_prices(area: str = "FI") -> list[Slot]:
 
 
 def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot]:
-    """Fetch forecast slots for display purposes only, starting after `after`.
+    """Fetch forecast slots for display purposes only, starting from the after parameter.
 
     Used to extend the histogram when real price data doesn't yet cover
     tomorrow (i.e. Nord Pool hasn't published yet). Only available for FI.
-    Fetches at most 24 hours beyond `after` — enough to fill the histogram
+    Fetches at most 24 hours beyond after — enough to fill the histogram
     right edge and cover a full overnight window when real prices aren't yet published.
     Returns slots with 15-min resolution, ex-VAT, same structure as real slots.
     Returns empty list on any failure — display augmentation is best-effort.
@@ -700,9 +700,9 @@ def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot
     return slots
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Elering price source — fallback for FI, EE, LV, LT areas
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 ELERING_API  = "https://dashboard.elering.ee/api/nps/price"
 ELERING_AREAS = {
@@ -791,9 +791,9 @@ def fetch_elering_prices(area: str = "FI") -> list[Slot]:
             for i, s in enumerate(sorted(slots, key=lambda x: x.start))]
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Nordpool regional price sources — SE and NO
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 # elprisetjustnu.se — Sweden (SE1–SE4)
 # Native 15-min resolution (96 slots/day). EUR/kWh ex-VAT. No API key.
@@ -1777,8 +1777,8 @@ def _select_spillover(
     all_prices: list[Slot],
 ) -> list[Slot]:
     """
-    Select spillover slots to cover `remaining` minutes when the preferred
-    window alone cannot satisfy `required_minutes`.
+    Select spillover slots to cover remaining minutes when the preferred
+    window alone cannot satisfy required_minutes.
 
     Rules:
     - Never spill after win_end_utc.
@@ -2040,8 +2040,8 @@ def build_ocpp_charging_profile(
     """Build an OCPP-compatible ChargingProfile from a plan.
 
     Compatible with OCPP 1.6, 2.0.1, and 2.1. The only structural difference
-    between versions is that OCPP 2.1 renames `chargingProfileId` to `id` in
-    ChargingProfileType, and adds an `id` field to ChargingScheduleType.
+    between versions is that OCPP 2.1 renames chargingProfileId to id in
+    ChargingProfileType, and adds an id field to ChargingScheduleType.
     All other fields — startPeriod, limit, startSchedule, chargingRateUnit,
     validFrom/validTo — are identical across all three versions.
 
@@ -2049,16 +2049,13 @@ def build_ocpp_charging_profile(
     max_charging_rate; gaps between windows are set to 0 so the vehicle does
     not charge outside the planned slots.
 
-    Args:
-        plan:               plan dict as returned by build_plan()
-        charging_rate_unit: "W" (watts, typical for DC / 3-phase AC) or
-                            "A" (amps per phase, typical for single-phase AC)
-        max_charging_rate:  limit during charging periods (W or A depending
-                            on charging_rate_unit). Default 11000 W = 11 kW.
-        profile_id:         profile identifier (must be unique on the charger)
-        stack_level:        higher values take precedence; 0 = lowest priority
-        ocpp_version:       "1.6", "2.0.1", or "2.1". OCPP 1.6 uses
-                            `chargingProfileId`; 2.0.1 and 2.1 use `id`.
+    plan is the dict returned by build_plan(). charging_rate_unit is "W"
+    (watts, typical for DC / 3-phase AC) or "A" (amps per phase, typical for
+    single-phase AC); max_charging_rate is the limit during charging periods
+    in that unit (default 11000 W = 11 kW). profile_id must be unique on the
+    charger; stack_level is priority (higher wins), 0 = lowest. ocpp_version
+    is "1.6", "2.0.1", or "2.1" — 1.6 uses chargingProfileId, 2.0.1 and 2.1
+    use id.
 
     Returns a dict matching the OCPP ChargingProfile structure, ready to be
     sent as csChargingProfiles in a SetChargingProfile.req message.
@@ -2399,9 +2396,9 @@ def _build_fallback_chain(area: str) -> list[tuple]:
     return chain
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # cmd_plan helpers — each covers one named phase of the planning pipeline
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 def _fetch_prices(cfg: Config) -> tuple[list[Slot], str]:
     """Fetch all available ENTSO-E prices. Raises on failure."""
@@ -2545,9 +2542,9 @@ def _select_slots(
     return selected, used_forecast
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Schedule window resolution
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 _DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -2582,9 +2579,9 @@ def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, s
     return s_str, e_str, None
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Main planning command
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 def _load_retained_minutes(output_dir: str, profile_name: str, now_utc: datetime) -> int:
     """Return the number of future charging minutes from the previous plan.
@@ -2637,22 +2634,20 @@ def _classify_window_instance(
     tz,
 ) -> Optional[tuple[datetime, datetime, str, str, Optional[int]]]:
     """Resolve start_str/end_str for one specific target_date to concrete UTC
-    bounds, and classify the resulting instance against now_utc.
+    bounds, and classify the result against now_utc.
 
     Returns (win_start_utc, win_end_utc, win_start_str, win_end_str, req) if
-    this instance is upcoming (now < start) or live (start <= now < end) —
-    a usable target. Returns None if it has already elapsed, so the caller
-    should try the next candidate date.
+    this instance is upcoming (now < start) or live (start <= now < end).
+    Returns None if it has already elapsed, so the caller should try the
+    next candidate date.
 
-    "Elapsed" depends on the window shape, since not every shape has a fixed
-    end:
-      - both "any"           -> never elapsed (trivially live, start = now)
-      - "any" start           -> elapsed once today's occurrence of end_str
-                                  has passed (end's date is the only ambiguity)
-      - "any" end              -> elapsed once required_minutes no longer
-                                  fits between now and any_end_cap (no fixed
-                                  clock-time end exists to compare against)
-      - both fixed             -> elapsed once now >= the resolved end_utc
+    "Elapsed" depends on shape, since not every shape has a fixed end:
+      - both "any" -> never elapsed (trivially live, start = now)
+      - "any" start -> elapsed once target_date's occurrence of end_str
+                       has passed
+      - "any" end  -> elapsed once required_minutes no longer fits between
+                      now and any_end_cap (no fixed end to compare against)
+      - both fixed -> elapsed once now >= end_utc
     """
     if start_str == "any" and end_str == "any":
         return now_utc, any_end_cap, "any", "any", req
@@ -2687,53 +2682,28 @@ def _resolve_planning_horizon(
 ) -> tuple[datetime, datetime, str, str, date, Optional[int]]:
     """Determine which window instance this plan should target.
 
-    There are two genuinely different cases here, matching a distinction the
-    original code always had (bare profile vs. schedule/"any"-flag profile):
+    Bare profile (no schedule, no top-level "any" flag): a single, unvarying
+    shape — check today's own occurrence first (upcoming or live), then
+    tomorrow's as the fallback once today has elapsed.
 
-    **Bare profile** (no `schedule:`, no top-level `any` flag): a single,
-    unvarying window shape — there's no "which weekday's entry" question at
-    all, so the natural rule is simply: check today's own occurrence first
-    (upcoming or live), then tomorrow's as the fallback once today has
-    elapsed.
+    Schedule (or top-level "any") present: a schedule entry is indexed by
+    the day the charging is *for*, not by the date its window instance
+    starts on — those only coincide for same-day shapes. An overnight
+    "monday" entry's window actually starts Sunday evening (see "Window
+    semantics" in CONTEXT.md for the full rationale). Two candidates, in
+    priority order:
+      1. Today's own entry — relevant only if overnight-shaped, since only
+         that shape can still be open this many hours later, in the early
+         morning.
+      2. Tomorrow's entry — the normal, day-ahead target. Overnight shapes
+         anchor to today (window starts this evening); other shapes anchor
+         to tomorrow itself. Can never classify as elapsed.
 
-    **Schedule (or top-level `any`) present**: a schedule entry is indexed
-    by the day the charging is *for* (e.g. the "monday" entry describes the
-    session that gets the car ready for Monday), not by the calendar date
-    its window instance starts on — those only coincide for same-day
-    shapes. For an overnight shape, the "monday" entry's window actually
-    starts Sunday evening. The original code always resolved the schedule
-    for `tomorrow` and used shape alone (overnight vs. same-day) to decide
-    whether to anchor the resulting window to today or to tomorrow itself.
-
-    Getting this second case backwards was a real regression caught in
-    production: on a Sunday with a weekday-overnight/weekend-`any` schedule,
-    using Sunday's own entry for "today" (any/any, trivially always "live")
-    meant Monday's fixed window was never even considered — the schedule
-    branch needs the day-ahead indexing precisely because a trivially-live
-    shape like `any`/`any` would otherwise always win by default and mask
-    whatever a different day's entry actually wants.
-
-    Within the schedule/any branch, two candidates are checked in priority
-    order:
-      1. Today's own entry — what yesterday's daily run would have
-         targeted, since that run resolved "tomorrow" relative to itself as
-         today. Relevant only if overnight-shaped: only that shape's window
-         instance can still be open this many hours later, in the early
-         morning. Same-day and "any"-ended shapes can't still be open a
-         full calendar day after the run that targeted them.
-      2. Tomorrow's entry — the normal target for a daily run (day-ahead
-         prices apply to tomorrow). Overnight shapes anchor to today
-         (window starts this evening); other shapes anchor to tomorrow
-         itself. Can never itself classify as elapsed, since now_utc is by
-         definition still within today — this candidate always succeeds.
-
-    win_start_utc/win_end_utc are returned as the *configured* bounds of
-    whichever instance was chosen — NOT pre-clamped to now_utc. The caller
-    is responsible for never selecting a slot that starts before now_utc,
-    uniformly, regardless of which instance was chosen here (this is what
-    actually makes catching a live window's remainder safe). plan_date is
-    derived from the actual resolved win_start_utc, matching how it has
-    always been defined: the local calendar date the window starts on.
+    win_start_utc/win_end_utc are the *configured* bounds of whichever
+    instance was chosen — not pre-clamped to now_utc. Callers must never
+    select a slot starting before now_utc regardless of which instance was
+    picked (this is what makes catching a live window's remainder safe).
+    plan_date is the local calendar date win_start_utc falls on.
 
     Returns (win_start_utc, win_end_utc, win_start_str, win_end_str,
              plan_date, required_minutes_override).

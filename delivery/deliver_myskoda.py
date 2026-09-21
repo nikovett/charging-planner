@@ -349,11 +349,10 @@ def deliver(plan: dict, vin: str, entry: dict, tz_name: str) -> bool:
     where charge_point_id is the VIN (resolved from the env var named by
     charge_point_id in config.yaml, e.g. SKODA_VIN).
 
-    Args:
-        plan:    Charging plan dict as produced by charging_planner.py.
-        vin:     Vehicle Identification Number (from charge_point_id env var).
-        entry:   Delivery config entry from config.yaml for this handler.
-        tz_name: IANA timezone name from the top-level config.
+    plan is the charging plan dict as produced by charging_planner.py. vin is
+    the Vehicle Identification Number (from the charge_point_id env var).
+    entry is the delivery config entry from config.yaml for this handler.
+    tz_name is the IANA timezone name from the top-level config.
 
     Returns True on success, False on failure (error is logged).
     """

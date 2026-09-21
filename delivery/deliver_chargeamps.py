@@ -33,14 +33,14 @@ import urllib.error
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Logging
-# ---------------------------------------------------------------------------
+# ===========================================================================
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Constants
-# ---------------------------------------------------------------------------
+# ===========================================================================
 _CA_BASE = "https://my.charge.space/api"
 
 # Module-level token cache — login once per process, reuse across deliver() calls.
@@ -285,7 +285,7 @@ def _ca_get_connector_mode(chargepoint: dict, connector_id: int) -> str | None:
 def _ca_is_connector_charging(chargepoint: dict, connector_id: int) -> bool:
     """Return True if the connector is currently in an active charging session.
 
-    Uses the connector-level `isCharging` boolean field from the Charge Amps API.
+    Uses the connector-level isCharging boolean field from the Charge Amps API.
     """
     connectors = chargepoint.get("connectors", [])
     for c in connectors:
@@ -439,12 +439,11 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
     immediately. Confirmed: isActive=false causes the schedule to be ignored
     entirely — charger behaves as always-on regardless of windows.
 
-    Args:
-        plan:             Plan dict as produced by charging_planner.py.
-        charge_point_id:  Resolved charger ID (already read from env by dispatcher).
-        entry:            The delivery config entry from config.yaml, containing
-                          connector_id, max_charging_rate, etc.
-        timezone:         IANA timezone name inherited from the charging profile.
+    plan is the plan dict as produced by charging_planner.py. charge_point_id
+    is the resolved charger ID (already read from env by the dispatcher).
+    entry is the delivery config entry from config.yaml, containing
+    connector_id, max_charging_rate, etc. timezone is the IANA timezone name
+    inherited from the charging profile.
 
     Returns True on success, False on failure.
     """

@@ -36,14 +36,14 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone as _tz
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Logging
-# ---------------------------------------------------------------------------
+# ===========================================================================
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Constants
-# ---------------------------------------------------------------------------
+# ===========================================================================
 _EASEE_BASE = "https://api.easee.com/api"
 
 # Module-level token cache — login once per process, reuse across deliver() calls.
@@ -238,11 +238,10 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
     Single window → Basic Charge Plan (specific datetime, no repeat).
     Multiple windows → Weekly Charge Plan (recurring, overwritten daily).
 
-    Args:
-        plan:             Plan dict as produced by charging_planner.py.
-        charge_point_id:  Resolved charger ID (already read from env by dispatcher).
-        entry:            The delivery config entry from config.yaml.
-        timezone:         IANA timezone name (unused — Easee API uses UTC).
+    plan is the plan dict as produced by charging_planner.py. charge_point_id
+    is the resolved charger ID (already read from env by the dispatcher).
+    entry is the delivery config entry from config.yaml. timezone is the
+    IANA timezone name (unused — Easee API uses UTC).
 
     Returns True on success, False on failure.
     """
