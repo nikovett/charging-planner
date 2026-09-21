@@ -8,6 +8,18 @@ This document is the authoritative reference for the charging-planner project. I
 
 ---
 
+## Guiding principles
+
+Three principles, in priority order — any change that would violate a higher one is wrong regardless of what it does for a lower one:
+
+1. **A charging plan may never fail to have the vehicle ready by its expected departure, nor interrupt a charging session already in progress.**
+2. **A charging plan must respect its configured window and constraints, except where doing so would conflict with the First principle.**
+3. **A charging plan must minimize cost, except where doing so would conflict with the First or Second principle.**
+
+Cost minimization is the entire point of this project, but it is always subordinate to respecting the configured window, which is itself always subordinate to never leaving the driver stranded or interrupting a charge already underway. When evaluating a design change or reviewing a bug, check it against these in order — a fix or feature that improves cost optimization at the expense of window correctness, or improves window correctness at the expense of departure readiness or an active session, is a regression even if it looks like an improvement locally.
+
+---
+
 # Reference
 
 ## What it does
