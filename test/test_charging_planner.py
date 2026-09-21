@@ -698,83 +698,111 @@ class TestResolvePlanningHorizon(unittest.TestCase):
         self.assertEqual(es, "any")
 
     # --- any start, fixed end ---
+    #
+    # window_start_any / window_end_any count as "schedule or any" (matching
+    # the original code's own trigger condition), so these go through the
+    # day-ahead (tomorrow-indexed) branch just like a real schedule would —
+    # the fixed end is always tomorrow's occurrence, regardless of whether
+    # today's own occurrence has already passed. There's no "is today's
+    # occurrence still valid" nuance for this shape in that branch, matching
+    # the original code's own behavior for it exactly (see the docstring's
+    # "Schedule (or top-level any) present" case).
 
-    def test_any_start_fixed_end_before_todays_end(self):
+    def test_any_start_fixed_end_always_targets_tomorrows_occurrence(self):
         cfg = make_config(window_start_any=True, preferred_window_end="06:30")
-        now = datetime(2026, 3, 17, 2, 0, tzinfo=UTC)    # 04:00 EET, before 04:30Z end
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-        self.assertEqual(plan_date, self.DAY1)
-        self.assertEqual(ws, now)
-        self.assertEqual(we, datetime(2026, 3, 17, 4, 30, tzinfo=UTC))
-
-    def test_any_start_fixed_end_after_todays_end_rolls_to_tomorrow(self):
-        cfg = make_config(window_start_any=True, preferred_window_end="06:30")
-        now = datetime(2026, 3, 17, 5, 0, tzinfo=UTC)    # 07:00 EET, after 04:30Z end
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-        self.assertEqual(plan_date, self.DAY2)
-        self.assertEqual(ws, now)
-        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+        for label, now in [
+            ("before today's end", datetime(2026, 3, 17, 2, 0, tzinfo=UTC)),
+            ("after today's end",  datetime(2026, 3, 17, 5, 0, tzinfo=UTC)),
+        ]:
+            with self.subTest(label):
+                ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+                self.assertEqual(ws, now)
+                self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+                self.assertEqual(plan_date, self.DAY1, "ws falls on today's date since start=now")
 
     # --- fixed start, any end ---
+    #
+    # Same day-ahead indexing as above: candidate 1 (today's own entry) only
+    # ever applies to overnight shapes, so a "fixed start, any end" entry is
+    # always reached via candidate 2, anchored to tomorrow.
 
     def test_fixed_start_any_end_before_start(self):
         cfg = make_config(preferred_window_start="21:00", window_end_any=True)
-        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)   # before 19:00Z start
+        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
         ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
             cfg, now, FI_TZ, self._far_future_prices(),
         )
-        self.assertEqual(plan_date, self.DAY1)
-        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(plan_date, self.DAY2)
+        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
         self.assertEqual(es, "any")
 
-    def test_fixed_start_any_end_live_when_required_still_fits(self):
+    def test_fixed_start_any_end_required_hours_still_bounds_the_cap(self):
+        # any_end_cap is min(last available price, plan_horizon) regardless
+        # of which candidate is used — a required_minutes that can't fit
+        # before that cap is still meaningful, even though this shape is
+        # always tomorrow-anchored (no live/elapsed check on this branch).
         cfg = make_config(preferred_window_start="21:00", window_end_any=True,
                           required_minutes=60)
-        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)   # after 19:00Z start
+        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)
         ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
             cfg, now, FI_TZ, self._far_future_prices(),
         )
-        self.assertEqual(plan_date, self.DAY1, "must NOT skip to tomorrow — plenty of time left")
-        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 23, 0, tzinfo=UTC))
         self.assertEqual(es, "any")
 
-    def test_fixed_start_any_end_elapsed_when_required_no_longer_fits(self):
-        # required_minutes deliberately larger than what remains before
-        # any_end_cap (plan_horizon, ~27h out from this now) — this is the
-        # case the user specifically asked for: elapsed iff required_hours
-        # no longer fits before the cap.
-        cfg = make_config(preferred_window_start="21:00", window_end_any=True,
-                          required_minutes=40 * 60)
-        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)   # after 19:00Z start, ~27h before cap
+    # --- schedule spanning a weekday/weekend-shape boundary ---
+    #
+    # A schedule entry is indexed by the day the charging is *for*: the
+    # "monday" entry describes the session that gets the car ready for
+    # Monday, which for an overnight shape actually starts Sunday evening.
+    # This is the exact regression caught in production: on a Sunday with a
+    # weekday-overnight/weekend-any schedule, targeting Sunday's own any/any
+    # entry meant Monday's fixed window was never even considered.
+
+    def test_schedule_regression_weekend_any_does_not_mask_weekday_overnight(self):
+        # The precise scenario from the production bug report: Saturday and
+        # Sunday are any/any, Monday-Friday are a fixed overnight window.
+        # A normal Sunday-afternoon run must still target Monday's fixed
+        # window (starting Sunday evening), not Sunday's own any/any.
+        cfg = make_config(schedule=[
+            {"days": ["saturday", "sunday"], "preferred_window_start": "any", "preferred_window_end": "any"},
+            {"days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+             "preferred_window_start": "21:00", "preferred_window_end": "06:30"},
+        ])
+        now = datetime(2026, 3, 15, 14, 0, tzinfo=UTC)   # 2026-03-15 is REF_DATE, a Sunday; 16:00 EET
         ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
             cfg, now, FI_TZ, self._far_future_prices(),
         )
-        self.assertEqual(plan_date, self.DAY2, "40h no longer fits — must roll to tomorrow")
-        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
+        self.assertEqual(ss, "21:00", "must use Monday's fixed window, not Sunday's any/any")
+        self.assertEqual(es, "06:30")
+        self.assertEqual(ws, datetime(2026, 3, 15, 19, 0, tzinfo=UTC), "starts Sunday evening")
+        self.assertEqual(we, datetime(2026, 3, 16, 4, 30, tzinfo=UTC))
+        self.assertEqual(plan_date, REF_DATE)   # Sunday — the date the window starts on
 
-    # --- schedule spanning a weekday/weekend-shape boundary ---
-
-    def test_schedule_yesterday_tail_uses_yesterdays_own_schedule_entry(self):
-        # Tuesday: fixed overnight 21:00-06:30. Wednesday: any/any (a
-        # different shape). Now is early Wednesday morning, inside Tuesday's
-        # still-open overnight window — must resolve via TUESDAY's entry,
-        # not assume today's (Wednesday's) shape applies retroactively.
+    def test_schedule_yesterday_tail_uses_todays_own_schedule_entry(self):
+        # Wednesday's own entry (21:00-06:30, describing the session that
+        # gets the car ready for Wednesday) actually starts Tuesday evening.
+        # Checked early Wednesday morning, its tail must still be caught —
+        # via WEDNESDAY's (today's) own entry, not Tuesday's (which could be
+        # any shape at all and is never even queried for this check).
         cfg = make_config(schedule=[
-            {"days": ["tuesday"],   "preferred_window_start": "21:00", "preferred_window_end": "06:30"},
-            {"days": ["wednesday"], "preferred_window_start": "any",   "preferred_window_end": "any"},
+            {"days": ["wednesday"], "preferred_window_start": "21:00", "preferred_window_end": "06:30"},
+            {"days": ["thursday"],  "preferred_window_start": "any",   "preferred_window_end": "any"},
         ])
         now = datetime(2026, 3, 18, 2, 0, tzinfo=UTC)    # 04:00 EET Wednesday
         ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
             cfg, now, FI_TZ, self._far_future_prices(),
         )
-        self.assertEqual(plan_date, self.DAY1, "Tuesday's window, not Wednesday's any/any")
         self.assertEqual(ss, "21:00")
-        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC), "starts Tuesday evening")
+        self.assertEqual(plan_date, self.DAY1)   # Tuesday — the date the window starts on
 
     def test_schedule_elapsed_today_rolls_to_tomorrows_own_shape(self):
         # Tuesday: same-day 09:00-17:00, already elapsed. Wednesday: any/any.
-        # Must resolve via WEDNESDAY's entry for the rollover, not assume
-        # Tuesday's shape carries forward.
+        # Must resolve via WEDNESDAY's entry for the rollover (candidate 1
+        # only ever applies to overnight shapes, so same-day never blocks
+        # this transition).
         cfg = make_config(schedule=[
             {"days": ["tuesday"],   "preferred_window_start": "09:00", "preferred_window_end": "17:00"},
             {"days": ["wednesday"], "preferred_window_start": "any",   "preferred_window_end": "any"},
@@ -783,19 +811,66 @@ class TestResolvePlanningHorizon(unittest.TestCase):
         ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
             cfg, now, FI_TZ, self._far_future_prices(),
         )
-        self.assertEqual(plan_date, self.DAY2)
         self.assertEqual(ss, "any")
         self.assertEqual(es, "any")
         self.assertEqual(ws, now)
+        self.assertEqual(plan_date, self.DAY1, "ws falls on today's date since any/any starts now")
 
     def test_schedule_required_hours_override_follows_target_date(self):
+        # Monday run targets Tuesday's entry (day-ahead) — its override must
+        # be the one that comes back, not any other date's.
         cfg = make_config(schedule=[
             {"days": ["tuesday"], "preferred_window_start": "21:00",
              "preferred_window_end": "06:30", "required_hours": 3.5},
         ])
-        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        now = datetime(2026, 3, 16, 10, 0, tzinfo=UTC)   # Monday, well before the target window
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
         self.assertEqual(req, 210)   # 3.5h
+        self.assertEqual(ws, datetime(2026, 3, 16, 19, 0, tzinfo=UTC))
+
+
+class TestClassifyWindowInstance(unittest.TestCase):
+    """Direct tests of _classify_window_instance's "fixed start, any end"
+    elapsed behavior (required_minutes no longer fits before any_end_cap) —
+    not reachable via _resolve_planning_horizon for this shape combination,
+    since window_end_any always routes through the tomorrow-anchored branch
+    there (matching the original code's own behavior for it), but the
+    behavior itself is real and worth covering directly."""
+
+    def _far_future_prices(self):
+        return [make_slot(datetime(2026, 3, 21, 0, 0, tzinfo=UTC))]
+
+    def test_live_when_required_still_fits(self):
+        cfg = make_config(required_minutes=60)
+        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)
+        any_end_cap = datetime(2026, 3, 18, 23, 0, tzinfo=UTC)   # ~27h out
+        result = _classify_window_instance(
+            "21:00", "any", None, date(2026, 3, 17), now, any_end_cap, cfg, FI_TZ,
+        )
+        self.assertIsNotNone(result)
+        ws, we, ss, es, req = result
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, any_end_cap)
+
+    def test_elapsed_when_required_no_longer_fits(self):
+        cfg = make_config(required_minutes=40 * 60)   # 40h — more than the ~27h available
+        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)
+        any_end_cap = datetime(2026, 3, 18, 23, 0, tzinfo=UTC)
+        result = _classify_window_instance(
+            "21:00", "any", None, date(2026, 3, 17), now, any_end_cap, cfg, FI_TZ,
+        )
+        self.assertIsNone(result, "40h no longer fits before the cap — must classify as elapsed")
+
+    def test_before_start_always_upcoming_regardless_of_required(self):
+        cfg = make_config(required_minutes=40 * 60)
+        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)   # before 19:00Z start
+        any_end_cap = datetime(2026, 3, 18, 23, 0, tzinfo=UTC)
+        result = _classify_window_instance(
+            "21:00", "any", None, date(2026, 3, 17), now, any_end_cap, cfg, FI_TZ,
+        )
+        self.assertIsNotNone(result, "not started yet — required-fits check shouldn't even apply")
 
 
 

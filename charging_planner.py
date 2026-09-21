@@ -2687,29 +2687,53 @@ def _resolve_planning_horizon(
 ) -> tuple[datetime, datetime, str, str, date, Optional[int]]:
     """Determine which window instance this plan should target.
 
-    Checks up to three candidate calendar dates, in priority order, and
-    targets the first one that is currently live or still upcoming:
+    There are two genuinely different cases here, matching a distinction the
+    original code always had (bare profile vs. schedule/"any"-flag profile):
 
-      1. Yesterday — only a valid candidate for a fixed overnight window
-         shape (e.g. 21:00-06:30): it may still be open past midnight, into
-         this morning. Same-day and "any"-ended shapes can't still be open
-         a full calendar day later, so this candidate is skipped for those.
-      2. Today — the normal case (upcoming) and the "delayed run, window
-         already started but not yet closed" case (live).
-      3. Tomorrow — the fallback once today has elapsed. Can never itself
-         classify as elapsed, since now_utc is by definition still within
-         today.
+    **Bare profile** (no `schedule:`, no top-level `any` flag): a single,
+    unvarying window shape — there's no "which weekday's entry" question at
+    all, so the natural rule is simply: check today's own occurrence first
+    (upcoming or live), then tomorrow's as the fallback once today has
+    elapsed.
 
-    Each candidate date's window shape is resolved independently via
-    _resolve_schedule_window, since a schedule can vary by weekday (e.g.
-    weekday overnight vs weekend "any"/"any") — there is no single "the
-    window shape" independent of which specific date is being asked about.
+    **Schedule (or top-level `any`) present**: a schedule entry is indexed
+    by the day the charging is *for* (e.g. the "monday" entry describes the
+    session that gets the car ready for Monday), not by the calendar date
+    its window instance starts on — those only coincide for same-day
+    shapes. For an overnight shape, the "monday" entry's window actually
+    starts Sunday evening. The original code always resolved the schedule
+    for `tomorrow` and used shape alone (overnight vs. same-day) to decide
+    whether to anchor the resulting window to today or to tomorrow itself.
+
+    Getting this second case backwards was a real regression caught in
+    production: on a Sunday with a weekday-overnight/weekend-`any` schedule,
+    using Sunday's own entry for "today" (any/any, trivially always "live")
+    meant Monday's fixed window was never even considered — the schedule
+    branch needs the day-ahead indexing precisely because a trivially-live
+    shape like `any`/`any` would otherwise always win by default and mask
+    whatever a different day's entry actually wants.
+
+    Within the schedule/any branch, two candidates are checked in priority
+    order:
+      1. Today's own entry — what yesterday's daily run would have
+         targeted, since that run resolved "tomorrow" relative to itself as
+         today. Relevant only if overnight-shaped: only that shape's window
+         instance can still be open this many hours later, in the early
+         morning. Same-day and "any"-ended shapes can't still be open a
+         full calendar day after the run that targeted them.
+      2. Tomorrow's entry — the normal target for a daily run (day-ahead
+         prices apply to tomorrow). Overnight shapes anchor to today
+         (window starts this evening); other shapes anchor to tomorrow
+         itself. Can never itself classify as elapsed, since now_utc is by
+         definition still within today — this candidate always succeeds.
 
     win_start_utc/win_end_utc are returned as the *configured* bounds of
     whichever instance was chosen — NOT pre-clamped to now_utc. The caller
     is responsible for never selecting a slot that starts before now_utc,
     uniformly, regardless of which instance was chosen here (this is what
-    actually makes catching a live window's remainder safe).
+    actually makes catching a live window's remainder safe). plan_date is
+    derived from the actual resolved win_start_utc, matching how it has
+    always been defined: the local calendar date the window starts on.
 
     Returns (win_start_utc, win_end_utc, win_start_str, win_end_str,
              plan_date, required_minutes_override).
@@ -2724,32 +2748,57 @@ def _resolve_planning_horizon(
                                 23, 0, tzinfo=timezone.utc) + timedelta(days=1)
     any_end_cap = min(last_price_utc, plan_horizon_utc)
 
-    y_start_str, y_end_str, y_req = _resolve_schedule_window(cfg, yesterday)
-    if y_start_str != "any" and y_end_str != "any" and _is_overnight(y_start_str, y_end_str):
+    has_schedule_or_any = (bool(cfg.schedule) or cfg.preferred_window_any
+                           or cfg.window_start_any or cfg.window_end_any)
+
+    if not has_schedule_or_any:
+        # Bare profile: one unvarying shape. No day-indexing question — just
+        # find the nearest still-valid occurrence: yesterday's overnight
+        # tail, then today directly, then tomorrow as the guaranteed fallback.
+        start_str, end_str, req = _resolve_schedule_window(cfg, today)
+        if start_str != "any" and end_str != "any" and _is_overnight(start_str, end_str):
+            result = _classify_window_instance(
+                start_str, end_str, req, yesterday, now_utc, any_end_cap, cfg, tz,
+            )
+            if result is not None:
+                ws, we, ss, es, r = result
+                return ws, we, ss, es, ws.astimezone(tz).date(), r
         result = _classify_window_instance(
-            y_start_str, y_end_str, y_req, yesterday, now_utc, any_end_cap, cfg, tz,
+            start_str, end_str, req, today, now_utc, any_end_cap, cfg, tz,
+        )
+        if result is not None:
+            ws, we, ss, es, r = result
+            return ws, we, ss, es, ws.astimezone(tz).date(), r
+        result = _classify_window_instance(
+            start_str, end_str, req, tomorrow, now_utc, any_end_cap, cfg, tz,
+        )
+        assert result is not None, "tomorrow's window instance can never classify as elapsed"
+        ws, we, ss, es, r = result
+        return ws, we, ss, es, ws.astimezone(tz).date(), r
+
+    # Candidate 1: today's own schedule entry — what yesterday's run would
+    # have targeted. Only relevant if overnight-shaped.
+    c1_start_str, c1_end_str, c1_req = _resolve_schedule_window(cfg, today)
+    if c1_start_str != "any" and c1_end_str != "any" and _is_overnight(c1_start_str, c1_end_str):
+        result = _classify_window_instance(
+            c1_start_str, c1_end_str, c1_req, yesterday, now_utc, any_end_cap, cfg, tz,
         )
         if result is not None:
             log.info("Profile '%s': targeting yesterday's still-open window (%s–%s local).",
-                     cfg.name, y_start_str, y_end_str)
+                     cfg.name, c1_start_str, c1_end_str)
             ws, we, ss, es, req = result
-            return ws, we, ss, es, yesterday, req
+            return ws, we, ss, es, ws.astimezone(tz).date(), req
 
-    t_start_str, t_end_str, t_req = _resolve_schedule_window(cfg, today)
+    # Candidate 2: tomorrow's schedule entry — the normal target.
+    c2_start_str, c2_end_str, c2_req = _resolve_schedule_window(cfg, tomorrow)
+    anchor = today if (c2_start_str != "any" and c2_end_str != "any"
+                        and _is_overnight(c2_start_str, c2_end_str)) else tomorrow
     result = _classify_window_instance(
-        t_start_str, t_end_str, t_req, today, now_utc, any_end_cap, cfg, tz,
+        c2_start_str, c2_end_str, c2_req, anchor, now_utc, any_end_cap, cfg, tz,
     )
-    if result is not None:
-        ws, we, ss, es, req = result
-        return ws, we, ss, es, today, req
-
-    tm_start_str, tm_end_str, tm_req = _resolve_schedule_window(cfg, tomorrow)
-    result = _classify_window_instance(
-        tm_start_str, tm_end_str, tm_req, tomorrow, now_utc, any_end_cap, cfg, tz,
-    )
-    assert result is not None, "tomorrow's window instance can never classify as elapsed"
+    assert result is not None, "tomorrow-anchored candidate can never classify as elapsed"
     ws, we, ss, es, req = result
-    return ws, we, ss, es, tomorrow, req
+    return ws, we, ss, es, ws.astimezone(tz).date(), req
 
 
 def _plan_one_profile(

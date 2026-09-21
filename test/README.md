@@ -1,6 +1,6 @@
 # Test Suite
 
-386 tests across four files. Run from the repo root:
+388 tests across four files. Run from the repo root:
 
 ```
 python -m unittest test_charging_planner test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ python -m unittest test_charging_planner test_deliver_chargeamps test_deliver_ea
 Or individually:
 
 ```
-python -m unittest test_charging_planner -v       # 273 tests, 3 skipped
+python -m unittest test_charging_planner -v       # 275 tests, 3 skipped
 python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
 python -m unittest test_deliver_myskoda -v        # 41 tests
@@ -19,7 +19,7 @@ The 3 skipped tests require a live ENTSO-E API key in the environment and are ma
 
 ---
 
-## test_charging_planner.py (273 tests)
+## test_charging_planner.py (275 tests)
 
 ### TestConfigValidation (18)
 Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, `preferred_window`, and `max_windows` (null/positive-int accepted; zero, negative, float, bool, and string rejected — `bool` is a subclass of `int` in Python, so it needs an explicit check).
@@ -42,8 +42,11 @@ Detects overnight windows (end ≤ start) vs same-day windows.
 ### TestResolveWindowUtc (4)
 Resolves overnight and same-day HH:MM windows to UTC start/end datetimes for a specific anchor date. Purely mechanical — no dependency on current time (see TestResolvePlanningHorizon for the "which date" decision).
 
-### TestResolvePlanningHorizon (16)
-The full scenario matrix for `_resolve_planning_horizon`: which window instance (yesterday's still-open overnight tail, today's, or tomorrow's) a plan targets, for every window shape (overnight/same-day fixed, `any`/`any`, mixed `any`) crossed with before/live/elapsed timing. Covers the fix for a real bug — a delayed cron run firing after a window's start used to skip straight to the next occurrence, discarding whatever remained of a still-usable window. Includes schedule weekday-boundary cases (a live overnight window spanning into a day with a differently-shaped schedule entry must resolve via the correct day's own entry) and the `required_minutes_override` threading through to the target date.
+### TestResolvePlanningHorizon (18)
+The full scenario matrix for `_resolve_planning_horizon`: bare (no schedule/`any`-flag) profiles check today's own occurrence directly, then tomorrow as fallback. Schedule/`any`-flag profiles index by day-of-use (a schedule entry describes the session that gets the car ready for *that* day — for an overnight shape, its window actually starts the evening before), checking today's own entry (overnight-tail only) then tomorrow's entry (the normal, day-ahead target). Covers a real production regression: on a Sunday with a weekday-overnight/weekend-`any` schedule, using Sunday's own trivially-"live" `any`/`any` entry meant Monday's fixed window was never considered — `test_schedule_regression_weekend_any_does_not_mask_weekday_overnight` reproduces this exactly. Also covers the original delayed-run fix (a run firing after a window's start used to skip straight to the next occurrence instead of catching the still-open remainder).
+
+### TestClassifyWindowInstance (3)
+Direct tests of `_classify_window_instance`'s "fixed start, `any` end" elapsed behavior (required minutes no longer fitting before `any_end_cap`) — a real, correct capability that isn't reachable through `_resolve_planning_horizon` for this specific shape combination (it's always tomorrow-anchored there, matching the original code's own behavior), so it's covered directly instead.
 
 ### TestFilterPreferredWindow (5)
 Splits a slot list into inside/outside the preferred window. Overnight windows, slots on window boundaries, `any` window sentinel.

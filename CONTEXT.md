@@ -149,28 +149,45 @@ Each run reads `data/plan-{name}.json`, counts future `charging: true` minutes, 
 
 ---
 
+## Window semantics (design intent)
+
+`preferred_window_start`/`preferred_window_end` aren't arbitrary search bounds — each end represents a real-world constraint on a specific day's charging session:
+
+- **End = the departure deadline.** The car needs to be at target charge by this time for the next leg.
+- **Start = the earliest the car is realistically home and plugged in.** Not "search from here because it's convenient" — it's an implicit claim about vehicle presence that the planner takes on faith from config. It has no way to verify the car is actually there yet; if this is set too early, the DP will silently consider slots the vehicle isn't present for, with no error or warning to catch it. Keeping this honest is the user's responsibility, not something the system cross-checks.
+- **The span between them is usually looser than `required_hours` needs.** That slack — window duration minus actual charging time needed — is exactly what `min_slot_minutes`, `min_gap_minutes`, and `max_windows` optimize within; it's buffer for the DP to find the cheapest sub-selection, not time the car is expected to be actively charging throughout.
+
+**`any`/`any` isn't a degenerate case of the same rule — it's a different rule for a different situation.** It represents having *no* deadline and *no* arrival constraint at all (the canonical case: a weekend day with no commute to plan around), so there's nothing to bound the search to on either side. That's why it collapses to `(now, price horizon)` rather than being treated as "just another shape" alongside fixed windows. This distinction is precisely what the 2026-09-20 regression (see below) got wrong: because `any`/`any` is trivially satisfiable at any moment, it's easy to mistake for one shape among several that a single classification loop can treat uniformly — but its defining property (no deadline) is exactly the thing that must never be allowed to shadow a *different* day's real deadline. Worth keeping in mind for any future refactor of this area.
+
+---
+
 ## Planning horizon resolution
 
-`_resolve_planning_horizon` decides which window *instance* a plan targets — today's, or (if a run fires unusually late) an already-open window still worth catching the tail of. Added to fix a real bug: a delayed cron run firing after a window's configured start used to skip straight to the *next* occurrence, discarding however many hours of a still-usable window remained.
+`_resolve_planning_horizon` decides which window *instance* a plan targets. Two genuinely different cases, matching a distinction the original code always had:
 
-**Three candidate dates, checked in priority order:**
-1. **Yesterday** — only a valid candidate for a fixed *overnight* window (e.g. `21:00–06:30`); it may still be open past midnight. Same-day and `any`-ended shapes can never still be open a full calendar day later, so this candidate is skipped for those.
-2. **Today** — the normal case (upcoming) and the delayed-run case (live: already started, not yet ended).
-3. **Tomorrow** — the fallback once today has elapsed. Can never itself classify as elapsed (`now` is by definition still within today).
+**Bare profile** (no `schedule:`, no top-level `any` flag) — a single, unvarying shape. No "which weekday" question at all: check today's own occurrence first (upcoming or live), then tomorrow's as the fallback once today has elapsed.
 
-Each candidate date's window shape is resolved independently via `_resolve_schedule_window(cfg, date)`, since a `schedule:` can vary by weekday (e.g. weekday overnight vs. weekend `any`/`any`) — there is no single "the window shape" independent of which date is being asked about. A live overnight window spanning a weekday→weekend boundary correctly uses *yesterday's* schedule entry for the still-open tail, not today's.
+**Schedule (or top-level `any`) present** — a schedule entry is indexed by the day the charging is *for*, not by the calendar date its window instance starts on. The "monday" entry describes the session that gets the car ready for Monday, which for an overnight shape actually starts *Sunday* evening. This is exactly how the original code always worked: it resolved the schedule for `tomorrow` and used shape alone (overnight vs. same-day) to decide whether to anchor the resulting window to today or to tomorrow itself.
+
+**Regression caught in production (2026-09-20) and fixed**: an earlier version of this function queried each candidate date's *own* weekday directly instead of indexing by day-of-use. On a Sunday with a weekday-overnight/weekend-`any` schedule, that meant Sunday's own entry (`any`/`any`, trivially always "live") was used directly — Monday's fixed `21:00–06:30` window was never even considered, and slots landed on Monday afternoon instead of Sunday night. Fixed by restoring the day-ahead (tomorrow-indexed) rule for the schedule/`any` branch specifically; see `TestResolvePlanningHorizon.test_schedule_regression_weekend_any_does_not_mask_weekday_overnight` for the exact reproduction.
+
+Within the schedule/`any` branch, two candidates, checked in priority order:
+1. **Today's own entry** — what yesterday's daily run would have targeted (that run resolved "tomorrow" relative to itself as today). Relevant only if overnight-shaped: only that shape's window instance can still be open this many hours later, in the early morning. Same-day and `any`-ended shapes can't still be open a full calendar day after the run that targeted them.
+2. **Tomorrow's entry** — the normal target for a daily run (day-ahead prices apply to tomorrow). Overnight shapes anchor to today (window starts this evening); other shapes anchor to tomorrow itself. Can never itself classify as elapsed (`now` is by definition still within today) — this candidate always succeeds.
 
 **Classification** (`_classify_window_instance`) — "elapsed" depends on shape, since not every shape has a fixed end:
 - both `any` → never elapsed (trivially live, start = now)
-- `any` start → elapsed once today's occurrence of the fixed end time has passed
-- `any` end → elapsed once `required_minutes` no longer fits between now and `any_end_cap` (`min(last available price, plan_horizon)`) — there's no fixed clock-time end to compare against, so "does it still fit" is the only sensible boundary
+- `any` start → elapsed once the target date's occurrence of the fixed end time has passed
+- `any` end → elapsed once `required_minutes` no longer fits between now and `any_end_cap` (`min(last available price, plan_horizon)`) — there's no fixed clock-time end to compare against, so "does it still fit" is the only sensible boundary. Note: within the schedule/`any` branch, "fixed start, `any` end" and "`any` start, fixed end" are only ever reached via candidate 2 (always ends up tomorrow-anchored, matching the original code's own behavior for these shapes) — the elapsed-via-required-fits path is real and directly tested (`TestClassifyWindowInstance`) but isn't reachable through the horizon function for this specific shape combination.
 - both fixed → elapsed once `now >= end_utc`
 
-**`win_start_utc`/`win_end_utc` are returned unclamped** — they represent the *configured* bounds of whichever instance was targeted, used as-is for the plan's displayed `preferred_window_start`/`preferred_window_end`. Clamping is the caller's job, applied uniformly regardless of which instance was chosen:
+**`win_start_utc`/`win_end_utc` are returned unclamped** — they represent the *configured* bounds of whichever instance was targeted, used as-is for the plan's displayed `preferred_window_start`/`preferred_window_end`. `plan_date` is derived from the actual resolved `win_start_utc` (`ws.astimezone(tz).date()`), matching how it has always been defined: the local calendar date the window starts on — for an overnight instance targeting Monday, that's Sunday's date, not Monday's.
+
+Clamping to "never select an elapsed slot" is the caller's job, applied uniformly regardless of which instance was chosen:
 - `_plan_one_profile` floors `candidate_prices` to `now_utc` (in addition to the existing `win_start_utc - required_minutes` floor) — this is what makes catching a live window's remainder safe; without it, an elapsed-but-still-known price could otherwise be selected.
 - `_check_window_coverage` and the forecast-supplement filter in `_select_slots` both take `now_utc` and clamp their effective window start to `max(win_start_utc, now_utc)` — without this, a live window's already-elapsed portion would always register as "missing" coverage (misdiagnosed as "prices not yet published"), and a forecast supplement could backfill already-elapsed time.
 
-`_resolve_window_utc` itself is now purely mechanical — given a start/end HH:MM and a specific anchor date, it returns UTC bounds with no dependency on the current time at all. Deciding *which* date to anchor to is entirely `_resolve_planning_horizon`'s job; the previous version's own auto-anchor heuristic (guessing "today or tomorrow" from the clock) was the actual bug and has been removed rather than left dormant.
+`_resolve_window_utc` itself is purely mechanical — given a start/end HH:MM and a specific anchor date, it returns UTC bounds with no dependency on the current time at all. Deciding *which* date to anchor to is entirely `_resolve_planning_horizon`'s job; the original auto-anchor heuristic (guessing "today or tomorrow" from the clock, with no day-ahead awareness at all) was the actual delayed-run bug and has been removed rather than left dormant.
 
 ---
 
