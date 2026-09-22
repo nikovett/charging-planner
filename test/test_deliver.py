@@ -96,6 +96,24 @@ class TestShouldSkipRedundantDelivery(unittest.TestCase):
         )
         self.assertFalse(should_skip_redundant_delivery(plan, prior, "overnight"))
 
+    def test_prior_forecast_based_and_new_also_forecast_identical_skips(self):
+        # The gap this fix closes: two close-together forecast-based runs
+        # (both still before real prices publish) with identical windows
+        # shouldn't force a redundant redelivery just because the prior
+        # happened to be an estimate — that's not a correction, it's the
+        # same estimate confirmed again, and burns an API call for nothing.
+        prior = make_record(schedule_uses_forecast=True)
+        plan = make_plan(schedule_uses_forecast=True)  # same default windows as make_record
+        self.assertTrue(should_skip_redundant_delivery(plan, prior, "overnight"))
+
+    def test_prior_forecast_based_and_new_forecast_but_different_windows_delivers(self):
+        # Two forecast-based runs, but the forecast itself moved between
+        # them (different windows) — still a real correction, deliver.
+        prior = make_record(schedule_uses_forecast=True)
+        plan = make_plan(schedule_uses_forecast=True,
+                         window_starts_utc=("2026-03-17T20:00:00+00:00",))
+        self.assertFalse(should_skip_redundant_delivery(plan, prior, "overnight"))
+
     def test_live_run_with_prewindow_prior_same_instance_skips(self):
         # Case 2: the prior plan was built before its own window opened
         # (14:00, window starts 19:00) and this run is live (22:00, after
@@ -293,6 +311,22 @@ class TestDispatchRedundantDelivery(unittest.TestCase):
             real_plan = make_plan(schedule_uses_forecast=False)
             dispatch({"overnight": real_plan}, self.CONFIG, data_dir=tmp)
             self.assertEqual(handler.deliver.call_count, 2)
+
+    def test_identical_forecast_based_rerun_skips(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict("os.environ", {"SKODA_VIN": "VIN123"}), \
+             mock.patch("deliver._load_handler", return_value=self._fake_handler()) as load:
+            handler = load.return_value
+            forecast_plan = make_plan(schedule_uses_forecast=True)
+            dispatch({"overnight": forecast_plan}, self.CONFIG, data_dir=tmp)
+            self.assertEqual(handler.deliver.call_count, 1)
+
+            # Triggered again before prices publish — same forecast, same
+            # windows. Must not redeliver just because the prior was an
+            # estimate; nothing actually changed.
+            dispatch({"overnight": forecast_plan}, self.CONFIG, data_dir=tmp)
+            self.assertEqual(handler.deliver.call_count, 1,
+                             "identical forecast-based redelivery must be skipped")
 
 
 if __name__ == "__main__":

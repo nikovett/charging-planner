@@ -1,6 +1,6 @@
 # Test Suite
 
-415 tests across five files. Run from the repo root:
+418 tests across five files. Run from the repo root:
 
 ```
 python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -10,7 +10,7 @@ Or individually:
 
 ```
 python -m unittest test_charging_planner -v       # 282 tests, 3 skipped
-python -m unittest test_deliver -v                # 20 tests
+python -m unittest test_deliver -v                # 23 tests
 python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
 python -m unittest test_deliver_myskoda -v        # 41 tests
@@ -120,14 +120,14 @@ GHA step-summary per-profile section: profile name, required hours, window table
 
 The dispatcher itself — primarily redundant-delivery protection (see CONTEXT.md "Redundant delivery protection" for the full rationale).
 
-### TestShouldSkipRedundantDelivery (10)
-The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule always yields to a real-price-based one, including when the new run is live mid-window (forecast-override beats live-window protection); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing.
+### TestShouldSkipRedundantDelivery (12)
+The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule yields to a real-price-based one or a differently-forecasted one, including when the new run is live mid-window (forecast-override beats live-window protection); two close-together forecast-based runs with byte-identical windows do *not* force a redundant redelivery just because the prior was an estimate — confirmed against real production data (a manual trigger before ENTSO-E's publish time, followed by a simulated second trigger moments later); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing.
 
 ### TestDeliveredRecordPersistence (6)
 The persisted record file: round-trip read/write, missing file returns `None`, corrupt JSON returns `None` (logged, not raised), charge-point IDs with filesystem-unsafe characters are sanitized into the record filename, distinct chargers get distinct records, the data directory is created if it doesn't exist yet.
 
-### TestDispatchRedundantDelivery (4)
-End-to-end through `dispatch()` with a mocked handler: a second identical run never calls the handler a second time; a changed plan does redeliver; a failed delivery leaves no record, so a retry is attempted normally rather than being mistaken for "already handled"; a forecast-based prior plan is superseded by a real-price-based one even with otherwise-matching windows.
+### TestDispatchRedundantDelivery (5)
+End-to-end through `dispatch()` with a mocked handler: a second identical run never calls the handler a second time; a changed plan does redeliver; a failed delivery leaves no record, so a retry is attempted normally rather than being mistaken for "already handled"; a forecast-based prior plan is superseded by a real-price-based one even with otherwise-matching windows; an identical forecast-based rerun (both before real prices publish) does not redeliver.
 
 ---
 

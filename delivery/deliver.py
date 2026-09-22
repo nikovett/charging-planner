@@ -272,8 +272,15 @@ def should_skip_redundant_delivery(plan: dict, prior: Optional[dict], profile_na
 
     Checked in order:
       1. No prior record — nothing to compare against, deliver.
-      2. The prior delivered schedule relied on forecast data — always yield
-         to a newer, real-price-based plan regardless of window liveness.
+      2. The prior delivered schedule relied on forecast data, and this
+         plan is either real-price-based or has different windows — always
+         yield, regardless of window liveness. A forecast-based commitment
+         is only an estimate and must always be correctable. This does NOT
+         apply when the new plan is also forecast-based and produced
+         byte-identical windows — that's not a correction, just the same
+         estimate confirmed again by a redundant trigger, and forcing a
+         redelivery there would burn an API call for nothing (falls through
+         to rule 4 instead, which will skip it as unchanged).
       3. This run's window is live (already started) and the prior plan
          predates that same window's start — the prior plan is an
          already-committed pre-window schedule; redelivering here risks
@@ -287,7 +294,12 @@ def should_skip_redundant_delivery(plan: dict, prior: Optional[dict], profile_na
     if prior is None:
         return False
 
-    if prior.get("schedule_uses_forecast"):
+    same_windows = (
+        plan.get("window_starts_utc") == prior.get("window_starts_utc")
+        and plan.get("window_ends_utc") == prior.get("window_ends_utc")
+    )
+
+    if prior.get("schedule_uses_forecast") and not (plan.get("schedule_uses_forecast") and same_windows):
         return False
 
     new_cfg_start   = _parse_iso(plan.get("configured_window_start_utc"))
@@ -307,8 +319,7 @@ def should_skip_redundant_delivery(plan: dict, prior: Optional[dict], profile_na
         )
         return True
 
-    if (plan.get("window_starts_utc") == prior.get("window_starts_utc")
-            and plan.get("window_ends_utc") == prior.get("window_ends_utc")):
+    if same_windows:
         log.info(
             "Profile '%s': skipping delivery — unchanged from the already-delivered plan.",
             profile_name,
