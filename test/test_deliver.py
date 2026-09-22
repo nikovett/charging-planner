@@ -240,11 +240,24 @@ class TestDeliveredRecordPersistence(unittest.TestCase):
             path.write_text("{not valid json")
             self.assertIsNone(_load_delivered_record(path))
 
-    def test_record_path_sanitizes_charge_point_id(self):
-        # A VIN or charger ID could contain characters unsafe for filenames.
-        path = _delivered_record_path("data", "overnight", "chargeamps", "charger/id:1")
+    def test_record_path_does_not_expose_charge_point_id(self):
+        # data/ is committed to the repo (typically public via GitHub
+        # Pages) — a VIN or charger serial must never appear in the
+        # filename in readable form. A filesystem-unsafe ID (e.g. a VIN
+        # containing "/" or ":") is also handled correctly as a side effect
+        # of hashing, but that's not the primary property being tested here.
+        vin = "TMBJC7NY2MF019901"
+        path = _delivered_record_path("data", "overnight", "myskoda", vin)
+        self.assertNotIn(vin, path.name)
         self.assertNotIn("/", path.name)
         self.assertNotIn(":", path.name)
+
+    def test_record_path_is_deterministic(self):
+        # Same inputs must always hash to the same path, so a record
+        # written by one run is found by the next.
+        p1 = _delivered_record_path("data", "overnight", "myskoda", "VIN1")
+        p2 = _delivered_record_path("data", "overnight", "myskoda", "VIN1")
+        self.assertEqual(p1, p2)
 
     def test_distinct_chargers_get_distinct_records(self):
         p1 = _delivered_record_path("data", "overnight", "myskoda", "VIN1")

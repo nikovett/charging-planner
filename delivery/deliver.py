@@ -46,6 +46,7 @@ Exit code is 0 only if every delivery succeeded.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import logging
@@ -227,8 +228,20 @@ def _load_handler(handler_name: str):
 
 def _delivered_record_path(data_dir: str, profile_name: str, handler_name: str,
                            charge_point_id: str) -> Path:
-    safe_cp = re.sub(r"[^A-Za-z0-9_-]", "_", charge_point_id)
-    return Path(data_dir) / f"delivered-{profile_name}-{handler_name}-{safe_cp}.json"
+    """Path to the persisted delivered-record file for one delivery target.
+
+    charge_point_id is hashed rather than embedded directly — for MyŠkoda
+    it's the vehicle's VIN, for Charge Amps a charger serial, both directly
+    identifying. This file lives under --data-dir, which is committed to
+    the repo (see the GHA workflow), typically public via GitHub Pages
+    alongside the dashboard — the real ID has no reason to be readable
+    there. The hash only needs to be stable and distinct per target, not
+    cryptographically secure.
+    """
+    id_hash = hashlib.sha256(charge_point_id.encode()).hexdigest()[:12]
+    safe_profile = re.sub(r"[^A-Za-z0-9_-]", "_", profile_name)
+    safe_handler = re.sub(r"[^A-Za-z0-9_-]", "_", handler_name)
+    return Path(data_dir) / f"delivered-{safe_profile}-{safe_handler}-{id_hash}.json"
 
 
 def _load_delivered_record(path: Path) -> Optional[dict]:
