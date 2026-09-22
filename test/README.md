@@ -1,15 +1,16 @@
 # Test Suite
 
-388 tests across four files. Run from the repo root:
+415 tests across five files. Run from the repo root:
 
 ```
-python -m unittest test_charging_planner test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
+python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
 ```
 
 Or individually:
 
 ```
-python -m unittest test_charging_planner -v       # 275 tests, 3 skipped
+python -m unittest test_charging_planner -v       # 282 tests, 3 skipped
+python -m unittest test_deliver -v                # 20 tests
 python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
 python -m unittest test_deliver_myskoda -v        # 41 tests
@@ -19,7 +20,7 @@ The 3 skipped tests require a live ENTSO-E API key in the environment and are ma
 
 ---
 
-## test_charging_planner.py (275 tests)
+## test_charging_planner.py (282 tests)
 
 ### TestConfigValidation (18)
 Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, `preferred_window`, and `max_windows` (null/positive-int accepted; zero, negative, float, bool, and string rejected — `bool` is a subclass of `int` in Python, so it needs an explicit check).
@@ -68,8 +69,8 @@ Direct tests for `_select_with_min_block` (the `max_windows: null`, unbounded pa
 ### TestSelectWithMaxWindows (10)
 Direct tests for `_select_with_max_windows` (the `max_windows: N ≥ 2` path): uses at most N blocks, picks the cheapest N clusters over more expensive ones, `max_windows: 1` matches `_best_continuous_window` exactly, `max_windows: null` matches the unbounded path exactly, a generously high `max_windows` also matches the unbounded path, `min_gap_minutes`/`min_slot_minutes` enforced identically to the unbounded case, infeasible window budgets return `[]` cleanly, latest-slot tiebreak on equal price.
 
-### TestBuildPlan (6)
-`build_plan` output structure: required keys present (including `max_windows`), price stats, windows, OCPP profile, `max_windows` defaults to `null` and reflects the configured value.
+### TestBuildPlan (13)
+`build_plan` output structure: required keys present (including `max_windows`), price stats, windows, OCPP profile, `max_windows` defaults to `null` and reflects the configured value. `generated_at` and `configured_window_start_utc` reflect the passed-in values (or `null` when not provided) — these feed `delivery/deliver.py`'s redundant-delivery protection. `schedule_uses_forecast` is derived from whether any *scheduled* (not just any available) slot is forecast-sourced, distinguishing "forecast data was consulted" from "forecast data is actually in the delivered schedule."
 
 ### TestOcppChargingProfile (13)
 OCPP 1.6, 2.0.1, and 2.1 profile generation: schema validity, `validFrom`/`validTo` match window bounds, periods ordered, `startPeriod` offsets correct for single and multiple windows, duration covers full span.
@@ -112,6 +113,21 @@ GHA step-summary per-profile section: profile name, required hours, window table
 
 ### TestWriteConfigJson (4)
 `write_config_json` secret redaction — regression coverage for a real bug where a real `ENTSOE_API_KEY` merged in from the environment could be written into the committed `data/config.json`. Real key redacted, empty key stays empty, caller's in-memory config not mutated, other fields (including `max_windows`) preserved.
+
+---
+
+## test_deliver.py (20 tests)
+
+The dispatcher itself — primarily redundant-delivery protection (see CONTEXT.md "Redundant delivery protection" for the full rationale).
+
+### TestShouldSkipRedundantDelivery (10)
+The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule always yields to a real-price-based one, including when the new run is live mid-window (forecast-override beats live-window protection); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing.
+
+### TestDeliveredRecordPersistence (6)
+The persisted record file: round-trip read/write, missing file returns `None`, corrupt JSON returns `None` (logged, not raised), charge-point IDs with filesystem-unsafe characters are sanitized into the record filename, distinct chargers get distinct records, the data directory is created if it doesn't exist yet.
+
+### TestDispatchRedundantDelivery (4)
+End-to-end through `dispatch()` with a mocked handler: a second identical run never calls the handler a second time; a changed plan does redeliver; a failed delivery leaves no record, so a retry is attempted normally rather than being mistaken for "already handled"; a forecast-based prior plan is superseded by a real-price-based one even with otherwise-matching windows.
 
 ---
 

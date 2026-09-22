@@ -33,7 +33,7 @@ Fetches day-ahead electricity prices and schedules EV charging for the cheapest 
 | File | Description |
 |---|---|
 | `charging_planner.py` | Core planner |
-| `delivery/deliver.py` | Delivery dispatcher |
+| `delivery/deliver.py` | Delivery dispatcher — includes redundant-delivery protection (see below) |
 | `delivery/deliver_chargeamps.py` | Charge Amps handler |
 | `delivery/deliver_easee.py` | Easee handler (untested against real hardware) |
 | `delivery/deliver_myskoda.py` | MyŠkoda handler — updates preferred charging time slots 1..N (N = plan windows, max 4) via public API; detects and routes around an actively-charging slot when in PREFERRED_CHARGING_TIMES mode (tested; first delivery with vehicle away from home) |
@@ -44,6 +44,7 @@ Fetches day-ahead electricity prices and schedules EV charging for the cheapest 
 | `test/test_deliver_chargeamps.py` | Charge Amps tests |
 | `test/test_deliver_easee.py` | Easee tests |
 | `test/test_deliver_myskoda.py` | MyŠkoda tests |
+| `test/test_deliver.py` | Dispatcher tests — redundant-delivery protection |
 | `README.md` | Project documentation |
 | `README_tests.md` | Test suite documentation |
 | `CONTEXT.md` | This file |
@@ -212,6 +213,7 @@ Clamping to "never select an elapsed slot" is the caller's job, applied uniforml
   "area": "FI",
   "price_source": "ENTSO-E",
   "timezone": "Europe/Helsinki",
+  "generated_at": "2026-03-29T12:27:41+00:00",
   "utc_offset_hours": 3,
   "price_stats": { "min_cents_kwh": 0.45, "avg_cents_kwh": 1.92, "max_cents_kwh": 4.99 },
   "required_minutes": 270,
@@ -222,6 +224,8 @@ Clamping to "never select an elapsed slot" is the caller's job, applied uniforml
   "avg_optimal_price_cents_kwh": 0.56,
   "preferred_window_start": "21:00",
   "preferred_window_end": "06:30",
+  "configured_window_start_utc": "2026-03-29T19:00:00+00:00",
+  "schedule_uses_forecast": false,
   "windows": [
     { "start": "22:45", "end": "06:30", "duration_minutes": 270, "avg_price_cents_kwh": 0.70 }
   ],
@@ -245,6 +249,21 @@ Key fields:
 - `price_slots` — all slots from previous evening onwards. `charging: true` = scheduled. `optimal: true` = cheapest ignoring window. `forecasted: true` = display-only forecast slot
 - `plan_warning` — null or human-readable reason when plan is partial (`"partial plan — price limit X c€/kWh"` or `"partial plan — required hours exceed boundaries"`)
 - `ocpp_charging_profile` — OCPP 1.6/2.0.1/2.1 compatible ChargingProfile object for any downstream system
+
+---
+
+## Redundant delivery protection
+
+Two triggers close together (e.g. an unreliable GHA `schedule:` cron plus a manual `workflow_dispatch` backup) can each build and deliver a plan for the same profile. Re-delivering isn't free in two distinct ways: it can silently overwrite a manual adjustment made to the charger or vehicle between the two runs (violating Guiding Principle 1 — never interrupt a session already in progress), and it burns real API budget on a request that accomplishes nothing (see "Never make an unnecessary API call" under Design decisions). A skip happens before the handler module is even loaded, so it saves the whole request sequence, not just the resulting charger/vehicle change.
+
+`delivery/deliver.py` keeps a small persisted record per `(profile, handler, charge_point_id)` under `--data-dir` (default `data/`, committed to the repo so it survives across runs): the delivered plan's `window_starts_utc`/`window_ends_utc`, `generated_at`, `configured_window_start_utc`, and `schedule_uses_forecast`. Before each delivery attempt, `should_skip_redundant_delivery` checks this record, in order:
+
+1. **No prior record** → deliver. Nothing to compare against.
+2. **Prior schedule used forecast data** → deliver, unconditionally, regardless of window liveness. A forecast-based schedule is an estimate; once real prices are available it should always be allowed to correct it, even if that means interrupting a session the forecast-based plan already started.
+3. **This run's window is live** (already open — see "Planning horizon resolution" above) **and the prior plan predates that same window's start** (`configured_window_start_utc` matches) → skip. The prior plan is an already-committed pre-window schedule; redelivering here risks cutting off whatever it already started. The window-instance match matters: without it, a live run for a *new* window could be wrongly blocked by an unrelated, already-completed plan from a previous cycle (e.g. Monday's completed plan blocking Tuesday's legitimate live delivery).
+4. **Otherwise, diff the scheduled windows** against the prior record — identical → skip (nothing changed, nothing to gain from redelivering); different → deliver.
+
+The record is written only after a *successful* delivery — a failed attempt leaves no record, so the next run retries normally rather than being mistaken for "already handled."
 
 ---
 
@@ -288,6 +307,8 @@ Weekly plan uses UTC times in `"HH:MMZ"` format. All other days cleared — the 
 - `forecast_slots` — predicted slots; appended to `price_slots`, never used in calculations
 
 **OCPP delivery handler removed** — requires direct WebSocket access, incompatible with GHA-first architecture. OCPP ChargingProfile remains in plan JSON for downstream systems.
+
+**Never make an unnecessary API call** — every delivery handler talks to a rate-limited, third-party API (MyŠkoda: 20 requests/hour/VIN, a hard published quota; Charge Amps/Easee: unpublished but real). Redundant-delivery protection (see below) checks *before* loading the handler module or making any request at all, not after — a skip costs nothing, not even a login round-trip. This is treated as an architectural constraint, not just an optimization: a design that would work correctly but burn API budget unnecessarily on every redundant trigger is a worse design, even before considering the safety case.
 
 **ntfy removed** — forecast warning visible on dashboard; delivery failures exit non-zero → GHA emails operator.
 

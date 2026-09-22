@@ -1158,6 +1158,52 @@ class TestBuildPlan(unittest.TestCase):
         self.assertIn("avg_cents_kwh", ps)
         self.assertIn("max_cents_kwh", ps)
 
+    def test_generated_at_reflects_param(self):
+        gen = datetime(2026, 3, 14, 12, 27, 41, tzinfo=UTC)
+        plan = self._make(generated_at=gen)
+        self.assertEqual(datetime.fromisoformat(plan["generated_at"]), gen)
+
+    def test_generated_at_null_when_not_provided(self):
+        plan = self._make()
+        self.assertIsNone(plan["generated_at"])
+
+    def test_configured_window_start_utc_reflects_param(self):
+        ws = datetime(2026, 3, 14, 19, 0, tzinfo=UTC)
+        plan = self._make(window_start_utc=ws)
+        self.assertEqual(datetime.fromisoformat(plan["configured_window_start_utc"]), ws)
+
+    def test_configured_window_start_utc_null_when_not_provided(self):
+        plan = self._make()
+        self.assertIsNone(plan["configured_window_start_utc"])
+
+    def test_schedule_uses_forecast_false_for_real_prices(self):
+        plan = self._make()
+        self.assertFalse(plan["schedule_uses_forecast"])
+
+    def test_schedule_uses_forecast_true_when_a_scheduled_slot_is_forecasted(self):
+        base     = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        slots    = slots_from(base, 8, price_cents=3.0)
+        selected = slots[:4]
+        windows  = merge_continuous_slots(selected)
+        # Mark one of the SELECTED slots as having come from the forecast
+        # supplement (supplement_starts is how build_plan learns this).
+        p = make_plan_params(slots, selected, windows,
+                             supplement_starts={selected[0].start})
+        plan = build_plan(p)
+        self.assertTrue(plan["schedule_uses_forecast"])
+
+    def test_schedule_uses_forecast_false_when_only_unscheduled_slots_are_forecasted(self):
+        # A forecast slot exists in the display data but wasn't selected for
+        # charging — the schedule itself doesn't rely on it.
+        base     = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        slots    = slots_from(base, 8, price_cents=3.0)
+        selected = slots[:4]
+        windows  = merge_continuous_slots(selected)
+        p = make_plan_params(slots, selected, windows,
+                             supplement_starts={slots[6].start})  # not in selected
+        plan = build_plan(p)
+        self.assertFalse(plan["schedule_uses_forecast"])
+
 
 # ===========================================================================
 # 8. OCPP profile

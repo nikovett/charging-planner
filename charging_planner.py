@@ -1895,6 +1895,8 @@ class PlanParams:
     supplement_starts:      object          = None  # set of starts of forecast supplement slots
     retained_minutes:       int             = 0     # future charging minutes carried over from previous plan
     plan_warning:           Optional[str]   = None  # human-readable reason when total_minutes < required_minutes
+    window_start_utc:       Optional[datetime] = None  # configured (unclamped) window start — see _resolve_planning_horizon
+    generated_at:           Optional[datetime] = None  # when this plan was built
 
 
 def build_plan(p: PlanParams) -> dict:
@@ -1908,12 +1910,15 @@ def build_plan(p: PlanParams) -> dict:
       "area": "FI",
       "price_source": "ENTSO-E",
       "timezone": "Europe/Helsinki",
+      "generated_at": "2026-03-14T12:27:41+00:00",
       "utc_offset_hours": 2,
       "price_stats": { "min": …, "max": …, "avg": … },
       "required_minutes": 240,
       "max_windows": null,
       "total_minutes": 240,
       "avg_price_cents_kwh": 1.84,
+      "configured_window_start_utc": "2026-03-14T19:00:00+00:00",
+      "schedule_uses_forecast": false,
       "windows": [
         { "start": "01:00", "end": "04:00",
           "duration_minutes": 180, "avg_price_cents_kwh": 1.84 }
@@ -1998,12 +2003,22 @@ def build_plan(p: PlanParams) -> dict:
                     "forecasted":      True,
                 })
 
+    # Whether any *scheduled* (charging=true) slot relied on forecast data,
+    # as opposed to forecast data merely having been consulted during
+    # selection. Used by delivery/deliver.py to decide whether a delivered
+    # plan should always yield to a later, real-price-based one regardless
+    # of whether the window is otherwise live.
+    schedule_uses_forecast = any(
+        slot.get("forecasted") and slot["charging"] for slot in price_slots
+    )
+
     return {
         "version":                PLAN_VERSION,
         "date":                   str(p.target_date),
         "area":                   p.area,
         "price_source":           p.price_source,
         "timezone":               p.timezone_name,
+        "generated_at":           p.generated_at.isoformat() if p.generated_at else None,
         "utc_offset_hours":       int(
             datetime(p.target_date.year, p.target_date.month, p.target_date.day,
                      12, 0, tzinfo=p.tz).utcoffset().total_seconds() / 3600
@@ -2017,6 +2032,8 @@ def build_plan(p: PlanParams) -> dict:
         "avg_optimal_price_cents_kwh": avg_optimal,
         "preferred_window_start": p.preferred_window_start,
         "preferred_window_end":   p.preferred_window_end,
+        "configured_window_start_utc": p.window_start_utc.isoformat() if p.window_start_utc else None,
+        "schedule_uses_forecast": schedule_uses_forecast,
         "windows":                win_list,
         "window_starts_utc":      [w[0].isoformat() for w in p.windows],
         "window_ends_utc":        [w[1].isoformat() for w in p.windows],
@@ -2897,6 +2914,8 @@ def _plan_one_profile(
         forecast_slots=forecast_display_slots,
         supplement_starts=supplement_starts,
         plan_warning=plan_warning,
+        window_start_utc=win_start_utc,
+        generated_at=now_utc,
     ))
     plan["profile"] = cfg.name
 

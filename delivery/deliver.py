@@ -32,6 +32,13 @@ Exit code is 0 only if every delivery succeeded. Failures are surfaced via
 non-zero exit so the GitHub Actions job is marked as failed and the operator
 receives an email notification.
 
+A second run for the same profile close behind the first (e.g. an unreliable
+scheduled trigger plus a manual backup) will skip re-delivering when doing so
+would be redundant or risk interrupting a session the first delivery already
+started — see should_skip_redundant_delivery() for the exact rules. Persisted
+records live under --data-dir (default: data/), committed to the repo so the
+check survives across runs.
+
 Handlers expose:  deliver(plan, charge_point_id, entry, timezone) -> bool
 Exit code is 0 only if every delivery succeeded.
 """
@@ -43,8 +50,11 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 try:
     import yaml
@@ -203,19 +213,129 @@ def _load_handler(handler_name: str):
 
 
 # ===========================================================================
+# Redundant delivery protection
+# ===========================================================================
+#
+# Two triggers close together (e.g. an unreliable GHA schedule plus a manual
+# backup trigger) can each build and deliver a plan for the same profile.
+# Re-delivering is not free: it can overwrite a manual adjustment made to the
+# charger/vehicle between the two runs. A small persisted record per
+# (profile, handler, charge_point_id) — the window times, generation time,
+# and forecast status of the last plan actually delivered — lets a second,
+# redundant run recognise that and skip. See CONTEXT.md "Redundant delivery
+# protection" for the full rationale and the Guiding Principles it serves.
+
+def _delivered_record_path(data_dir: str, profile_name: str, handler_name: str,
+                           charge_point_id: str) -> Path:
+    safe_cp = re.sub(r"[^A-Za-z0-9_-]", "_", charge_point_id)
+    return Path(data_dir) / f"delivered-{profile_name}-{handler_name}-{safe_cp}.json"
+
+
+def _load_delivered_record(path: Path) -> Optional[dict]:
+    if not path.exists():
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("Could not read delivered record %s: %s", path, exc)
+        return None
+
+
+def _save_delivered_record(path: Path, plan: dict) -> None:
+    record = {
+        "window_starts_utc":           plan.get("window_starts_utc"),
+        "window_ends_utc":             plan.get("window_ends_utc"),
+        "generated_at":                plan.get("generated_at"),
+        "configured_window_start_utc": plan.get("configured_window_start_utc"),
+        "schedule_uses_forecast":      plan.get("schedule_uses_forecast"),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(record, f, indent=2)
+    except OSError as exc:
+        log.warning("Could not write delivered record %s: %s", path, exc)
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def should_skip_redundant_delivery(plan: dict, prior: Optional[dict], profile_name: str) -> bool:
+    """Decide whether to skip delivery because it would be redundant or unsafe.
+
+    Checked in order:
+      1. No prior record — nothing to compare against, deliver.
+      2. The prior delivered schedule relied on forecast data — always yield
+         to a newer, real-price-based plan regardless of window liveness.
+      3. This run's window is live (already started) and the prior plan
+         predates that same window's start — the prior plan is an
+         already-committed pre-window schedule; redelivering here risks
+         interrupting whatever it already started. Only applies when both
+         plans target the *same* window instance (configured_window_start_utc
+         matches) — otherwise this would wrongly compare against an
+         unrelated, already-elapsed window from a previous cycle.
+      4. Otherwise, identical scheduled windows to the prior delivery means
+         nothing has changed — skip. Different windows — deliver.
+    """
+    if prior is None:
+        return False
+
+    if prior.get("schedule_uses_forecast"):
+        return False
+
+    new_cfg_start   = _parse_iso(plan.get("configured_window_start_utc"))
+    new_gen_at      = _parse_iso(plan.get("generated_at"))
+    prior_cfg_start = _parse_iso(prior.get("configured_window_start_utc"))
+    prior_gen_at    = _parse_iso(prior.get("generated_at"))
+
+    if (new_cfg_start and new_gen_at and prior_cfg_start and prior_gen_at
+            and new_cfg_start == prior_cfg_start
+            and new_gen_at >= new_cfg_start
+            and prior_gen_at < prior_cfg_start):
+        log.info(
+            "Profile '%s': skipping delivery — a plan for this window was "
+            "already delivered before it opened; this run is live and "
+            "redelivering risks interrupting whatever that plan started.",
+            profile_name,
+        )
+        return True
+
+    if (plan.get("window_starts_utc") == prior.get("window_starts_utc")
+            and plan.get("window_ends_utc") == prior.get("window_ends_utc")):
+        log.info(
+            "Profile '%s': skipping delivery — unchanged from the already-delivered plan.",
+            profile_name,
+        )
+        return True
+
+    return False
+
+
+# ===========================================================================
 # Dispatch
 # ===========================================================================
 
 
-def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
+def dispatch(plans_by_profile: dict[str, dict], config: dict, data_dir: str = "data") -> bool:
     """Resolve deliveries from charging profiles and call each handler.
 
     For each delivery entry, calls:
         handler.deliver(plan, charge_point_id, entry, timezone)
     once per resolved charger ID. All chargers are attempted; failures are
-    accumulated and reported at the end.
+    accumulated and reported at the end. Before each call, checks
+    should_skip_redundant_delivery against the last successfully delivered
+    plan for that (profile, handler, charger) — see that function's
+    docstring for when a delivery is skipped rather than attempted.
 
-    Returns True only if every delivery succeeded.
+    Returns True only if every attempted delivery succeeded (a skip does not
+    count as a failure).
     """
     deliveries = _extract_deliveries(config)
 
@@ -252,6 +372,12 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
         module = handler_cache[handler_name]
 
         for charge_point_id in charge_point_ids:
+            record_path = _delivered_record_path(data_dir, profile_name, handler_name, charge_point_id)
+            prior = _load_delivered_record(record_path)
+
+            if should_skip_redundant_delivery(plan, prior, profile_name):
+                continue
+
             log.info(
                 "Delivering profile '%s' → handler '%s'  charger '%s'  timezone '%s'",
                 profile_name, handler_name, charge_point_id, timezone,
@@ -276,6 +402,7 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict) -> bool:
                     "Delivery succeeded: profile='%s'  handler='%s'  charger='%s'",
                     profile_name, handler_name, charge_point_id,
                 )
+                _save_delivered_record(record_path, plan)
 
     return all_ok
 
@@ -301,6 +428,12 @@ def main():
         "--config", "-c",
         default="config.yaml",
         help="Path to config.yaml (default: config.yaml)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default="data",
+        help="Directory holding persisted delivered-plan records, used to "
+             "detect and skip redundant re-delivery (default: data)",
     )
     parser.add_argument(
         "--debug",
@@ -337,7 +470,7 @@ def main():
         log.error("No valid plan files loaded.")
         sys.exit(1)
 
-    ok = dispatch(plans_by_profile, config)
+    ok = dispatch(plans_by_profile, config, data_dir=args.data_dir)
     sys.exit(0 if ok else 1)
 
 
