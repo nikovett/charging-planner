@@ -2043,6 +2043,87 @@ class TestEndToEnd(unittest.TestCase):
             self.assertGreaterEqual(s, delayed_now,
                                     "an already-elapsed slot was selected — the candidate floor failed")
 
+    def test_delayed_run_with_insufficient_remaining_time_produces_partial_plan(self):
+        # A live window is still correctly targeted even when too little of
+        # it remains to fit required_hours — it must NOT roll to the next
+        # occurrence (that would silently lose tonight's charging entirely).
+        # Instead: use 100% of what's left, and report the shortfall
+        # honestly via plan_warning, exactly like a naturally too-short
+        # configured window already does.
+        import charging_planner as cp
+        import tempfile
+
+        raw_config = {
+            "entsoe": {"api_key": "test-key", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "overnight", "required_hours": 6.0, "max_windows": 1,
+                "min_slot_minutes": 30, "min_gap_minutes": 15,
+                "preferred_window_start": "21:00", "preferred_window_end": "06:30",
+            }],
+        }
+        prices = slots_from(datetime(2026, 3, 14, 19, 0, tzinfo=UTC), 192, price_cents=1.0)
+
+        # 03:30 UTC (05:30 EET) — only ~1h remains before the 06:30 EET close.
+        delayed_now = datetime(2026, 3, 15, 3, 30, tzinfo=UTC)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            plans = cp.cmd_plan(raw_config, output_dir=tmpdir)
+
+        p = plans[0]
+        self.assertEqual(p["configured_window_start_utc"], "2026-03-14T19:00:00+00:00",
+                         "must still target tonight's window, not roll to the next occurrence")
+        self.assertEqual(p["required_minutes"], 360)
+        self.assertEqual(p["total_minutes"], 60, "must use the full remaining hour, nothing less")
+        self.assertIsNotNone(p["plan_warning"])
+        self.assertIn("required hours exceed boundaries", p["plan_warning"])
+        self.assertEqual(p["window_starts_utc"], ["2026-03-15T03:30:00+00:00"])
+        self.assertEqual(p["window_ends_utc"], ["2026-03-15T04:30:00+00:00"])
+
+    def test_delayed_run_with_time_to_spare_produces_complete_plan(self):
+        # Companion to the above: when the remaining live window comfortably
+        # exceeds required_hours (here by 1h), the plan is complete with no
+        # warning — the shortfall handling above is specific to genuinely
+        # insufficient remaining time, not triggered just by running late.
+        import charging_planner as cp
+        import tempfile
+
+        raw_config = {
+            "entsoe": {"api_key": "test-key", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "overnight", "required_hours": 2.0, "max_windows": 1,
+                "min_slot_minutes": 30, "min_gap_minutes": 15,
+                "preferred_window_start": "21:00", "preferred_window_end": "06:30",
+            }],
+        }
+        prices = slots_from(datetime(2026, 3, 14, 19, 0, tzinfo=UTC), 192, price_cents=1.0)
+
+        # 01:30 UTC (03:30 EET) — ~3h remains before the 06:30 EET close:
+        # 2h required plus a 1h buffer.
+        delayed_now = datetime(2026, 3, 15, 1, 30, tzinfo=UTC)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            plans = cp.cmd_plan(raw_config, output_dir=tmpdir)
+
+        p = plans[0]
+        self.assertEqual(p["configured_window_start_utc"], "2026-03-14T19:00:00+00:00")
+        self.assertEqual(p["required_minutes"], 120)
+        self.assertEqual(p["total_minutes"], 120, "the full requirement must be met — plenty of time left")
+        self.assertIsNone(p["plan_warning"])
+
     def test_plan_json_written_to_output_dir(self):
         import tempfile, os
         prices = self._make_prices()

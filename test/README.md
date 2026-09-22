@@ -1,6 +1,6 @@
 # Test Suite
 
-418 tests across five files. Run from the repo root:
+421 tests across five files. Run from the repo root:
 
 ```
 python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,8 +9,8 @@ python -m unittest test_charging_planner test_deliver test_deliver_chargeamps te
 Or individually:
 
 ```
-python -m unittest test_charging_planner -v       # 282 tests, 3 skipped
-python -m unittest test_deliver -v                # 23 tests
+python -m unittest test_charging_planner -v       # 284 tests, 3 skipped
+python -m unittest test_deliver -v                # 24 tests
 python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
 python -m unittest test_deliver_myskoda -v        # 41 tests
@@ -20,7 +20,7 @@ The 3 skipped tests require a live ENTSO-E API key in the environment and are ma
 
 ---
 
-## test_charging_planner.py (282 tests)
+## test_charging_planner.py (284 tests)
 
 ### TestConfigValidation (18)
 Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, `preferred_window`, and `max_windows` (null/positive-int accepted; zero, negative, float, bool, and string rejected — `bool` is a subclass of `int` in Python, so it needs an explicit check).
@@ -78,8 +78,8 @@ OCPP 1.6, 2.0.1, and 2.1 profile generation: schema validity, `validFrom`/`valid
 ### TestXmlParsing (10)
 ENTSO-E XML parsing: slot count, 15-min duration, sort order, ordinal sequencing, no duplicate starts, forward-fill between explicit points, resolution detection.
 
-### TestEndToEnd (8)
-Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable. Plus two delayed-run regression tests: a run firing mid-window still targets tonight's live window rather than skipping to the next night, and — with an artificially-cheap already-elapsed slot planted to tempt the DP — confirms it's never selected.
+### TestEndToEnd (10)
+Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable. Plus four delayed-run regression tests: a run firing mid-window still targets tonight's live window rather than skipping to the next night; with an artificially-cheap already-elapsed slot planted to tempt the DP, confirms it's never selected; a live window with too little time left to fit `required_hours` still uses 100% of what remains (never rolls to the next occurrence) and honestly reports the shortfall via `plan_warning`; the companion case — a live window with a comfortable 1h buffer over `required_hours` — produces a complete plan with no warning, confirming the shortfall handling above is specific to genuine insufficiency, not just running late.
 
 ### TestPriceSourceRules (9)
 Price source selection rules (rules 1–4): real prices used when sufficient, forecast display appended, forecast supplement used when window not covered, `price_source` field set correctly, supplement slots tagged `forecasted: true`.
@@ -120,8 +120,8 @@ GHA step-summary per-profile section: profile name, required hours, window table
 
 The dispatcher itself — primarily redundant-delivery protection (see CONTEXT.md "Redundant delivery protection" for the full rationale).
 
-### TestShouldSkipRedundantDelivery (12)
-The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule yields to a real-price-based one or a differently-forecasted one, including when the new run is live mid-window (forecast-override beats live-window protection); two close-together forecast-based runs with byte-identical windows do *not* force a redundant redelivery just because the prior was an estimate — confirmed against real production data (a manual trigger before ENTSO-E's publish time, followed by a simulated second trigger moments later); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing.
+### TestShouldSkipRedundantDelivery (13)
+The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule yields to a real-price-based one or a differently-forecasted one, including when the new run is live mid-window (forecast-override beats live-window protection); two close-together forecast-based runs with byte-identical windows do *not* force a redundant redelivery just because the prior was an estimate — confirmed against real production data (a manual trigger before ENTSO-E's publish time, followed by a simulated second trigger moments later); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule) — also confirmed against real production data (a manual trigger fired 11 minutes into the window); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing; live-window protection is confirmed independent of plan completeness — a fully-satisfied, warning-free plan (no `plan_warning` key present at all) is still protected exactly like a partial one would be, since the function never inspects `required_minutes`/`total_minutes`/`plan_warning`.
 
 ### TestDeliveredRecordPersistence (6)
 The persisted record file: round-trip read/write, missing file returns `None`, corrupt JSON returns `None` (logged, not raised), charge-point IDs with filesystem-unsafe characters are sanitized into the record filename, distinct chargers get distinct records, the data directory is created if it doesn't exist yet.

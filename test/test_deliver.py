@@ -189,6 +189,30 @@ class TestShouldSkipRedundantDelivery(unittest.TestCase):
         plan = make_plan()
         self.assertTrue(should_skip_redundant_delivery(plan, prior, "overnight"))
 
+    def test_live_window_protection_is_independent_of_plan_completeness(self):
+        # The function never looks at required_minutes, total_minutes, or
+        # plan_warning at all — a fully-satisfied, warning-free plan is
+        # protected from redundant redelivery exactly the same as a partial
+        # one would be. Planning correctness and delivery safety are
+        # orthogonal checks; verified here with the actual field shape a
+        # real "requirement fully met, run after midnight" plan produces.
+        prior = make_record(
+            generated_at="2026-03-14T14:00:00+00:00",           # normal pre-window run
+            configured_window_start_utc="2026-03-14T19:00:00+00:00",
+            window_starts_utc=("2026-03-14T19:00:00+00:00",),
+            window_ends_utc=("2026-03-14T21:00:00+00:00",),
+        )
+        plan = make_plan(
+            generated_at="2026-03-15T01:30:00+00:00",           # after midnight, live
+            configured_window_start_utc="2026-03-14T19:00:00+00:00",
+            window_starts_utc=("2026-03-15T01:30:00+00:00",),
+            window_ends_utc=("2026-03-15T03:30:00+00:00",),
+        )
+        # plan.get("plan_warning") is deliberately absent here — this dict
+        # has no completeness signal at all, by design.
+        self.assertNotIn("plan_warning", plan)
+        self.assertTrue(should_skip_redundant_delivery(plan, prior, "overnight"))
+
 
 # ===========================================================================
 # Persisted record read/write
