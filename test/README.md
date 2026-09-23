@@ -1,6 +1,6 @@
 # Test Suite
 
-422 tests across five files. Run from the repo root:
+426 tests across five files. Run from the repo root:
 
 ```
 python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ python -m unittest test_charging_planner test_deliver test_deliver_chargeamps te
 Or individually:
 
 ```
-python -m unittest test_charging_planner -v       # 284 tests, 3 skipped
+python -m unittest test_charging_planner -v       # 288 tests, 3 skipped
 python -m unittest test_deliver -v                # 25 tests
 python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ The 3 skipped tests require a live ENTSO-E API key in the environment and are ma
 
 ---
 
-## test_charging_planner.py (284 tests)
+## test_charging_planner.py (288 tests)
 
 ### TestConfigValidation (18)
 Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, `preferred_window`, and `max_windows` (null/positive-int accepted; zero, negative, float, bool, and string rejected — `bool` is a subclass of `int` in Python, so it needs an explicit check).
@@ -61,13 +61,13 @@ Returns the cheapest continuous run; respects temporal continuity (index adjacen
 ### TestSelectSpillover (5)
 Spillover from outside the preferred window: not triggered when window is satisfied, stays before window end, `max_windows: 1` extends leftward, handles remaining < min slot.
 
-### TestSelectWithMinBlock (17)
-Direct tests for `_select_with_min_block` (the `max_windows: null`, unbounded path): no blocks shorter than minimum, isolated cheap slot replaced, total minutes correct after disqualification, latest slot preferred on equal price, real price data, gap constraint respected, and window-coverage/`cmd_plan` exit-code checks that share this class — including `now_utc` clamping the coverage-check denominator and forecast-supplement filter to a live window's still-useful portion (a live window's already-elapsed time must never register as "missing" coverage, and a forecast supplement must never backfill it).
+### TestSelectWithMinBlock (19)
+Direct tests for `_select_with_min_block` (the `max_windows: null`, unbounded path): no blocks shorter than minimum, isolated cheap slot replaced, total minutes correct after disqualification, latest slot preferred on equal price, real price data, gap constraint respected, and window-coverage/`cmd_plan` exit-code checks that share this class — including `now_utc` clamping the coverage-check denominator and forecast-supplement filter to a live window's still-useful portion (a live window's already-elapsed time must never register as "missing" coverage, and a forecast supplement must never backfill it). Plus a real production regression: when the full requested slot count can't be reached, returns the largest achievable partial selection instead of nothing — previously an infeasible exact-match meant an entirely empty plan even when perfectly good, cheaper time was available; the partial result is confirmed to still respect `min_slot_minutes` on each block, not just grab whatever's cheapest.
 
 **`test_isolated_cheap_slot_with_price_ceiling`** — regression for the 2026-04-13 production bug: a cheap slot isolated by two above-ceiling neighbours must not be selected when it cannot form a valid block.
 
-### TestSelectWithMaxWindows (10)
-Direct tests for `_select_with_max_windows` (the `max_windows: N ≥ 2` path): uses at most N blocks, picks the cheapest N clusters over more expensive ones, `max_windows: 1` matches `_best_continuous_window` exactly, `max_windows: null` matches the unbounded path exactly, a generously high `max_windows` also matches the unbounded path, `min_gap_minutes`/`min_slot_minutes` enforced identically to the unbounded case, infeasible window budgets return `[]` cleanly, latest-slot tiebreak on equal price.
+### TestSelectWithMaxWindows (11)
+Direct tests for `_select_with_max_windows` (the `max_windows: N ≥ 2` path): uses at most N blocks, picks the cheapest N clusters over more expensive ones, `max_windows: 1` matches `_best_continuous_window` exactly, `max_windows: null` matches the unbounded path exactly, a generously high `max_windows` also matches the unbounded path, `min_gap_minutes`/`min_slot_minutes` enforced identically to the unbounded case, infeasible window budgets return `[]` cleanly, latest-slot tiebreak on equal price. Same graceful-degradation fix as `TestSelectWithMinBlock` above, verified for the bounded-window-count DP specifically.
 
 ### TestBuildPlan (13)
 `build_plan` output structure: required keys present (including `max_windows`), price stats, windows, OCPP profile, `max_windows` defaults to `null` and reflects the configured value. `generated_at` and `configured_window_start_utc` reflect the passed-in values (or `null` when not provided) — these feed `delivery/deliver.py`'s redundant-delivery protection. `schedule_uses_forecast` is derived from whether any *scheduled* (not just any available) slot is forecast-sourced, distinguishing "forecast data was consulted" from "forecast data is actually in the delivered schedule."
@@ -78,8 +78,8 @@ OCPP 1.6, 2.0.1, and 2.1 profile generation: schema validity, `validFrom`/`valid
 ### TestXmlParsing (10)
 ENTSO-E XML parsing: slot count, 15-min duration, sort order, ordinal sequencing, no duplicate starts, forward-fill between explicit points, resolution detection.
 
-### TestEndToEnd (10)
-Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable. Plus four delayed-run regression tests: a run firing mid-window still targets tonight's live window rather than skipping to the next night; with an artificially-cheap already-elapsed slot planted to tempt the DP, confirms it's never selected; a live window with too little time left to fit `required_hours` still uses 100% of what remains (never rolls to the next occurrence) and honestly reports the shortfall via `plan_warning`; the companion case — a live window with a comfortable 1h buffer over `required_hours` — produces a complete plan with no warning, confirming the shortfall handling above is specific to genuine insufficiency, not just running late.
+### TestEndToEnd (11)
+Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable. Plus five delayed-run regression tests: a run firing mid-window still targets tonight's live window rather than skipping to the next night; with an artificially-cheap already-elapsed slot planted to tempt the DP, confirms it's never selected; a live window with too little time left to fit `required_hours` still uses 100% of what remains (never rolls to the next occurrence) and honestly reports the shortfall via `plan_warning`; the companion case — a live window with a comfortable 1h buffer over `required_hours` — produces a complete plan with no warning, confirming the shortfall handling above is specific to genuine insufficiency, not just running late; the same too-little-time scenario repeated with `max_windows: null` (the actual default) instead of `1` — the DP behind it used to return a completely empty plan in this situation rather than the same graceful partial result `max_windows: 1` already produced.
 
 ### TestPriceSourceRules (9)
 Price source selection rules (rules 1–4): real prices used when sufficient, forecast display appended, forecast supplement used when window not covered, `price_source` field set correctly, supplement slots tagged `forecasted: true`.

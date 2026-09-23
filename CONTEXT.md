@@ -146,7 +146,9 @@ Same DP, extended with a window-count budget (`_select_with_max_windows`):
 
 **`min_gap_minutes`** controls the minimum gap between blocks (default 15, divisible by 15, can be 0) — identical semantics across `max_windows: null` and `max_windows: N`.
 
-**Spillover:** When the preferred window doesn't have enough slots, the planner fills the deficit from outside the window (never past `preferred_window_end`). `max_windows: 1` extends the existing block leftward; `null` and `N ≥ 2` both fall back to the cheapest-fill path — spillover slots extend an already-selected block and don't enforce their own window budget.
+**Graceful degradation when the full requirement can't be reached** — both `_select_with_min_block` and `_select_with_max_windows` fall back to the largest achievable slot count instead of returning nothing, e.g. a live window with only 1h left against a 6h requirement returns that 1h, not an empty plan. Found and fixed after the planning-horizon work: `_best_continuous_window` (`max_windows: 1`) already had this fallback ("return the longest available block"), but the DP paths originally required reaching the *exact* slot count requested — infeasible → `dp[0][n_slots] == INF` → `return []`, discarding perfectly good, cheaper, achievable time. Fix: search downward from `n_slots` for the largest `r` with `dp[...][r] < INF` and reconstruct using that. The resulting shortfall still surfaces normally via `plan_warning`, same as the `max_windows: 1` case always did.
+
+**Spillover:** When the preferred window doesn't have enough slots, the planner fills the deficit from outside the window (never past `preferred_window_end`). `max_windows: 1` extends the existing block leftward; `null` and `N ≥ 2` both fall back to the cheapest-fill path — spillover slots extend an already-selected block and don't enforce their own window budget. Spillover has no independent awareness of "now" — it's protected purely because `_plan_one_profile` floors *all* candidate prices to `>= now_utc` once, upstream of both the main selection and spillover, so neither can ever reach into elapsed time regardless of which direction they search.
 
 ---
 

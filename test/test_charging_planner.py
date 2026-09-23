@@ -1481,6 +1481,32 @@ class TestSelectWithMinBlock(unittest.TestCase):
         for group in groups:
             self.assertGreaterEqual(len(group) * 15, 30)
 
+    def test_insufficient_candidates_returns_partial_not_empty(self):
+        # Regression: the DP used to require reaching the exact n_slots
+        # requested, returning [] entirely when that was infeasible — even
+        # when a smaller, genuinely optimal partial selection was trivially
+        # available. Only 4 slots (1h) exist; 24 (6h) are required. Must use
+        # all 4, not none — mirrors _best_continuous_window's own
+        # "return the longest available" fallback, which this function
+        # previously lacked.
+        slots = self._slots(4, price_cents=1.0)
+        selected = select_charging_windows(slots, required_minutes=360,
+                                           min_slot_minutes=30, min_gap_minutes=15)
+        self.assertEqual(len(selected), 4)
+        self.assertEqual(sum(s.duration_minutes for s in selected), 60)
+
+    def test_partial_selection_still_respects_min_slot_minutes(self):
+        # The partial fallback must still be a *valid* selection — it can't
+        # satisfy the full requirement, but whatever it does return must
+        # still respect min_slot_minutes on each block, not just grab
+        # whatever's cheapest regardless of block-length constraints.
+        slots = self._slots(4, price_cents=1.0)
+        selected = select_charging_windows(slots, required_minutes=360,
+                                           min_slot_minutes=30, min_gap_minutes=15)
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for group in groups:
+            self.assertGreaterEqual(len(group) * 15, 30)
+
     def test_cheap_isolated_slot_replaced(self):
         # Make slot 4 very cheap but isolated — the slot before and after are expensive.
         # With min_slot_minutes=30 (2 slots), a single isolated cheap slot should be
@@ -1860,6 +1886,19 @@ class TestSelectWithMaxWindows(unittest.TestCase):
         )
         self.assertEqual(selected, [])
 
+    def test_insufficient_candidates_returns_partial_not_empty(self):
+        # Same regression as TestSelectWithMinBlock's version, for the
+        # bounded (max_windows >= 2) DP path specifically. Only 4 slots
+        # (1h) exist; 24 (6h) required with max_windows=3 — must use all 4
+        # rather than returning nothing.
+        slots = self._slots(4, price_cents=1.0)
+        selected = select_charging_windows(
+            slots, required_minutes=360, max_windows=3,
+            min_slot_minutes=30, min_gap_minutes=15,
+        )
+        self.assertEqual(len(selected), 4)
+        self.assertEqual(sum(s.duration_minutes for s in selected), 60)
+
     def test_all_same_price_latest_preferred(self):
         # Mirrors TestSelectWithMinBlock's tiebreak test — with all slots at the
         # same price, later slots should be preferred.
@@ -2123,6 +2162,46 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(p["required_minutes"], 120)
         self.assertEqual(p["total_minutes"], 120, "the full requirement must be met — plenty of time left")
         self.assertIsNone(p["plan_warning"])
+
+    def test_delayed_run_with_insufficient_time_uses_partial_slots_regardless_of_max_windows(self):
+        # Regression: the exact scenario from
+        # test_delayed_run_with_insufficient_remaining_time_produces_partial_plan
+        # above, but with max_windows=None (the actual default) instead of 1.
+        # The DP behind max_windows=None/N used to require reaching the full
+        # requested slot count exactly, returning a completely empty plan —
+        # 0 minutes scheduled — when that was infeasible, even though 1h of
+        # perfectly usable time was available. Must behave identically to
+        # the max_windows=1 case: use what's available, warn about the rest.
+        import charging_planner as cp
+        import tempfile
+
+        raw_config = {
+            "entsoe": {"api_key": "test-key", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "overnight", "required_hours": 6.0, "max_windows": None,
+                "min_slot_minutes": 30, "min_gap_minutes": 15,
+                "preferred_window_start": "21:00", "preferred_window_end": "06:30",
+            }],
+        }
+        prices = slots_from(datetime(2026, 3, 14, 19, 0, tzinfo=UTC), 192, price_cents=1.0)
+        delayed_now = datetime(2026, 3, 15, 3, 30, tzinfo=UTC)   # ~1h left before 06:30 EET close
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            plans = cp.cmd_plan(raw_config, output_dir=tmpdir)
+
+        p = plans[0]
+        self.assertEqual(p["required_minutes"], 360)
+        self.assertEqual(p["total_minutes"], 60,
+                         "must use the full remaining hour — previously returned 0")
+        self.assertIsNotNone(p["plan_warning"])
+        self.assertEqual(p["window_starts_utc"], ["2026-03-15T03:30:00+00:00"])
 
     def test_plan_json_written_to_output_dir(self):
         import tempfile, os

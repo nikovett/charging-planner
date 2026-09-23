@@ -1359,6 +1359,12 @@ def _select_with_min_block(
     ≥ min_slots_per_block long and every gap between blocks is ≥ min_slots_per_gap
     long.  Uses dynamic programming for a globally optimal solution.
 
+    If the full n_slots can't be reached (not enough eligible candidates —
+    e.g. a live window with little time left, or a preferred window too
+    short even with spillover), falls back to the largest achievable
+    selection rather than returning nothing. Every slot actually used is
+    still a genuinely optimal (cheapest) choice for that reduced count.
+
     The DP is time-aware: both block continuity and gap enforcement are based on
     actual slot timestamps, not candidate array indices.  This means the algorithm
     is correct regardless of how the candidate list was filtered (e.g. by a price
@@ -1445,15 +1451,29 @@ def _select_with_min_block(
 
             dp[i][r] = best
 
-    if dp[0][n_slots] == INF:
-        log.warning("No valid solution found for n_slots=%d min_slots_per_block=%d — "
-                    "not enough eligible slots.", n_slots, min_slots_per_block)
-        return []
+    target_r = n_slots
+    if dp[0][target_r] == INF:
+        # Full n_slots unreachable — fall back to the largest achievable r,
+        # so a genuinely tight window still returns the best partial
+        # selection instead of nothing at all. Mirrors _best_continuous_window's
+        # own "return the longest available block" fallback for max_windows=1;
+        # dp[0][0] == 0.0 always, so this loop is guaranteed to terminate.
+        while target_r > 0 and dp[0][target_r] == INF:
+            target_r -= 1
+        if target_r == 0:
+            log.warning("No eligible slots at all for n_slots=%d min_slots_per_block=%d.",
+                        n_slots, min_slots_per_block)
+            return []
+        log.warning(
+            "Could not reach the full %d slots requested (min_slots_per_block=%d) — "
+            "returning the best achievable partial selection of %d slots instead.",
+            n_slots, min_slots_per_block, target_r,
+        )
 
     # Reconstruct: find the latest valid block at each step to prefer later slots
     # on equal-price ties.
     selected: list[Slot] = []
-    r = n_slots
+    r = target_r
     i = 0
     while r > 0:
         best_i = None
@@ -1499,6 +1519,10 @@ def _select_with_max_windows(
     """Select n_slots from candidates at minimum total cost, where every block is
     ≥ min_slots_per_block long, every gap between blocks is ≥ min_slots_per_gap
     long, and at most max_windows separate blocks are used.
+
+    If the full n_slots can't be reached at this window budget, falls back
+    to the largest achievable selection rather than returning nothing — see
+    _select_with_min_block's docstring for the rationale; identical here.
 
     Same time-aware DP as _select_with_min_block (see its docstring for the
     run_end / first_valid_after machinery), extended with a window-count
@@ -1582,19 +1606,30 @@ def _select_with_max_windows(
 
                 dp[w][i][r] = best
 
-    if dp[max_windows][0][n_slots] == INF:
+    target_r = n_slots
+    if dp[max_windows][0][target_r] == INF:
+        # Full n_slots unreachable at this window budget — fall back to the
+        # largest achievable r, same rationale as _select_with_min_block.
+        while target_r > 0 and dp[max_windows][0][target_r] == INF:
+            target_r -= 1
+        if target_r == 0:
+            log.warning(
+                "No eligible slots at all for n_slots=%d min_slots_per_block=%d "
+                "max_windows=%d.", n_slots, min_slots_per_block, max_windows,
+            )
+            return []
         log.warning(
-            "No valid solution found for n_slots=%d min_slots_per_block=%d "
-            "max_windows=%d — not enough eligible slots, or window budget too tight.",
-            n_slots, min_slots_per_block, max_windows,
+            "Could not reach the full %d slots requested (min_slots_per_block=%d "
+            "max_windows=%d) — returning the best achievable partial selection "
+            "of %d slots instead.",
+            n_slots, min_slots_per_block, max_windows, target_r,
         )
-        return []
 
     # Reconstruct: at each step, find the latest valid block start matching
     # the DP value at the current (w, i, r) — same "latest-preferred" approach
     # as _select_with_min_block, with w decremented by exactly one per block.
     selected: list[Slot] = []
-    r = n_slots
+    r = target_r
     w = max_windows
     i = 0
     while r > 0:
