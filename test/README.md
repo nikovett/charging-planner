@@ -1,6 +1,6 @@
 # Test Suite
 
-426 tests across five files. Run from the repo root:
+428 tests across five files. Run from the repo root:
 
 ```
 python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -10,7 +10,7 @@ Or individually:
 
 ```
 python -m unittest test_charging_planner -v       # 288 tests, 3 skipped
-python -m unittest test_deliver -v                # 25 tests
+python -m unittest test_deliver -v                # 27 tests
 python -m unittest test_deliver_chargeamps -v     # 46 tests
 python -m unittest test_deliver_easee -v          # 26 tests
 python -m unittest test_deliver_myskoda -v        # 41 tests
@@ -120,8 +120,8 @@ GHA step-summary per-profile section: profile name, required hours, window table
 
 The dispatcher itself — primarily redundant-delivery protection (see CONTEXT.md "Redundant delivery protection" for the full rationale).
 
-### TestShouldSkipRedundantDelivery (13)
-The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule yields to a real-price-based one or a differently-forecasted one, including when the new run is live mid-window (forecast-override beats live-window protection); two close-together forecast-based runs with byte-identical windows do *not* force a redundant redelivery just because the prior was an estimate — confirmed against real production data (a manual trigger before ENTSO-E's publish time, followed by a simulated second trigger moments later); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule) — also confirmed against real production data (a manual trigger fired 11 minutes into the window); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing; live-window protection is confirmed independent of plan completeness — a fully-satisfied, warning-free plan (no `plan_warning` key present at all) is still protected exactly like a partial one would be, since the function never inspects `required_minutes`/`total_minutes`/`plan_warning`.
+### TestShouldSkipRedundantDelivery (15)
+The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule yields to a real-price-based one or a differently-forecasted one, including when the new run is live mid-window (forecast-override beats live-window protection); two close-together forecast-based runs with byte-identical windows do *not* force a redundant redelivery just because the prior was an estimate — confirmed against real production data (a manual trigger before ENTSO-E's publish time, followed by a simulated second trigger moments later); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule) — also confirmed against real production data (a manual trigger fired 11 minutes into the window); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing; live-window protection is confirmed independent of plan completeness — a fully-satisfied, warning-free plan (no `plan_warning` key present at all) is still protected exactly like a partial one would be, since the function never inspects `required_minutes`/`total_minutes`/`plan_warning`. Plus two tests (using `assertLogs`, not just the return value) confirming the skip log actually names the specific `handler`/`charger` that was skipped, for both the rule-3 (live-window) and rule-4 (identical) skip messages — real production logs showed "Profile 'X': skipping delivery" with no handler/charger named at all, which the decision itself has always been scoped by but the log output didn't reflect.
 
 ### TestDeliveredRecordPersistence (7)
 The persisted record file: round-trip read/write, missing file returns `None`, corrupt JSON returns `None` (logged, not raised), the charge-point ID (a VIN or charger serial — directly identifying, and this file is committed to a typically-public `data/`) never appears in the filename, the hash is deterministic across calls with the same inputs, distinct chargers get distinct records, the data directory is created if it doesn't exist yet.

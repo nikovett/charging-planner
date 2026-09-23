@@ -267,6 +267,8 @@ Two triggers close together (e.g. an unreliable GHA `schedule:` cron plus a manu
 
 The record is written only after a *successful* delivery — a failed attempt leaves no record, so the next run retries normally rather than being mistaken for "already handled."
 
+The decision itself has always been scoped per `(profile, handler, charge_point_id)` — deliberately, not accidentally, since a profile can deliver to more than one charger and each is an independent real-world device (see the design rationale a few paragraphs up: partial failure isolation, independent charging state, per-VIN rate limits). The skip *log messages* originally only named the profile ("Profile 'X': skipping delivery"), which didn't reflect that granularity — ambiguous about which of X's chargers was actually skipped if there were more than one. Fixed: `should_skip_redundant_delivery` now takes `handler_name`/`charge_point_id` and logs `profile='X' handler='Y' charger='Z'`, matching the format already used by the surrounding "Delivering profile"/"Delivery succeeded"/"Delivery failed" messages. A claim about implementation granularity should be visible in what the implementation actually logs, not just in how it's coded.
+
 ---
 
 ## Charge Amps integration

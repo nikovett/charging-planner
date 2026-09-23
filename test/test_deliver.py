@@ -171,6 +171,32 @@ class TestShouldSkipRedundantDelivery(unittest.TestCase):
         plan = make_plan()
         self.assertTrue(should_skip_redundant_delivery(plan, prior, "overnight"))
 
+    def test_skip_log_identifies_specific_handler_and_charger(self):
+        # A profile can deliver to more than one charger — "Profile 'X':
+        # skipping delivery" alone would be ambiguous about which of X's
+        # chargers was actually skipped. The underlying decision has always
+        # been scoped per (profile, handler, charge_point_id); the log
+        # output needs to say so too, not just the return value.
+        prior = make_record()
+        plan = make_plan()
+        with self.assertLogs("deliver", level="INFO") as cm:
+            should_skip_redundant_delivery(plan, prior, "overnight", "myskoda", "VIN123")
+        self.assertTrue(any("myskoda" in msg and "VIN123" in msg for msg in cm.output))
+
+    def test_live_window_skip_log_also_identifies_specific_handler_and_charger(self):
+        prior = make_record(
+            generated_at="2026-03-17T14:00:00+00:00",
+            configured_window_start_utc="2026-03-17T19:00:00+00:00",
+        )
+        plan = make_plan(
+            generated_at="2026-03-17T22:00:00+00:00",
+            configured_window_start_utc="2026-03-17T19:00:00+00:00",
+            window_starts_utc=("2026-03-17T22:00:00+00:00",),
+        )
+        with self.assertLogs("deliver", level="INFO") as cm:
+            should_skip_redundant_delivery(plan, prior, "overnight", "chargeamps", "CHG-42")
+        self.assertTrue(any("chargeamps" in msg and "CHG-42" in msg for msg in cm.output))
+
     def test_different_windows_delivers(self):
         prior = make_record(window_starts_utc=("2026-03-17T19:00:00+00:00",))
         plan = make_plan(window_starts_utc=("2026-03-17T20:00:00+00:00",))

@@ -280,8 +280,22 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def should_skip_redundant_delivery(plan: dict, prior: Optional[dict], profile_name: str) -> bool:
+def should_skip_redundant_delivery(
+    plan: dict,
+    prior: Optional[dict],
+    profile_name: str,
+    handler_name: str = "unknown",
+    charge_point_id: str = "unknown",
+) -> bool:
     """Decide whether to skip delivery because it would be redundant or unsafe.
+
+    handler_name and charge_point_id identify the specific delivery target
+    for log messages only — the decision itself is driven entirely by plan
+    and prior (which dispatch() already loaded from the record for this
+    exact (profile, handler, charge_point_id) triple). Naming the specific
+    target in the log matters once a profile delivers to more than one
+    charger: without it, "skipping delivery" for profile 'X' is ambiguous
+    about which of X's chargers was actually skipped.
 
     Checked in order:
       1. No prior record — nothing to compare against, deliver.
@@ -325,17 +339,19 @@ def should_skip_redundant_delivery(plan: dict, prior: Optional[dict], profile_na
             and new_gen_at >= new_cfg_start
             and prior_gen_at < prior_cfg_start):
         log.info(
-            "Profile '%s': skipping delivery — a plan for this window was "
-            "already delivered before it opened; this run is live and "
-            "redelivering risks interrupting whatever that plan started.",
-            profile_name,
+            "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — a "
+            "plan for this window was already delivered before it opened; "
+            "this run is live and redelivering risks interrupting whatever "
+            "that plan started.",
+            profile_name, handler_name, charge_point_id,
         )
         return True
 
     if same_windows:
         log.info(
-            "Profile '%s': skipping delivery — unchanged from the already-delivered plan.",
-            profile_name,
+            "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — "
+            "unchanged from the already-delivered plan.",
+            profile_name, handler_name, charge_point_id,
         )
         return True
 
@@ -399,7 +415,7 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict, data_dir: str = "d
             record_path = _delivered_record_path(data_dir, profile_name, handler_name, charge_point_id)
             prior = _load_delivered_record(record_path)
 
-            if should_skip_redundant_delivery(plan, prior, profile_name):
+            if should_skip_redundant_delivery(plan, prior, profile_name, handler_name, charge_point_id):
                 continue
 
             log.info(
