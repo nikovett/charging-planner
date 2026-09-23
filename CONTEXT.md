@@ -349,7 +349,7 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 **Four charging-state branches**, in order of how much they trust the vehicle's own current schedule over the new plan:
 1. **Not charging** → full delivery: write all plan windows, disable unused slots, set the charge mode.
-2. **Charging in `MANUAL`/`TIMER`/`TIMER_CHARGING_WITH_CLIMATISATION`** → these modes don't use `preferredChargingTimes` slots to drive the session at all, so all 4 slots are managed freely — but the charge mode itself is left unchanged, to avoid disturbing whatever *is* driving the session.
+2. **Charging in `MANUAL`/`TIMER`/`TIMER_CHARGING_WITH_CLIMATISATION`** → `MANUAL` ignores `preferredChargingTimes` entirely (driver-initiated, no schedule involved). `TIMER`/`TIMER_CHARGING_WITH_CLIMATISATION` *do* use `preferredChargingTimes` — but as a soft preference within departure-time-driven charging, not a hard restriction: if the configured departure deadline needs more charging time or a different window than the preferred slots allow, the vehicle overrides them to still make the deadline. Either way, rewriting all 4 slots freely is still safe: it only affects what the vehicle *prefers* going forward, not whatever charging is already in progress under the current session's already-decided timing — the charge mode itself is left unchanged regardless, to avoid disturbing that.
 3. **Charging in `PREFERRED_CHARGING_TIMES`** → active-slot detection above; route around the protected slot, don't touch the charge mode.
 4. **Charging in an unrecognized mode** → skip entirely. A mode not seen before might use `preferredChargingTimes` in some way not yet understood; guessing is worse than doing nothing for one run.
 
