@@ -24,7 +24,7 @@ Cost minimization is the entire point of this project, but it is always subordin
 
 ## What it does
 
-Fetches day-ahead electricity prices and schedules EV charging for the cheapest available hours, automatically, every day. Delivers the schedule to one or more chargers via cloud APIs. Publishes a GitHub Pages dashboard showing the current plan.
+Fetches day-ahead electricity prices and schedules EV charging for the cheapest available hours, automatically, every day. Delivers the schedule to one or more chargers or vehicles via cloud APIs. Publishes a GitHub Pages dashboard showing the current plan.
 
 ---
 
@@ -32,22 +32,22 @@ Fetches day-ahead electricity prices and schedules EV charging for the cheapest 
 
 | File | Description |
 |---|---|
-| `charging_planner.py` | Core planner |
-| `delivery/deliver.py` | Delivery dispatcher — includes redundant-delivery protection (see below) |
-| `delivery/deliver_chargeamps.py` | Charge Amps handler |
+| `charging_planner.py` | Core planner — price fetch, window resolution, slot selection, plan building |
+| `delivery/deliver.py` | Delivery dispatcher — loads handlers, redundant-delivery protection |
+| `delivery/deliver_chargeamps.py` | Charge Amps handler (tested against real hardware) |
 | `delivery/deliver_easee.py` | Easee handler (untested against real hardware) |
-| `delivery/deliver_myskoda.py` | MyŠkoda handler — updates preferred charging time slots 1..N (N = plan windows, max 4) via public API; detects and routes around an actively-charging slot when in PREFERRED_CHARGING_TIMES mode (tested; first delivery with vehicle away from home) |
+| `delivery/deliver_myskoda.py` | MyŠkoda handler — delivers to the vehicle directly, not a charger (tested against real hardware) |
 | `index.html` | GitHub Pages dashboard |
-| `config.yaml` | Configuration template |
+| `config.yaml` | Configuration template (committed with empty secrets) |
 | `.github/workflows/schedule.yml` | Daily GHA workflow |
 | `test/test_charging_planner.py` | Planner tests |
+| `test/test_deliver.py` | Dispatcher tests — redundant-delivery protection |
 | `test/test_deliver_chargeamps.py` | Charge Amps tests |
 | `test/test_deliver_easee.py` | Easee tests |
 | `test/test_deliver_myskoda.py` | MyŠkoda tests |
-| `test/test_deliver.py` | Dispatcher tests — redundant-delivery protection |
-| `README.md` | Project documentation |
-| `README_tests.md` | Test suite documentation |
-| `CONTEXT.md` | This file |
+| `test/README.md` | Test suite documentation, per-class breakdown |
+| `README.md` | Project documentation (end-user facing) |
+| `CONTEXT.md` | This file (maintainer/contributor facing) |
 
 ---
 
@@ -56,10 +56,10 @@ Fetches day-ahead electricity prices and schedules EV charging for the cheapest 
 The `end-session` Claude skill automates the session wrap-up workflow. Trigger with `/end-session` or phrases like "let's wrap up", "commit the files", "update CONTEXT".
 
 **Phases:**
-1. Run all three test suites — stop if any fail
+1. Run all test suites — stop if any fail
 2. Identify what changed (inferred from conversation or asked)
 3. Update `CONTEXT.md` — Reference in place, Changelog prepend, Session log append
-4. Update `README_tests.md` if test suite changed
+4. Update `test/README.md` if test suite changed
 5. Copy modified files to `/mnt/user-data/outputs/` (working copy → correct repo paths)
 6. Write `commit.sh` — ready-to-run shell script with `git add` and commit message
 7. Present all outputs
@@ -75,25 +75,42 @@ The `end-session` Claude skill automates the session wrap-up workflow. Trigger w
 
 ---
 
-## Architecture
+## Architecture & data flow
 
 ```
-charging_planner.py          # Core planner — price fetch, slot selection, plan building
+charging_planner.py          # writes plan-{profile}.json — knows nothing
+                              # about chargers or vehicles at all
+data/
+  plan-{profile}.json         # committed each run, dashboard-facing
+  delivered-{profile}-{handler}-{hash}.json   # ground truth for "what's
+                                               # actually running" — see
+                                               # Delivery below
 delivery/
-  deliver.py                 # Dispatcher — reads config, calls handlers
-  deliver_chargeamps.py      # Charge Amps API handler
-  deliver_easee.py           # Easee API handler (untested)
-index.html                   # GitHub Pages dashboard
-config.yaml                  # Configuration (committed with empty secrets)
+  deliver.py                  # separate process — reads plan-{profile}.json
+                               # + config.yaml, decides whether to deliver,
+                               # dispatches to the right handler
+  deliver_chargeamps.py       # each handler: deliver(plan, charge_point_id,
+  deliver_easee.py            # entry, timezone) -> bool. Same interface,
+  deliver_myskoda.py          # genuinely different safety models — see
+                               # each handler's own section below.
+index.html                    # GitHub Pages dashboard — reads plan-*.json
+                               # and config.json from data/, no backend
+config.yaml                   # source config (committed with empty secrets)
 .github/workflows/
-  schedule.yml               # Daily GHA workflow
+  schedule.yml                 # daily GHA workflow: plan -> deliver -> publish
 ```
+
+The planner and delivery are deliberately two separate processes, not two functions in one script — `charging_planner.py` never imports anything from `delivery/`, and a plan JSON file is the entire interface between them. This is what makes it possible to reason about planning correctness (does the DP pick the cheapest valid slots) and delivery safety (is it ever safe to push this to a real device) as separate concerns, each independently testable, and it's why `delivery/deliver.py` can protect against redundant delivery using only what's in the plan JSON plus its own persisted state, with no access to the planner's internals.
+
+**One real gap this separation currently has**: `charging_planner.py` writes `plan-{profile}.json` unconditionally, and the GHA workflow's "Publish to data/" step copies it regardless of what `deliver.py` decided — so the dashboard can show a plan that was never actually delivered. See "Future work" below.
 
 ---
 
-## Price sources (area-based fallback chain)
+## Price acquisition
 
-The fallback chain is built dynamically from the configured area by `_build_fallback_chain(area)`. Each source raises `PricesNotYetAvailable` on failure; the next source in the chain is tried automatically.
+### Fallback chain
+
+Built dynamically from the configured area by `_build_fallback_chain(area)`. Each source raises `PricesNotYetAvailable` on failure; the next source in the chain is tried automatically.
 
 ```
 FI:        ENTSO-E → Elering → Sähkötin → nordpool-predict-fi (forecast)
@@ -103,7 +120,7 @@ NO1–NO5:   ENTSO-E → hvakosterstrommen.no
 other:     ENTSO-E only
 ```
 
-All sources use EUR/kWh ex-VAT. ENTSO-E returns EUR/MWh for all areas including SE and NO; the regional sources also provide EUR/kWh directly (SEK and NOK fields are present in SE/NO responses but unused).
+All sources use EUR/kWh ex-VAT. ENTSO-E returns EUR/MWh for all areas including SE and NO; the regional sources also provide EUR/kWh directly (SEK and NOK fields are present in SE/NO responses but unused — **why**: converting through SEK/NOK would need a live FX rate, an extra failure mode for no benefit when the source already provides EUR directly).
 
 1. **ENTSO-E** — primary. Day-ahead 15-min prices. Retries 5×, backoff 5s. Raises `PricesNotYetAvailable` if slots don't reach tomorrow (catches partial/stale responses e.g. during maintenance).
 2. **Elering** (`dashboard.elering.ee/api`) — actual Nord Pool 15-min prices for FI/EE/LV/LT. No API key. `price_source: "Elering"` in plan JSON, no dashboard warning.
@@ -112,11 +129,74 @@ All sources use EUR/kWh ex-VAT. ENTSO-E returns EUR/MWh for all areas including 
 5. **elprisetjustnu.se** (`fetch_elprisetjustnu_prices`) — SE1–SE4, native 15-min (96 slots/day). No API key. `price_source: "elprisetjustnu.se"`.
 6. **hvakosterstrommen.no** (`fetch_hvakosterstrommen_prices`) — NO1–NO5, hourly (24 slots/day) expanded to 4×15-min. No API key. `price_source: "hvakosterstrommen.no"`.
 
-Both ENTSO-E and Sähkötin return all slots including historical (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them. After every successful real-price fetch, up to 24h of forecast display slots are fetched beyond the last real slot (FI only — `fetch_forecast_display_slots` returns `[]` for other areas). These are display-only (grey diagonal bars), never used for selection. When real prices don't fully cover the charging window, forecast slots supplement them for selection too — `price_source` is set to `"forecast"` and the dashboard warning is shown. This supplement is also FI-only.
+**Why `_build_fallback_chain` returns `(fn, name)` tuples, not just functions** — names are embedded at build time so they survive `mock.patch` replacing module-level names with `MagicMock` objects that have no `__name__` of their own; without this, test mocking would break the chain's own logging.
+
+**Why SE and NO are separate functions rather than one parameterized regional fetcher** — consistent with the existing one-function-per-source pattern (Elering, Sähkötin each get their own function too); a shared regional function would need a source-specific branch inside it anyway, so nothing is actually saved by merging them.
+
+### Forecast supplementation
+
+Both ENTSO-E and Sähkötin return all slots including historical (from the previous evening). Past slots are used by the dashboard histogram; the scheduler ignores them (via the `now_utc` floor — see "Window resolution" below).
+
+After every successful real-price fetch, up to 24h of forecast display slots are fetched beyond the last real slot (**FI only** — `fetch_forecast_display_slots` returns `[]` for other areas internally; non-FI areas with partial prices proceed with what they have, no supplement). These are display-only (grey diagonal bars on the dashboard), never used for selection on their own.
+
+When real prices don't fully cover the charging window, forecast slots supplement them for actual *selection* too — `_check_window_coverage` decides this: real coverage below **90%** of the window (a plain hardcoded literal, `charging_planner.py`, not derived from ENTSO-E's own publication mechanics or configurable per profile) triggers the supplement; `price_source` is set to `"forecast"` and the dashboard shows a warning. Below 90% was already the threshold before this project's forecast-supplement capability existed — originally, below it meant the profile was skipped entirely that day (no plan, no delivery); the 2026-04-xx change was about what happens *below* the threshold (supplement instead of give up), not about the number itself. Nobody currently working on this project chose `0.90` or knows why that specific value — it predates the earliest detailed session-log entries. Worth knowing precisely where it lives (one literal, one place) if it ever needs revisiting, rather than assuming it encodes some derived rule.
+
+**Coverage is measured against the still-useful portion of the window, not the full nominal span** — `_check_window_coverage` takes `now_utc` and clamps its denominator to `max(win_start_utc, now_utc)`. Without this, a *live* window (see "Window resolution") would always appear under-covered by exactly its already-elapsed duration — real time that was correctly excluded upstream, not prices that failed to publish — and would trigger an unnecessary forecast supplement, or worse, let a supplement backfill time that's already in the past. The forecast-supplement candidate filter applies the identical clamp for the same reason.
+
+### PlanParams price pool separation
+
+Three explicitly named pools, kept separate to stop data leaking across calculations that have genuinely different requirements:
+- `display_prices` — all real slots including historical; used only for `price_slots` JSON output (the dashboard histogram wants the full history)
+- `future_prices` — real slots from now onwards; used for `price_stats`, the optimal-comparison calculation, and the scheduler itself
+- `forecast_slots` — predicted slots; appended to `price_slots` for display, never used in cost calculations or selection directly (selection only reaches forecast data via the coverage-supplement path above, which is deliberately separate)
 
 ---
 
-## Slot selection algorithm
+## Window resolution
+
+This is where most of the non-obvious design in this project lives — both *what a window means* and *which specific window instance a given run should target* turned out to need careful, deliberate rules rather than the more obvious literal reading of the config.
+
+### What a window actually represents
+
+`preferred_window_start`/`preferred_window_end` aren't arbitrary search bounds — each end represents a real-world constraint on a specific day's charging session:
+
+- **End = the departure deadline.** The car needs to be at target charge by this time for the next leg.
+- **Start = the earliest the car is realistically home and plugged in.** Not "search from here because it's convenient" — it's an implicit claim about vehicle presence that the planner takes on faith from config. It has no way to verify the car is actually there yet; if this is set too early, the DP will silently consider slots the vehicle isn't present for, with no error or warning to catch it. Keeping this honest is the user's responsibility, not something the system cross-checks.
+- **The span between them is usually looser than `required_hours` needs.** That slack — window duration minus actual charging time needed — is exactly what `min_slot_minutes`, `min_gap_minutes`, and `max_windows` optimize within; it's buffer for the DP to find the cheapest sub-selection, not time the car is expected to be actively charging throughout.
+
+**`any`/`any` isn't a degenerate case of the same rule — it's a different rule for a different situation.** It represents having *no* deadline and *no* arrival constraint at all (the canonical case: a weekend day with no commute to plan around), so there's nothing to bound the search to on either side. That's why it collapses to `(now, price horizon)` rather than being treated as "just another shape" alongside fixed windows. This distinction is precisely what the 2026-09-20 regression (below) got wrong: because `any`/`any` is trivially satisfiable at any moment, it's easy to mistake for one shape among several that a single classification loop can treat uniformly — but its defining property (no deadline) is exactly the thing that must never be allowed to shadow a *different* day's real deadline. Worth keeping in mind for any future refactor of this area.
+
+### Which window instance a run targets
+
+`_resolve_planning_horizon` decides which window *instance* a plan targets. Two genuinely different cases, matching a distinction the original code always had:
+
+**Bare profile** (no `schedule:`, no top-level `any` flag) — a single, unvarying shape. No "which weekday" question at all: check today's own occurrence first (upcoming or live), then tomorrow's as the fallback once today has elapsed.
+
+**Schedule (or top-level `any`) present** — a schedule entry is indexed by the day the charging is *for*, not by the calendar date its window instance starts on. The "monday" entry describes the session that gets the car ready for Monday, which for an overnight shape actually starts *Sunday* evening. This is exactly how the original code always worked: it resolved the schedule for `tomorrow` and used shape alone (overnight vs. same-day) to decide whether to anchor the resulting window to today or to tomorrow itself.
+
+**Regression caught in production (2026-09-20) and fixed**: an earlier version of this function queried each candidate date's *own* weekday directly instead of indexing by day-of-use. On a Sunday with a weekday-overnight/weekend-`any` schedule, that meant Sunday's own entry (`any`/`any`, trivially always "live") was used directly — Monday's fixed `21:00–06:30` window was never even considered, and slots landed on Monday afternoon instead of Sunday night. Fixed by restoring the day-ahead (tomorrow-indexed) rule for the schedule/`any` branch specifically; see `TestResolvePlanningHorizon.test_schedule_regression_weekend_any_does_not_mask_weekday_overnight` for the exact reproduction.
+
+Within the schedule/`any` branch, two candidates, checked in priority order:
+1. **Today's own entry** — what yesterday's daily run would have targeted (that run resolved "tomorrow" relative to itself as today). Relevant only if overnight-shaped: only that shape's window instance can still be open this many hours later, in the early morning. Same-day and `any`-ended shapes can't still be open a full calendar day after the run that targeted them.
+2. **Tomorrow's entry** — the normal target for a daily run (day-ahead prices apply to tomorrow). Overnight shapes anchor to today (window starts this evening); other shapes anchor to tomorrow itself. Can never itself classify as elapsed (`now` is by definition still within today) — this candidate always succeeds.
+
+**Classification** (`_classify_window_instance`) — "elapsed" depends on shape, since not every shape has a fixed end:
+- both `any` → never elapsed (trivially live, start = now)
+- `any` start → elapsed once the target date's occurrence of the fixed end time has passed
+- `any` end → elapsed once `required_minutes` no longer fits between now and `any_end_cap` (`min(last available price, plan_horizon)`) — there's no fixed clock-time end to compare against, so "does it still fit" is the only sensible boundary. Note: within the schedule/`any` branch, "fixed start, `any` end" and "`any` start, fixed end" are only ever reached via candidate 2 (always ends up tomorrow-anchored, matching the original code's own behavior for these shapes) — the elapsed-via-required-fits path is real and directly tested (`TestClassifyWindowInstance`) but isn't reachable through the horizon function for this specific shape combination.
+- both fixed → elapsed once `now >= end_utc`
+
+**`win_start_utc`/`win_end_utc` are returned unclamped** — they represent the *configured* bounds of whichever instance was targeted, used as-is for the plan's displayed `preferred_window_start`/`preferred_window_end`. `plan_date` is derived from the actual resolved `win_start_utc` (`ws.astimezone(tz).date()`), matching how it has always been defined: the local calendar date the window starts on — for an overnight instance targeting Monday, that's Sunday's date, not Monday's.
+
+Clamping to "never select an elapsed slot" is the caller's job, applied uniformly regardless of which instance was chosen:
+- `_plan_one_profile` floors `candidate_prices` to `now_utc` (in addition to the existing `win_start_utc - required_minutes` floor) — this is what makes catching a live window's remainder safe; without it, an elapsed-but-still-known price could otherwise be selected.
+- `_check_window_coverage` and the forecast-supplement filter in `_select_slots` both take `now_utc` and clamp their effective window start to `max(win_start_utc, now_utc)` — see "Price acquisition" above.
+
+`_resolve_window_utc` itself is purely mechanical — given a start/end HH:MM and a specific anchor date, it returns UTC bounds with no dependency on the current time at all. Deciding *which* date to anchor to is entirely `_resolve_planning_horizon`'s job; the original auto-anchor heuristic (guessing "today or tomorrow" from the clock, with no day-ahead awareness at all) was the actual delayed-run bug and has been removed rather than left dormant.
+
+---
+
+## Slot selection
 
 `select_charging_windows` dispatches on `max_windows`:
 
@@ -146,13 +226,11 @@ Same DP, extended with a window-count budget (`_select_with_max_windows`):
 
 **`min_gap_minutes`** controls the minimum gap between blocks (default 15, divisible by 15, can be 0) — identical semantics across `max_windows: null` and `max_windows: N`.
 
-**Graceful degradation when the full requirement can't be reached** — both `_select_with_min_block` and `_select_with_max_windows` fall back to the largest achievable slot count instead of returning nothing, e.g. a live window with only 1h left against a 6h requirement returns that 1h, not an empty plan. Found and fixed after the planning-horizon work: `_best_continuous_window` (`max_windows: 1`) already had this fallback ("return the longest available block"), but the DP paths originally required reaching the *exact* slot count requested — infeasible → `dp[0][n_slots] == INF` → `return []`, discarding perfectly good, cheaper, achievable time. Fix: search downward from `n_slots` for the largest `r` with `dp[...][r] < INF` and reconstruct using that. The resulting shortfall still surfaces normally via `plan_warning`, same as the `max_windows: 1` case always did.
+**Graceful degradation when the full requirement can't be reached** — both `_select_with_min_block` and `_select_with_max_windows` fall back to the largest achievable slot count instead of returning nothing, e.g. a live window with only 1h left against a 6h requirement returns that 1h, not an empty plan. Found and fixed after the planning-horizon work: `_best_continuous_window` (`max_windows: 1`) already had this fallback ("return the longest available block"), but the DP paths originally required reaching the *exact* slot count requested — infeasible → `dp[0][n_slots] == INF` → `return []`, discarding perfectly good, cheaper, achievable time. Fix: search downward from `n_slots` for the largest `r` with `dp[...][r] < INF` and reconstruct using that. The resulting shortfall still surfaces normally via `plan_warning`, same as the `max_windows: 1` case always did. Not specific to "required exceeds the window" — the identical bug can be triggered even when the window's raw total span *equals* `required_minutes`, if a price ceiling or naturally gappy real prices fragment the candidates into pieces too small to form valid blocks under `min_slot_minutes`/`min_gap_minutes`; both cases hit the same `dp[...][n_slots] == INF` path and get the same fix.
 
 **Spillover:** When the preferred window doesn't have enough slots, the planner fills the deficit from outside the window (never past `preferred_window_end`). `max_windows: 1` extends the existing block leftward; `null` and `N ≥ 2` both fall back to the cheapest-fill path — spillover slots extend an already-selected block and don't enforce their own window budget. Spillover has no independent awareness of "now" — it's protected purely because `_plan_one_profile` floors *all* candidate prices to `>= now_utc` once, upstream of both the main selection and spillover, so neither can ever reach into elapsed time regardless of which direction they search.
 
----
-
-## Retained minutes
+### Retained minutes
 
 Each run reads `data/plan-{name}.json`, counts future `charging: true` minutes, and adds them to `required_hours` before running the DP. Ensures committed charging is never lost if a new plan is built before the previous one completes.
 
@@ -164,49 +242,7 @@ Each run reads `data/plan-{name}.json`, counts future `charging: true` minutes, 
 
 ---
 
-## Window semantics (design intent)
-
-`preferred_window_start`/`preferred_window_end` aren't arbitrary search bounds — each end represents a real-world constraint on a specific day's charging session:
-
-- **End = the departure deadline.** The car needs to be at target charge by this time for the next leg.
-- **Start = the earliest the car is realistically home and plugged in.** Not "search from here because it's convenient" — it's an implicit claim about vehicle presence that the planner takes on faith from config. It has no way to verify the car is actually there yet; if this is set too early, the DP will silently consider slots the vehicle isn't present for, with no error or warning to catch it. Keeping this honest is the user's responsibility, not something the system cross-checks.
-- **The span between them is usually looser than `required_hours` needs.** That slack — window duration minus actual charging time needed — is exactly what `min_slot_minutes`, `min_gap_minutes`, and `max_windows` optimize within; it's buffer for the DP to find the cheapest sub-selection, not time the car is expected to be actively charging throughout.
-
-**`any`/`any` isn't a degenerate case of the same rule — it's a different rule for a different situation.** It represents having *no* deadline and *no* arrival constraint at all (the canonical case: a weekend day with no commute to plan around), so there's nothing to bound the search to on either side. That's why it collapses to `(now, price horizon)` rather than being treated as "just another shape" alongside fixed windows. This distinction is precisely what the 2026-09-20 regression (see below) got wrong: because `any`/`any` is trivially satisfiable at any moment, it's easy to mistake for one shape among several that a single classification loop can treat uniformly — but its defining property (no deadline) is exactly the thing that must never be allowed to shadow a *different* day's real deadline. Worth keeping in mind for any future refactor of this area.
-
----
-
-## Planning horizon resolution
-
-`_resolve_planning_horizon` decides which window *instance* a plan targets. Two genuinely different cases, matching a distinction the original code always had:
-
-**Bare profile** (no `schedule:`, no top-level `any` flag) — a single, unvarying shape. No "which weekday" question at all: check today's own occurrence first (upcoming or live), then tomorrow's as the fallback once today has elapsed.
-
-**Schedule (or top-level `any`) present** — a schedule entry is indexed by the day the charging is *for*, not by the calendar date its window instance starts on. The "monday" entry describes the session that gets the car ready for Monday, which for an overnight shape actually starts *Sunday* evening. This is exactly how the original code always worked: it resolved the schedule for `tomorrow` and used shape alone (overnight vs. same-day) to decide whether to anchor the resulting window to today or to tomorrow itself.
-
-**Regression caught in production (2026-09-20) and fixed**: an earlier version of this function queried each candidate date's *own* weekday directly instead of indexing by day-of-use. On a Sunday with a weekday-overnight/weekend-`any` schedule, that meant Sunday's own entry (`any`/`any`, trivially always "live") was used directly — Monday's fixed `21:00–06:30` window was never even considered, and slots landed on Monday afternoon instead of Sunday night. Fixed by restoring the day-ahead (tomorrow-indexed) rule for the schedule/`any` branch specifically; see `TestResolvePlanningHorizon.test_schedule_regression_weekend_any_does_not_mask_weekday_overnight` for the exact reproduction.
-
-Within the schedule/`any` branch, two candidates, checked in priority order:
-1. **Today's own entry** — what yesterday's daily run would have targeted (that run resolved "tomorrow" relative to itself as today). Relevant only if overnight-shaped: only that shape's window instance can still be open this many hours later, in the early morning. Same-day and `any`-ended shapes can't still be open a full calendar day after the run that targeted them.
-2. **Tomorrow's entry** — the normal target for a daily run (day-ahead prices apply to tomorrow). Overnight shapes anchor to today (window starts this evening); other shapes anchor to tomorrow itself. Can never itself classify as elapsed (`now` is by definition still within today) — this candidate always succeeds.
-
-**Classification** (`_classify_window_instance`) — "elapsed" depends on shape, since not every shape has a fixed end:
-- both `any` → never elapsed (trivially live, start = now)
-- `any` start → elapsed once the target date's occurrence of the fixed end time has passed
-- `any` end → elapsed once `required_minutes` no longer fits between now and `any_end_cap` (`min(last available price, plan_horizon)`) — there's no fixed clock-time end to compare against, so "does it still fit" is the only sensible boundary. Note: within the schedule/`any` branch, "fixed start, `any` end" and "`any` start, fixed end" are only ever reached via candidate 2 (always ends up tomorrow-anchored, matching the original code's own behavior for these shapes) — the elapsed-via-required-fits path is real and directly tested (`TestClassifyWindowInstance`) but isn't reachable through the horizon function for this specific shape combination.
-- both fixed → elapsed once `now >= end_utc`
-
-**`win_start_utc`/`win_end_utc` are returned unclamped** — they represent the *configured* bounds of whichever instance was targeted, used as-is for the plan's displayed `preferred_window_start`/`preferred_window_end`. `plan_date` is derived from the actual resolved `win_start_utc` (`ws.astimezone(tz).date()`), matching how it has always been defined: the local calendar date the window starts on — for an overnight instance targeting Monday, that's Sunday's date, not Monday's.
-
-Clamping to "never select an elapsed slot" is the caller's job, applied uniformly regardless of which instance was chosen:
-- `_plan_one_profile` floors `candidate_prices` to `now_utc` (in addition to the existing `win_start_utc - required_minutes` floor) — this is what makes catching a live window's remainder safe; without it, an elapsed-but-still-known price could otherwise be selected.
-- `_check_window_coverage` and the forecast-supplement filter in `_select_slots` both take `now_utc` and clamp their effective window start to `max(win_start_utc, now_utc)` — without this, a live window's already-elapsed portion would always register as "missing" coverage (misdiagnosed as "prices not yet published"), and a forecast supplement could backfill already-elapsed time.
-
-`_resolve_window_utc` itself is purely mechanical — given a start/end HH:MM and a specific anchor date, it returns UTC bounds with no dependency on the current time at all. Deciding *which* date to anchor to is entirely `_resolve_planning_horizon`'s job; the original auto-anchor heuristic (guessing "today or tomorrow" from the clock, with no day-ahead awareness at all) was the actual delayed-run bug and has been removed rather than left dormant.
-
----
-
-## Plan JSON structure
+## Plan output
 
 ```json
 {
@@ -251,10 +287,17 @@ Key fields:
 - `price_slots` — all slots from previous evening onwards. `charging: true` = scheduled. `optimal: true` = cheapest ignoring window. `forecasted: true` = display-only forecast slot
 - `plan_warning` — null or human-readable reason when plan is partial (`"partial plan — price limit X c€/kWh"` or `"partial plan — required hours exceed boundaries"`)
 - `ocpp_charging_profile` — OCPP 1.6/2.0.1/2.1 compatible ChargingProfile object for any downstream system
+- `generated_at` — when this specific plan was built. Exists specifically to support redundant-delivery protection (below); not otherwise consumed by the planner itself
+- `configured_window_start_utc` — the *true, unclamped* window start (see "Window resolution" above) — distinct from `window_starts_utc`, which is the actual delivered slot times and may start later than this if the window was live when the plan was built
+- `schedule_uses_forecast` — whether any *scheduled* (`charging: true`) slot specifically relied on forecast data, derived from `price_slots`' own `forecasted`/`charging` flags rather than threaded through as a separate signal. Deliberately more precise than "was forecast data consulted at all during selection" — a coverage check can pull forecast slots into the candidate pool without any of them actually being cheap enough to get selected, in which case the delivered schedule is still fully real-price-based
 
 ---
 
-## Redundant delivery protection
+## Delivery
+
+`delivery/deliver.py` is a separate process from the planner (see "Architecture" above) — it reads `plan-{profile}.json` files plus `config.yaml`, and for each `deliveries:` entry, resolves the charge point ID(s) and calls `handler.deliver(plan, charge_point_id, entry, timezone) -> bool` once per resolved charger. All chargers across all profiles are attempted in one run; failures accumulate and are reported via a non-zero exit code (GHA then emails the operator) rather than stopping the whole run at the first failure.
+
+### Redundant-delivery protection
 
 Two triggers close together (e.g. an unreliable GHA `schedule:` cron plus a manual `workflow_dispatch` backup) can each build and deliver a plan for the same profile. Re-delivering isn't free in two distinct ways: it can silently overwrite a manual adjustment made to the charger or vehicle between the two runs (violating Guiding Principle 1 — never interrupt a session already in progress), and it burns real API budget on a request that accomplishes nothing (see "Never make an unnecessary API call" under Design decisions). A skip happens before the handler module is even loaded, so it saves the whole request sequence, not just the resulting charger/vehicle change.
 
@@ -262,30 +305,33 @@ Two triggers close together (e.g. an unreliable GHA `schedule:` cron plus a manu
 
 1. **No prior record** → deliver. Nothing to compare against.
 2. **Prior schedule used forecast data** → deliver, regardless of window liveness, *unless* this plan is also forecast-based and produced byte-identical windows to the prior one. A forecast-based schedule is an estimate; once real prices are available (or the forecast itself has moved) it should always be allowed to correct it, even if that means interrupting a session the forecast-based plan already started. But two close-together forecast-based triggers with an unchanged result aren't a correction — that's a redundant retrigger before real prices have published yet, and forcing a redelivery there would burn an API call for nothing (falls through to rule 4 instead, which skips it as unchanged).
-3. **This run's window is live** (already open — see "Planning horizon resolution" above) **and the prior plan predates that same window's start** (`configured_window_start_utc` matches) → skip. The prior plan is an already-committed pre-window schedule; redelivering here risks cutting off whatever it already started. The window-instance match matters: without it, a live run for a *new* window could be wrongly blocked by an unrelated, already-completed plan from a previous cycle (e.g. Monday's completed plan blocking Tuesday's legitimate live delivery).
+3. **This run's window is live** (already open — see "Window resolution" above) **and the prior plan predates that same window's start** (`configured_window_start_utc` matches) → skip. The prior plan is an already-committed pre-window schedule; redelivering here risks cutting off whatever it already started. The window-instance match matters: without it, a live run for a *new* window could be wrongly blocked by an unrelated, already-completed plan from a previous cycle (e.g. Monday's completed plan blocking Tuesday's legitimate live delivery).
 4. **Otherwise, diff the scheduled windows** against the prior record — identical → skip (nothing changed, nothing to gain from redelivering); different → deliver.
 
 The record is written only after a *successful* delivery — a failed attempt leaves no record, so the next run retries normally rather than being mistaken for "already handled."
 
-The decision itself has always been scoped per `(profile, handler, charge_point_id)` — deliberately, not accidentally, since a profile can deliver to more than one charger and each is an independent real-world device (see the design rationale a few paragraphs up: partial failure isolation, independent charging state, per-VIN rate limits). The skip *log messages* originally only named the profile ("Profile 'X': skipping delivery"), which didn't reflect that granularity — ambiguous about which of X's chargers was actually skipped if there were more than one. Fixed: `should_skip_redundant_delivery` now takes `handler_name`/`charge_point_id` and logs `profile='X' handler='Y' charger='Z'`, matching the format already used by the surrounding "Delivering profile"/"Delivery succeeded"/"Delivery failed" messages. A claim about implementation granularity should be visible in what the implementation actually logs, not just in how it's coded.
+**Why identifier-level (`profile`, `handler`, `charge_point_id`), not profile-level.** A profile can deliver to more than one charger — both `deliveries:` entries and `charge_point_id` support lists in the schema. A profile-level record couldn't express Guiding Principle 1 correctly once that happens:
+- **Partial failure would get lost.** If charger A succeeds and charger B fails in the same run, each currently gets an accurate independent record — A correctly protected, B correctly retried next time. A profile-level record would have to collapse that into one flag, and either choice (mark "delivered" on any success, or withhold it on any failure) is wrong for the other charger.
+- **Independent real-world state would get conflated.** Two chargers under one profile can be in genuinely different states — one mid-session, one idle. A shared record can't distinguish "device A is charging, don't touch it" from "device B already finished, go ahead and correct it."
+- **The MyŠkoda rate limit is per-VIN**, not per-profile — so even the API-budget argument for this feature is inherently a per-device concern.
 
----
+A single-profile, single-charger setup (the common case) can't observe any difference between profile-level and identifier-level granularity — which is exactly why this distinction is easy to get wrong without deliberately designing for the multi-charger case up front.
 
-## Charge Amps integration
+**The skip *log messages* originally only named the profile** ("Profile 'X': skipping delivery"), which didn't reflect the identifier-level granularity described above — ambiguous about which of X's chargers was actually skipped if there were more than one. Fixed: `should_skip_redundant_delivery` now takes `handler_name`/`charge_point_id` and logs `profile='X' handler='Y' charger='Z'`, matching the format already used by the surrounding "Delivering profile"/"Delivery succeeded"/"Delivery failed" messages. A claim about implementation granularity should be visible in what the implementation actually logs, not just in how it's coded — this was found only by re-reading real production logs after the fact, not by reasoning about the code in isolation.
 
-The official Charge Amps external API (`eapi.charge.space`) does not support scheduling, override control, or connector state reading — it only exposes basic charger control. Everything we use is only available via the web portal API (`my.charge.space`). `deliver_chargeamps.py` authenticates with the user's own credentials and uses this portal API directly.
+### Charge Amps handler
+
+The official Charge Amps external API (`eapi.charge.space`) does not support scheduling, override control, or connector state reading — it only exposes basic charger control. Everything used here is only available via the web portal API (`my.charge.space`). `deliver_chargeamps.py` authenticates with the user's own credentials and uses this portal API directly.
 
 **Schedule delivery always switches to Schedule mode.** `isActive: true` → mode switches AND windows are immediately enforced. `isActive: false` → mode switches but windows are NOT enforced. `isActive: true` is correct.
 
-**Override mechanism.** Always reads `isCharging` before delivery. If true, activates schedule override after delivery via `PUT /api/chargepoints/{id}/{connector_id}/schedule/override` — protects the current session. Override clears automatically when cable disconnects.
+**Override mechanism.** Always reads `isCharging` before delivery. If true, activates schedule override after delivery via `PUT /api/chargepoints/{id}/{connector_id}/schedule/override` — protects the current session. Override clears automatically when the cable disconnects.
 
 **Override error codes treated as success:** `OverridingScheduleExists` (already active), `NoScheduleForConnector` (no active schedule).
 
 **Connector state fields** (confirmed from live API): `isCharging` (bool), `onBySchedule` / `offBySchedule`, `mode` (`"On"` / `"Off"` / `"Schedule"`), `ocppStatus`.
 
----
-
-## Easee integration
+### Easee handler
 
 `deliver_easee.py` written from official Easee API documentation. Untested against real hardware.
 
@@ -293,28 +339,35 @@ Single window → Basic Charge Plan (`POST /api/chargers/{id}/basic_charge_plan`
 
 Weekly plan uses UTC times in `"HH:MMZ"` format. All other days cleared — the planner owns the full schedule state.
 
+### MyŠkoda handler
+
+The only handler that delivers to the *vehicle* rather than a charger — a categorically different safety model, since the vehicle's own charging profile is shared state the driver can also see and edit directly in the MyŠkoda app.
+
+**Slot mapping.** The vehicle has exactly `_MAX_VEHICLE_SLOTS = 4` `preferredChargingTimes` slots. Plan window 1 → slot 1, window 2 → slot 2, and so on; unused slots are disabled (`enabled: false`, times preserved unchanged rather than cleared). `max_windows` must be configured to a value between 1 and 4 — `max_windows: null` (unlimited) is rejected outright, even if a given day's plan happens to produce 4 or fewer windows, because an unbounded profile can produce more on a different day and fail unpredictably at delivery time. A defensive runtime check on the plan's actual window count backs this up independently of the config check, in case the two ever drift.
+
+**Active-session detection.** The MyŠkoda API reports that the vehicle is `CHARGING` and which charge mode is active, but not *which slot* is driving the session. When the active mode is `PREFERRED_CHARGING_TIMES`, `_find_active_slot_index` infers the active slot by checking which *enabled* slot's `[startTime, endTime)` window contains the current local time (`_time_in_window`) — a reliable signal specifically because charging under this mode stops exactly at the window's declared end, not because of any weaker heuristic. A unique match → that slot is protected completely untouched (not even its `enabled` flag), and the plan's windows are routed into the remaining slots. No match, an ambiguous match (more than one enabled slot's window contains "now"), or not enough remaining slots to route the plan around the protected one → delivery is skipped entirely for that run rather than risk an unverified guess, the same "skip rather than guess" reasoning behind branch 4 below.
+
+**Four charging-state branches**, in order of how much they trust the vehicle's own current schedule over the new plan:
+1. **Not charging** → full delivery: write all plan windows, disable unused slots, set the charge mode.
+2. **Charging in `MANUAL`/`TIMER`/`TIMER_CHARGING_WITH_CLIMATISATION`** → these modes don't use `preferredChargingTimes` slots to drive the session at all, so all 4 slots are managed freely — but the charge mode itself is left unchanged, to avoid disturbing whatever *is* driving the session.
+3. **Charging in `PREFERRED_CHARGING_TIMES`** → active-slot detection above; route around the protected slot, don't touch the charge mode.
+4. **Charging in an unrecognized mode** → skip entirely. A mode not seen before might use `preferredChargingTimes` in some way not yet understood; guessing is worse than doing nothing for one run.
+
+**Why `max_windows: null` is rejected rather than merely risky** — this mirrors the redundant-delivery-protection design principle of failing predictably: an unbounded profile might work fine for weeks (the DP happens to produce ≤4 windows most days) and then fail unpredictably the one day it doesn't, with an error that gives no hint the *configuration* was the actual problem. Rejecting it at delivery time, every time, with a message naming the actual constraint, converts an intermittent silent failure into a loud, immediate, one-time configuration error.
+
 ---
 
 ## Design decisions
 
-**`_build_fallback_chain` returns `(fn, name)` tuples** — names are embedded at build time so they survive `mock.patch` replacing module-level names with MagicMock objects that have no `__name__`.
-
-**SE and NO are separate functions** — consistent with one-function-per-source pattern of Elering/Sähkötin.
-
-**EUR/kWh throughout** — SEK/NOK fields in regional API responses are ignored.
-
 **Forecast supplement gated to FI** — `fetch_forecast_display_slots` returns `[]` for non-FI areas internally. Non-FI areas with partial prices proceed with what they have.
-
-**PlanParams price pool separation** — three explicitly named pools prevent data leaking across calculations:
-- `display_prices` — all real slots including historical; used only for `price_slots` JSON output
-- `future_prices` — real slots from now onwards; used for `price_stats`, optimal calculation, scheduler
-- `forecast_slots` — predicted slots; appended to `price_slots`, never used in calculations
 
 **OCPP delivery handler removed** — requires direct WebSocket access, incompatible with GHA-first architecture. OCPP ChargingProfile remains in plan JSON for downstream systems.
 
-**Never make an unnecessary API call** — every delivery handler talks to a rate-limited, third-party API (MyŠkoda: 20 requests/hour/VIN, a hard published quota; Charge Amps/Easee: unpublished but real). Redundant-delivery protection (see below) checks *before* loading the handler module or making any request at all, not after — a skip costs nothing, not even a login round-trip. This is treated as an architectural constraint, not just an optimization: a design that would work correctly but burn API budget unnecessarily on every redundant trigger is a worse design, even before considering the safety case.
+**Never make an unnecessary API call** — every delivery handler talks to a rate-limited, third-party API (MyŠkoda: 20 requests/hour/VIN, a hard published quota; Charge Amps/Easee: unpublished but real). Redundant-delivery protection (above) checks *before* loading the handler module or making any request at all, not after — a skip costs nothing, not even a login round-trip. This is treated as an architectural constraint, not just an optimization: a design that would work correctly but burn API budget unnecessarily on every redundant trigger is a worse design, even before considering the safety case.
 
-**Never commit directly identifying data to `data/`** — that directory is typically public via GitHub Pages, and the project already has one precedent for getting this wrong (`write_config_json`'s API key redaction, above). A second instance: the redundant-delivery record filenames originally embedded `charge_point_id` directly (a VIN for MyŠkoda, a charger serial for Charge Amps) — fixed by hashing it instead (see "Redundant delivery protection" below). A VIN isn't a credential, so this was lower-severity than the API key case, but the same principle applies: anything written to a committed, public directory should be checked for what it reveals, not just whether it functions correctly.
+**Never commit directly identifying data to `data/`** — that directory is typically public via GitHub Pages, and the project already has one precedent for getting this wrong (`write_config_json`'s API key redaction, next). A second instance: the redundant-delivery record filenames originally embedded `charge_point_id` directly (a VIN for MyŠkoda, a charger serial for Charge Amps) — fixed by hashing it instead (see "Redundant-delivery protection" above). A VIN isn't a credential, so this was lower-severity than the API key case, but the same principle applies: anything written to a committed, public directory should be checked for what it reveals, not just whether it functions correctly.
+
+**`write_config_json` redacts secrets before writing** — `data/config.json` (committed, dashboard-facing) could previously contain a real `ENTSOE_API_KEY` if it was supplied via environment variable rather than left empty in `config.yaml`, because the in-memory config object was serialized *after* the env-var override was merged in. Fixed to deep-copy and redact `entsoe.api_key` before writing, without mutating the caller's own config (which still needs the real key for fetching).
 
 **ntfy removed** — forecast warning visible on dashboard; delivery failures exit non-zero → GHA emails operator.
 
@@ -322,29 +375,33 @@ Weekly plan uses UTC times in `"HH:MMZ"` format. All other days cleared — the 
 
 ## Test suite
 
-296 tests, 3 skipped:
-- `test/test_charging_planner.py` (229) — price parsing, window selection, DP algorithm, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
-- `test/test_deliver_chargeamps.py` (41) — Charge Amps delivery handler (login/cache, connector mode, period fields, period timing)
-- `test/test_deliver_easee.py` (26) — Easee delivery handler (day-of-week mapping, weekly/basic plan payloads, deliver routing)
+428 tests, 3 skipped:
+- `test/test_charging_planner.py` (288) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
+- `test/test_deliver.py` (27) — redundant-delivery protection: full decision matrix, persisted-record read/write, `dispatch()`-level integration
+- `test/test_deliver_chargeamps.py` (46) — login/cache, connector mode, period fields, period timing
+- `test/test_deliver_easee.py` (26) — day-of-week mapping, weekly/basic plan payloads, deliver routing
+- `test/test_deliver_myskoda.py` (41) — slot mapping, `max_windows` validation, active-slot detection, all four charging-state branches
 
-See `README_tests.md` for full per-class breakdown.
+See `test/README.md` for the full per-class breakdown.
 
-**Cyclomatic complexity** (radon, `charging_planner.py`): average B (7.3). Functions at C or above:
+**Cyclomatic complexity** (`radon cc charging_planner.py`): average B (7.8). Functions at C or above:
 
 | Grade | Score | Function |
 |-------|-------|----------|
-| E | 39 | `_plan_one_profile` |
-| E | 35 | `_validate_charging_profile` |
+| E | 39 | `_validate_charging_profile` |
+| E | 35 | `_select_with_max_windows` |
+| E | 33 | `build_plan` |
+| E | 32 | `_plan_one_profile` |
 | E | 31 | `cmd_plan` |
-| D | 29 | `build_plan` |
-| D | 25 | `_select_with_min_block` |
+| D | 29 | `_select_with_min_block` |
+| C | 20 | `_resolve_planning_horizon` |
 | C | 18 | `_select_spillover` |
-| C | 15 | `_resolve_tz` |
-| C | 14 | `_select_slots` |
+| C | 15 | `_resolve_tz`, `print_plan_summary` |
+| C | 14 | `select_charging_windows` |
 | C | 13 | `_parse_one_profile`, `_best_continuous_window` |
-| C | 12 | `_http_request_with_retry`, `fetch_sahkotin_prices`, `fetch_forecast_prices`, `select_charging_windows`, `_resolve_schedule_window` |
+| C | 12 | `_http_request_with_retry`, `fetch_sahkotin_prices`, `fetch_forecast_prices`, `_select_slots`, `_resolve_schedule_window` |
 
-The three E-grade functions are large orchestrators. `_select_with_min_block` is D/25 after the `max_run` addition — warranted complexity for a correct DP.
+The E-grade functions are large orchestrators (`cmd_plan`, `_plan_one_profile`, `build_plan`) or DP implementations where the complexity is the correctness (`_select_with_min_block`, `_select_with_max_windows` — see "Slot selection" above for why). `_validate_charging_profile`'s complexity is many independent field checks in sequence, not interacting branches — high cyclomatic score, low actual risk.
 
 ---
 
@@ -380,7 +437,12 @@ charging:
         connector_id: 1
         max_charging_rate: 16.0
         restore_mode: false
+      - handler: myskoda
+        charge_point_id: SKODA_VIN
+        api_key_env: SKODA_API_KEY
 ```
+
+`max_price_cents_kwh` also accepts the string `"avg"` instead of a number — resolves at plan time to that day's average future price, so the ceiling adapts to market conditions rather than needing manual retuning.
 
 ---
 
@@ -402,7 +464,7 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 
 ## Future work
 
-**Dashboard can show a plan that was never delivered** — `charging_planner.py` writes `plan-{profile}.json` unconditionally on every run, and the GHA workflow's "Publish to data/" step copies it regardless of what `delivery/deliver.py` decided. Usually harmless, since a skipped-as-redundant plan (rule 4) is byte-identical to what's actually running. But rule 3 (live-window protection) is a real gap: the skipped plan reflects a live, time-clamped recompute with different windows than the earlier pre-window plan that's actually delivered and running — so the dashboard would display a schedule that was deliberately never sent, while the vehicle/charger runs something else. Same underlying issue, lower frequency, already existed for plain delivery failures (API error, network issue) before any of this session's work — the publish step has never been conditioned on delivery success.
+**Dashboard can show a plan that was never delivered** — see "Architecture & data flow" above for the mechanism. Usually harmless, since a skipped-as-redundant plan (rule 4) is byte-identical to what's actually running. But rule 3 (live-window protection) is a real gap: the skipped plan reflects a live, time-clamped recompute with different windows than the earlier pre-window plan that's actually delivered and running — so the dashboard would display a schedule that was deliberately never sent, while the vehicle/charger runs something else. Same underlying issue, lower frequency, already existed for plain delivery failures (API error, network issue) before any of this session's work — the publish step has never been conditioned on delivery success.
 
 The fix has the data it needs already: `data/delivered-{profile}-{handler}-{hash}.json` is the ground truth for "what's actually running." Options sketched but not decided:
 1. Dashboard reads the delivered record alongside the plan, shows a "not yet delivered" / "showing last delivered plan instead" indicator when they diverge.
