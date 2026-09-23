@@ -400,6 +400,15 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 
 ## Future work
 
+**Dashboard can show a plan that was never delivered** — `charging_planner.py` writes `plan-{profile}.json` unconditionally on every run, and the GHA workflow's "Publish to data/" step copies it regardless of what `delivery/deliver.py` decided. Usually harmless, since a skipped-as-redundant plan (rule 4) is byte-identical to what's actually running. But rule 3 (live-window protection) is a real gap: the skipped plan reflects a live, time-clamped recompute with different windows than the earlier pre-window plan that's actually delivered and running — so the dashboard would display a schedule that was deliberately never sent, while the vehicle/charger runs something else. Same underlying issue, lower frequency, already existed for plain delivery failures (API error, network issue) before any of this session's work — the publish step has never been conditioned on delivery success.
+
+The fix has the data it needs already: `data/delivered-{profile}-{handler}-{hash}.json` is the ground truth for "what's actually running." Options sketched but not decided:
+1. Dashboard reads the delivered record alongside the plan, shows a "not yet delivered" / "showing last delivered plan instead" indicator when they diverge.
+2. Dashboard displays the delivered record's windows directly, falling back to the freshly-computed plan only when no delivered record exists yet.
+3. Simplest: a "planned" vs "delivered" badge, without changing what's rendered — avoids silent misleading without being maximally informative.
+
+Needs proper design before touching `index.html` — not done as part of the redundant-delivery-protection work itself.
+
 **go-e** — cloud API (`{serial}.api.v3.go-e.io`) works from GHA. Scheduler keys exist in v2 API (`sch_week`, `sch_satur`, `sch_sund`) but the time range object format is undocumented and not found in community reverse-engineering. Blocked until payload structure is discovered from a real charger with a schedule set via the app.
 
 **Wallbox** — weekly recurring schedule model (days bitmask), not per-night. Low priority.
