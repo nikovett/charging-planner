@@ -30,7 +30,7 @@ jobs:
           ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
         run: python charging_planner.py --output-dir .
 
-      - name: Deliver to charger(s)
+      - name: Deliver to target(s)
         if: steps.plan.outputs.prices_available == 'true'
         env:
           # Charge Amps credentials (used by deliver_chargeamps.py)
