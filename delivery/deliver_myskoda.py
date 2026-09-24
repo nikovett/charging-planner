@@ -571,7 +571,6 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
         log.info("MySkoda: skipping charge mode update (set_charge_mode: false)")
 
     log.info(
-        "Delivery succeeded: profile='%s'  handler='myskoda'  vin='%s'  windows=%s",
-        plan.get("profile"), vin,
-        ", ".join(f"{s}-{e}" for s, e in windows_hhmm),
+        "Delivered: vin=%s windows=%s",
+        vin, ", ".join(f"{s}-{e}" for s, e in windows_hhmm),
     )
