@@ -2956,15 +2956,27 @@ def _resolve_planning_horizon(
                                 23, 0, tzinfo=timezone.utc) + timedelta(days=1)
     any_end_cap = min(last_price_utc, plan_horizon_utc)
 
-    def _log_target(target_date: date, start_str: str, end_str: str, req: Optional[int]) -> None:
-        """Log the single winning candidate — the decision, not the candidates checked."""
-        weekday = _DAY_NAMES[target_date.weekday()]
+    _DAY_ABBR_REV = {v: k for k, v in _DAY_ABBR.items()}
+
+    def _log_target(ws: datetime, we: datetime, start_str: str, end_str: str, req: Optional[int]) -> None:
+        """Log the single winning candidate — the decision, not the candidates
+        checked. Day-range notation ('thu-fri') mirrors config.yaml's own
+        schedule: day keys, computed from the window's actual resolved
+        bounds rather than the abstract candidate date, since those can
+        differ (an overnight window "for" Friday starts Thursday evening) —
+        this keeps the logged date matching plan_date (ws's date), not the
+        target weekday alone, which showed a different date than the plan
+        JSON's own "date" field before this."""
+        start_day = _DAY_ABBR_REV[_DAY_NAMES[ws.astimezone(tz).weekday()]]
+        end_day = _DAY_ABBR_REV[_DAY_NAMES[we.astimezone(tz).weekday()]]
+        day_range = start_day if start_day == end_day else f"{start_day}-{end_day}"
+        plan_date_str = ws.astimezone(tz).date().isoformat()
         if req is not None:
-            log.info("Profile '%s': targeting %s's window (%s) — %s–%s local, %d min",
-                     cfg.name, weekday, target_date.isoformat(), start_str, end_str, req)
+            log.info("Profile '%s': targeting %s window (%s) — %s–%s local, %d min",
+                     cfg.name, day_range, plan_date_str, start_str, end_str, req)
         else:
-            log.info("Profile '%s': targeting %s's window (%s) — %s–%s local",
-                     cfg.name, weekday, target_date.isoformat(), start_str, end_str)
+            log.info("Profile '%s': targeting %s window (%s) — %s–%s local",
+                     cfg.name, day_range, plan_date_str, start_str, end_str)
 
     has_schedule_or_any = (bool(cfg.schedule) or cfg.preferred_window_any
                            or cfg.window_start_any or cfg.window_end_any)
@@ -2980,21 +2992,21 @@ def _resolve_planning_horizon(
             )
             if result is not None:
                 ws, we, ss, es, r = result
-                _log_target(yesterday, ss, es, r)
+                _log_target(ws, we, ss, es, r)
                 return ws, we, ss, es, ws.astimezone(tz).date(), r
         result = _classify_window_instance(
             start_str, end_str, req, today, now_utc, any_end_cap, cfg, tz,
         )
         if result is not None:
             ws, we, ss, es, r = result
-            _log_target(today, ss, es, r)
+            _log_target(ws, we, ss, es, r)
             return ws, we, ss, es, ws.astimezone(tz).date(), r
         result = _classify_window_instance(
             start_str, end_str, req, tomorrow, now_utc, any_end_cap, cfg, tz,
         )
         assert result is not None, "tomorrow's window instance can never classify as elapsed"
         ws, we, ss, es, r = result
-        _log_target(tomorrow, ss, es, r)
+        _log_target(ws, we, ss, es, r)
         return ws, we, ss, es, ws.astimezone(tz).date(), r
 
     # Candidate 1: today's own schedule entry — what yesterday's run would
@@ -3006,7 +3018,7 @@ def _resolve_planning_horizon(
         )
         if result is not None:
             ws, we, ss, es, req = result
-            _log_target(yesterday, ss, es, req)
+            _log_target(ws, we, ss, es, req)
             return ws, we, ss, es, ws.astimezone(tz).date(), req
 
     # Candidate 2: tomorrow's schedule entry — the normal target.
@@ -3018,7 +3030,7 @@ def _resolve_planning_horizon(
     )
     assert result is not None, "tomorrow-anchored candidate can never classify as elapsed"
     ws, we, ss, es, req = result
-    _log_target(tomorrow, ss, es, req)
+    _log_target(ws, we, ss, es, req)
     return ws, we, ss, es, ws.astimezone(tz).date(), req
 
 

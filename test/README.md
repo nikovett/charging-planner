@@ -1,6 +1,6 @@
 # Test Suite
 
-474 tests across five files. Run from the repo root:
+475 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 327 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 328 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 31 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (327 tests)
+## test_charging_planner.py (328 tests)
 
 ### TestConfigValidation (18)
 Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, `preferred_window`, and `max_windows` (null/positive-int accepted; zero, negative, float, bool, and string rejected — `bool` is a subclass of `int` in Python, so it needs an explicit check).
@@ -52,8 +52,8 @@ Detects overnight windows (end ≤ start) vs same-day windows.
 ### TestResolveWindowUtc (4)
 Resolves overnight and same-day HH:MM windows to UTC start/end datetimes for a specific anchor date. Purely mechanical — no dependency on current time (see TestResolvePlanningHorizon for the "which date" decision).
 
-### TestResolvePlanningHorizon (18)
-The full scenario matrix for `_resolve_planning_horizon`: bare (no schedule/`any`-flag) profiles check today's own occurrence directly, then tomorrow as fallback. Schedule/`any`-flag profiles index by day-of-use (a schedule entry describes the session that gets the car ready for *that* day — for an overnight shape, its window actually starts the evening before), checking today's own entry (overnight-tail only) then tomorrow's entry (the normal, day-ahead target). Covers a real production regression: on a Sunday with a weekday-overnight/weekend-`any` schedule, using Sunday's own trivially-"live" `any`/`any` entry meant Monday's fixed window was never considered — `test_schedule_regression_weekend_any_does_not_mask_weekday_overnight` reproduces this exactly. Also covers the original delayed-run fix (a run firing after a window's start used to skip straight to the next occurrence instead of catching the still-open remainder).
+### TestResolvePlanningHorizon (19)
+The full scenario matrix for `_resolve_planning_horizon`: bare (no schedule/`any`-flag) profiles check today's own occurrence directly, then tomorrow as fallback. Schedule/`any`-flag profiles index by day-of-use (a schedule entry describes the session that gets the car ready for *that* day — for an overnight shape, its window actually starts the evening before), checking today's own entry (overnight-tail only) then tomorrow's entry (the normal, day-ahead target). Covers a real production regression: on a Sunday with a weekday-overnight/weekend-`any` schedule, using Sunday's own trivially-"live" `any`/`any` entry meant Monday's fixed window was never considered — `test_schedule_regression_weekend_any_does_not_mask_weekday_overnight` reproduces this exactly. Also covers the original delayed-run fix (a run firing after a window's start used to skip straight to the next occurrence instead of catching the still-open remainder). `test_any_end_bound_by_realistic_price_data_not_plan_horizon` — every other test in this class uses a fixture that deliberately makes `plan_horizon` the binding constraint on `any_end_cap`; this one uses realistic, near-term price coverage instead (matching how day-ahead prices actually publish — roughly today + tomorrow) and confirms the *actual* last real price slot is what binds an `any`/`any` window's end, not the generic horizon ceiling. Mutation-checked: removing the real-price bound from `any_end_cap`'s computation makes it fail as expected.
 
 ### TestClassifyWindowInstance (3)
 Direct tests of `_classify_window_instance`'s "fixed start, `any` end" elapsed behavior (required minutes no longer fitting before `any_end_cap`) — a real, correct capability that isn't reachable through `_resolve_planning_horizon` for this specific shape combination (it's always tomorrow-anchored there, matching the original code's own behavior), so it's covered directly instead.

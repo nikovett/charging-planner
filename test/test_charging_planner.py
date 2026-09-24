@@ -1019,6 +1019,47 @@ class TestResolvePlanningHorizon(unittest.TestCase):
         self.assertEqual(we, datetime(2026, 3, 18, 23, 0, tzinfo=UTC))
         self.assertEqual(es, "any")
 
+    def test_any_end_bound_by_realistic_price_data_not_plan_horizon(self):
+        # Regression: every other test in this class uses
+        # _far_future_prices() specifically so plan_horizon is always the
+        # binding constraint on any_end_cap — none of them verify the
+        # actually-common case, where realistic (near-term) price data is
+        # the *more* restrictive bound. Real day-ahead prices only ever
+        # cover roughly today + tomorrow (published once daily) — an
+        # any/any window must never be planned as if cheap prices existed
+        # further out than they actually do.
+        #
+        # Friday run: real prices exist for Friday (published Thursday) and
+        # Saturday (published Friday, "day-ahead" for tomorrow) — nothing
+        # for Sunday yet, since that only publishes on Saturday itself.
+        cfg = make_config(schedule=[
+            {"days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+             "preferred_window_start": "21:00", "preferred_window_end": "06:30",
+             "required_hours": 3.5},
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "any", "preferred_window_end": "any",
+             "required_hours": 4.5},
+        ])
+        realistic_prices = [
+            make_slot(datetime(2026, 9, 24, 21, 0, tzinfo=UTC)   # Friday 00:00 EEST
+                     + timedelta(minutes=15 * i))
+            for i in range(191)   # Fri 00:00 EEST -> Sat 23:45 EEST, nothing beyond
+        ]
+        last_real_price_end = max(s.end for s in realistic_prices)
+
+        now = datetime(2026, 9, 25, 13, 0, tzinfo=UTC)   # Friday 16:00 EEST
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, realistic_prices,
+        )
+        self.assertEqual(ss, "any")
+        self.assertEqual(we, last_real_price_end,
+                         "any-any window end must be bound by the actual last "
+                         "real price slot, not extended into Sunday just "
+                         "because a generic plan_horizon ceiling allows it")
+        self.assertEqual(we.astimezone(FI_TZ).date(), date(2026, 9, 26),
+                         "must stop at Saturday night local — never reach Sunday, "
+                         "which has no real published prices yet from Friday's run")
+
     # --- schedule spanning a weekday/weekend-shape boundary ---
     #
     # A schedule entry is indexed by the day the charging is *for*: the
