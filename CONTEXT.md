@@ -384,6 +384,8 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 See `test/README.md` for the full per-class breakdown.
 
+**The suite must pass with no network access.** Any test that reaches `cmd_plan` must mock every price source it could fall through to — including `fetch_forecast_prices` and `fetch_forecast_display_slots`, not just `fetch_entsoe_prices`. `test_cmd_plan_exits_when_prices_missing` violated this for months: written before forecast supplementation existed, it mocked only ENTSO-E, so the planner fell through to the live forecast API, got real data, and never exited — a failure that looked date-dependent but was network-dependent. Verify by running the suite with outbound sockets blocked (patch `socket.socket.connect` / `socket.create_connection` to raise) whenever a new fallback source is added.
+
 **Cyclomatic complexity** (`radon cc charging_planner.py`): average B (7.8). Functions at C or above:
 
 | Grade | Score | Function |
@@ -503,9 +505,14 @@ Needs proper design before touching `index.html` — not done as part of the red
 
 Append-only. One entry per release. For full context see the session log below.
 
-## v2.0.0 — DRAFT (not yet released)
-- **New:** `deliver_myskoda.py` — MyŠkoda Public API delivery handler. Updates preferred charging time slot 4 on the vehicle's "Koti" (Home) profile and sets charge mode to `PREFERRED_CHARGING_TIMES`. Requires `SKODA_VIN` and `SKODA_API_KEY` secrets. Compatible only with `continuous_only: true` profiles (single window). Tested against real vehicle — first delivery confirmed correct in MyŠkoda app. Vehicle was away from home at time of delivery; at-home charging behaviour to be observed.
-- **Workflow:** `schedule.yml` updated to expose `SKODA_VIN` and `SKODA_API_KEY` to the delivery step.
+## v2.0.0 — 2026-09-24
+- **New:** Redundant-delivery protection (`delivery/deliver.py`). Before each delivery, compares the plan against the last successfully delivered one for the same `(profile, handler, charge_point_id)` and skips when redelivery would be redundant or unsafe: identical windows skipped; a pre-window delivery protected from a later live-window run; forecast-based deliveries always superseded by a real-price or changed plan. Skips happen before the handler loads — no API calls. Records persist under `data/` with hashed charge-point IDs.
+- **New:** MyŠkoda delivery handler (`delivery/deliver_myskoda.py`). Maps plan windows to vehicle slots 1–4, disables unused slots, sets `PREFERRED_CHARGING_TIMES`. Detects the slot driving an active `PREFERRED_CHARGING_TIMES` session and routes around it; skips delivery when detection is inconclusive. Requires `max_windows` between 1 and 4. Tested against a real vehicle.
+- **Breaking:** `continuous_only` removed, replaced by `max_windows` (`null` = unlimited, `1` = single block, `N` = at most N blocks via a new bounded DP). No backward-compatible alias.
+- **Bug fix:** A run firing after a charging window had started skipped straight to the next occurrence, losing the rest of the current window. Now targets the still-open window and plans from now onward; elapsed slots are never selected and no longer count against price coverage.
+- **Plan JSON:** New fields `max_windows`, `generated_at`, `configured_window_start_utc`, `schedule_uses_forecast`.
+- **Dashboard:** "charging slots" badge shows `continuous` / `optimal` / `max N blocks`; "charger delivery" renamed "delivery".
+- **Workflow:** `schedule.yml` exposes `SKODA_VIN` and `SKODA_API_KEY` to the delivery step.
 
 ## v1.7.6 — 2026-08-24
 - **Bug fix:** Charge Amps delivery failed on Sunday overnight plans where the last window ended on Monday — `to` exceeded the 604800s weekly limit. Periods crossing midnight wrap to `from=0`; periods entirely on Monday shift by -604800. Single PUT, original anchor unchanged.
@@ -965,3 +972,7 @@ Triggered on 2026-04-13 by the `topup` profile: avg ceiling 9.85 c€/kWh, slot 
 ### Session 34 — 2026-09-14
 
 **`deliver_myskoda.py` improvements**: (1) Charging state awareness — handler reads `charging.status.state` and `charging.settings.preferredChargeMode` from the GET response and branches: not charging → full delivery; charging in MANUAL/TIMER/TIMER_CHARGING_WITH_CLIMATISATION → update slot 4 + disable slots 1–3 but skip mode change; charging in PREFERRED_CHARGING_TIMES → update slot 4 but preserve slots 1–3 and skip mode change (one of the slots is driving the active session); unknown mode while charging → skip entirely. (2) `set_charge_mode` changed from bool to mode string or `false` — accepts any valid MyŠkoda charge mode, passed through as-is, default `PREFERRED_CHARGING_TIMES`. (3) `profile_name` now optional when vehicle has exactly one charging profile — auto-selected with log message. (4) Confirmed: midnight-crossing window (21:00–01:00) works correctly in MyŠkoda app. Confirmed: when vehicle not at saved location, API returns 202 but changes do not stick; when at home, both preferred time window and charge mode set correctly. `max_windows` generalisation added to Future work section.
+
+### Session 35 — 2026-09-24
+
+v2.0.0 released. Replaced `continuous_only` with `max_windows` (new bounded DP `_select_with_max_windows`); generalized the MyŠkoda handler from slot-4-only to slots 1–4 with time-window-based active-slot detection; added redundant-delivery protection to `deliver.py` after unreliable GHA cron timing (up to 11h late) prompted a second, manual trigger. Fixed the delayed-run bug with a new `_resolve_planning_horizon`, then fixed a regression it introduced in production (2026-09-20: a weekend `any`/`any` entry masked Monday's fixed window because schedules must be indexed by day-of-use, not by the date a window starts). Found and fixed before release: `write_config_json` writing an env-supplied ENTSO-E key into `data/config.json`; plaintext VINs/charger serials in delivered-record filenames (now hashed; old names remain in git history); the DP returning an empty plan instead of a partial one when the exact slot count was unreachable; skip logs not naming the handler/charger; and `test_cmd_plan_exits_when_prices_missing`, long mislabeled "date-dependent", which was actually hitting the live forecast API — the suite now passes fully offline. Added Guiding principles to the top of this file, restructured the Reference section around data flow with systematic "why" coverage, and rewrote README around the planner/delivery separation. All four skip rules and the live-window planning path were verified against real production runs. 428 tests (was 296), 3 skipped. Next: `config.yaml` simplification (see Future work).
