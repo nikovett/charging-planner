@@ -47,6 +47,8 @@ from charging_planner import (
     _classify_window_instance,
     _select_spillover,
     _select_with_max_windows,
+    _parse_day_key,
+    _parse_window_string,
     _gha_fmt_hours,
     _gha_summary_header,
     _gha_summary_profile,
@@ -57,6 +59,7 @@ from charging_planner import (
     merge_continuous_slots,
     parse_configs,
     print_plan_summary,
+    translate_config,
     select_charging_windows,
     validate_plan_config,
     write_config_json,
@@ -489,6 +492,234 @@ class TestParseConfigs(unittest.TestCase):
                     ],
                 },
             })
+
+
+# ===========================================================================
+# Config format translation
+# ===========================================================================
+
+class TestParseDayKey(unittest.TestCase):
+
+    def test_single_day(self):
+        self.assertEqual(_parse_day_key("fri"), ["friday"])
+
+    def test_forward_range(self):
+        self.assertEqual(_parse_day_key("mon-fri"),
+                         ["monday", "tuesday", "wednesday", "thursday", "friday"])
+
+    def test_two_day_range(self):
+        self.assertEqual(_parse_day_key("sat-sun"), ["saturday", "sunday"])
+
+    def test_comma_list(self):
+        self.assertEqual(_parse_day_key("mon,wed,fri"), ["monday", "wednesday", "friday"])
+
+    def test_mixed_range_and_list(self):
+        self.assertEqual(_parse_day_key("mon-wed,fri"),
+                         ["monday", "tuesday", "wednesday", "friday"])
+
+    def test_case_insensitive(self):
+        self.assertEqual(_parse_day_key("MON-FRI"),
+                         ["monday", "tuesday", "wednesday", "thursday", "friday"])
+
+    def test_backward_range_raises(self):
+        with self.assertRaises(ConfigError):
+            _parse_day_key("fri-mon")
+
+    def test_unknown_day_raises(self):
+        with self.assertRaises(ConfigError):
+            _parse_day_key("xyz")
+
+    def test_unknown_day_in_range_raises(self):
+        with self.assertRaises(ConfigError):
+            _parse_day_key("mon-xyz")
+
+
+class TestParseWindowString(unittest.TestCase):
+
+    def test_any(self):
+        self.assertEqual(_parse_window_string("any", "k"), ("any", "any"))
+
+    def test_any_case_insensitive(self):
+        self.assertEqual(_parse_window_string("ANY", "k"), ("any", "any"))
+
+    def test_hh_mm_range(self):
+        self.assertEqual(_parse_window_string("21:00-06:30", "k"), ("21:00", "06:30"))
+
+    def test_same_day_range(self):
+        self.assertEqual(_parse_window_string("09:00-17:00", "k"), ("09:00", "17:00"))
+
+    def test_missing_dash_raises(self):
+        with self.assertRaises(ConfigError):
+            _parse_window_string("21:00", "k")
+
+    def test_non_string_raises(self):
+        with self.assertRaises(ConfigError):
+            _parse_window_string(2100, "k")
+
+
+class TestTranslateConfig(unittest.TestCase):
+
+    def _raw(self, **profile_overrides):
+        profile = {
+            "name": "overnight",
+            "schedule": {
+                "mon-fri": {"window": "21:00-06:30", "required": 4},
+                "sat-sun": {"window": "any", "required": 4},
+            },
+        }
+        profile.update(profile_overrides)
+        return {"area": "FI", "timezone": "Europe/Helsinki", "profiles": [profile]}
+
+    def test_no_profiles_key_returns_input_unchanged(self):
+        # Nothing to translate — let existing validation report what's missing.
+        raw = {"entsoe": {"area": "FI"}}
+        self.assertEqual(translate_config(raw), raw)
+
+    def test_old_charging_key_rejected(self):
+        with self.assertRaises(ConfigError):
+            translate_config({"charging": [{"name": "x"}]})
+
+    def test_entsoe_block_built_from_top_level(self):
+        cfg = translate_config(self._raw())
+        self.assertEqual(cfg["entsoe"]["area"], "FI")
+        self.assertEqual(cfg["entsoe"]["timezone"], "Europe/Helsinki")
+        self.assertEqual(cfg["entsoe"]["api_key"], "")
+
+    def test_schedule_expanded_with_full_day_names(self):
+        cfg = translate_config(self._raw())
+        sched = cfg["charging"][0]["schedule"]
+        self.assertEqual(sched[0]["days"],
+                         ["monday", "tuesday", "wednesday", "thursday", "friday"])
+        self.assertEqual(sched[0]["preferred_window_start"], "21:00")
+        self.assertEqual(sched[0]["preferred_window_end"], "06:30")
+        self.assertEqual(sched[0]["required_hours"], 4)
+        self.assertEqual(sched[1]["days"], ["saturday", "sunday"])
+        self.assertEqual(sched[1]["preferred_window_start"], "any")
+
+    def test_missing_day_coverage_rejected(self):
+        raw = self._raw(schedule={"mon-thu": {"window": "any", "required": 2}})
+        with self.assertRaises(ConfigError):
+            translate_config(raw)
+
+    def test_schedule_entry_missing_required_rejected(self):
+        raw = self._raw(schedule={"mon-sun": {"window": "any"}})
+        with self.assertRaises(ConfigError):
+            translate_config(raw)
+
+    def test_optional_profile_settings_pass_through(self):
+        cfg = translate_config(self._raw(max_windows=4, min_slot_minutes=45,
+                                         min_gap_minutes=0))
+        p = cfg["charging"][0]
+        self.assertEqual(p["max_windows"], 4)
+        self.assertEqual(p["min_slot_minutes"], 45)
+        self.assertEqual(p["min_gap_minutes"], 0)
+
+    def test_optional_settings_omitted_when_not_configured(self):
+        cfg = translate_config(self._raw())
+        p = cfg["charging"][0]
+        self.assertNotIn("max_windows", p)
+        self.assertNotIn("min_slot_minutes", p)
+        self.assertNotIn("min_gap_minutes", p)
+
+    def test_price_limit_avg(self):
+        cfg = translate_config(self._raw(price_limit="avg"))
+        self.assertEqual(cfg["charging"][0]["max_price_cents_kwh"], "avg")
+
+    def test_price_limit_none_string(self):
+        # YAML bare `none` parses as the string "none", not Python None.
+        cfg = translate_config(self._raw(price_limit="none"))
+        self.assertIsNone(cfg["charging"][0]["max_price_cents_kwh"])
+
+    def test_price_limit_number(self):
+        cfg = translate_config(self._raw(price_limit=8.5))
+        self.assertEqual(cfg["charging"][0]["max_price_cents_kwh"], 8.5)
+
+    def test_price_limit_omitted_when_not_configured(self):
+        cfg = translate_config(self._raw())
+        self.assertNotIn("max_price_cents_kwh", cfg["charging"][0])
+
+    def test_no_delivery_key_when_omitted(self):
+        cfg = translate_config(self._raw())
+        self.assertNotIn("deliveries", cfg["charging"][0])
+
+    def test_myskoda_vin_alias(self):
+        cfg = translate_config(self._raw(delivery=[{"myskoda": {"vin": "SKODA_VIN"}}]))
+        d = cfg["charging"][0]["deliveries"][0]
+        self.assertEqual(d["handler"], "myskoda")
+        self.assertEqual(d["charge_point_id"], "SKODA_VIN")
+        self.assertNotIn("vin", d)
+
+    def test_chargeamps_aliases(self):
+        cfg = translate_config(self._raw(delivery=[{"chargeamps": {
+            "charger": "CHARGER_ID_1", "connector": 1, "max_amps": 16, "restore_mode": True,
+        }}]))
+        d = cfg["charging"][0]["deliveries"][0]
+        self.assertEqual(d["handler"], "chargeamps")
+        self.assertEqual(d["charge_point_id"], "CHARGER_ID_1")
+        self.assertEqual(d["connector_id"], 1)
+        self.assertEqual(d["max_charging_rate"], 16)
+        self.assertEqual(d["restore_mode"], True)
+
+    def test_easee_aliases(self):
+        cfg = translate_config(self._raw(delivery=[{"easee": {
+            "charger": "EASEE_ID", "max_amps": 16,
+        }}]))
+        d = cfg["charging"][0]["deliveries"][0]
+        self.assertEqual(d["handler"], "easee")
+        self.assertEqual(d["charge_point_id"], "EASEE_ID")
+        self.assertEqual(d["max_charging_rate"], 16)
+
+    def test_unaliased_handler_keys_pass_through(self):
+        # A handler with no alias table entry at all (a future handler not
+        # yet added to _DELIVERY_KEY_ALIASES) must still work, using
+        # internal key names directly.
+        cfg = translate_config(self._raw(delivery=[{"futurehandler": {"charge_point_id": "FUTURE_ID"}}]))
+        d = cfg["charging"][0]["deliveries"][0]
+        self.assertEqual(d["handler"], "futurehandler")
+        self.assertEqual(d["charge_point_id"], "FUTURE_ID")
+
+    def test_multiple_delivery_entries(self):
+        cfg = translate_config(self._raw(delivery=[
+            {"myskoda": {"vin": "SKODA_VIN"}},
+            {"chargeamps": {"charger": "CHARGER_ID_1"}},
+        ]))
+        handlers = [d["handler"] for d in cfg["charging"][0]["deliveries"]]
+        self.assertEqual(handlers, ["myskoda", "chargeamps"])
+
+    def test_malformed_delivery_entry_rejected(self):
+        raw = self._raw(delivery=[{"handler": "myskoda", "vin": "X"}])  # not single-key
+        with self.assertRaises(ConfigError):
+            translate_config(raw)
+
+    def test_load_config_translates_new_format_end_to_end(self):
+        import tempfile, yaml as _yaml
+        import charging_planner as cp
+        raw = self._raw(delivery=[{"myskoda": {"vin": "SKODA_VIN"}}])
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            _yaml.safe_dump(raw, f)
+            path = f.name
+        try:
+            cfg = cp.load_config(path)
+        finally:
+            os.unlink(path)
+        p = cfg["charging"][0]
+        self.assertEqual(p["schedule"][0]["days"][0], "monday")
+        self.assertEqual(p["deliveries"][0]["charge_point_id"], "SKODA_VIN")
+        # CHARGING_DEFAULTS still merges in — unused since schedule covers
+        # every day, but present, so ch["required_hours"] never KeyErrors.
+        self.assertIn("required_hours", p)
+
+    def test_load_config_rejects_old_format_from_file(self):
+        import tempfile, yaml as _yaml
+        import charging_planner as cp
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            _yaml.safe_dump({"charging": [{"name": "x", "required_hours": 2}]}, f)
+            path = f.name
+        try:
+            with self.assertRaises(ConfigError):
+                cp.load_config(path)
+        finally:
+            os.unlink(path)
 
 
 # ===========================================================================

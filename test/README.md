@@ -1,26 +1,26 @@
 # Test Suite
 
-428 tests across five files. Run from the repo root:
+467 tests across five files. Run from the repo root:
 
 ```
-python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
 ```
 
 Or individually:
 
 ```
-python -m unittest test_charging_planner -v       # 288 tests, 3 skipped
-python -m unittest test_deliver -v                # 27 tests
-python -m unittest test_deliver_chargeamps -v     # 46 tests
-python -m unittest test_deliver_easee -v          # 26 tests
-python -m unittest test_deliver_myskoda -v        # 41 tests
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 327 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 27 tests
+PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
+PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
+PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 41 tests
 ```
 
-The 3 skipped tests require a live ENTSO-E API key in the environment and are marked `@unittest.skip`.
+`PYTHONPATH` is needed because the test modules import the planner and handlers directly by module name. The 3 skipped tests require a live ENTSO-E API key in the environment and are marked `@unittest.skip`.
 
 ---
 
-## test_charging_planner.py (288 tests)
+## test_charging_planner.py (327 tests)
 
 ### TestConfigValidation (18)
 Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, `preferred_window`, and `max_windows` (null/positive-int accepted; zero, negative, float, bool, and string rejected — `bool` is a subclass of `int` in Python, so it needs an explicit check).
@@ -28,8 +28,17 @@ Validation of `config.yaml` fields: required keys, type checks, range checks for
 ### TestAvgPriceCeiling (7)
 `max_price_cents_kwh: avg` — validation accepts it, case-insensitive parsing, `max_price_is_avg` flag set, resolves to market average at plan time, numeric ceilings leave flag false.
 
-### TestParseConfigs (12)
-Profile merging over `CHARGING_DEFAULTS`, schedule parsing, multi-profile configs, weekday/default fallback, `any` window, duplicate day detection.
+### TestParseConfigs (15)
+Profile merging over `CHARGING_DEFAULTS`, schedule parsing, multi-profile configs, weekday/default fallback, `any` window, duplicate day detection. Plus defaults regressions: `min_gap_minutes` defaults to 15; parsing a profile that omits `min_gap_minutes`/`min_slot_minutes` through the un-merged path yields the `CHARGING_DEFAULTS` values (it used to yield 30 for the gap); `PlanParams` field defaults match `CHARGING_DEFAULTS`.
+
+### TestParseDayKey (9)
+`_parse_day_key`, the config-translation day-range parser: single day, forward range, two-day range, comma list, mixed range-and-list, case-insensitivity, and rejection of a backward range, an unknown day, and an unknown day inside a range.
+
+### TestParseWindowString (6)
+`_parse_window_string`: `any` (including case-insensitive), a normal `HH:MM-HH:MM` range, a same-day range, and rejection of a bare `HH:MM` with no dash and a non-string value.
+
+### TestTranslateConfig (21)
+`translate_config`, the user-facing `config.yaml` format (`profiles:`, `schedule: {mon-fri: {...}}`, `delivery:`) to the internal shape `parse_configs` has always consumed. No `profiles:` key returns the input unchanged (nothing to translate); the old `charging:` key is rejected outright, no backward compatibility; the `entsoe:` block is built from top-level `area`/`timezone`; schedule entries expand to full day names with their window and `required_hours`; a schedule missing coverage for any day of the week is rejected, as is an entry missing `required`; optional profile settings (`max_windows`, `min_slot_minutes`, `min_gap_minutes`) pass through when set and are omitted entirely when not (letting `CHARGING_DEFAULTS` supply them downstream); `price_limit`'s three forms (`none` — the literal YAML string, not Python `None`, `avg`, a number) map correctly to `max_price_cents_kwh`; `delivery:` entries translate through the per-handler key-alias table (MyŠkoda's `vin`, Charge Amps' and Easee's shared `charger`/`connector`/`max_amps`) while a handler with genuinely no alias table entry (a future handler not yet added) passes its keys through unchanged; multiple delivery entries and a malformed (not single-key) entry are both handled correctly; two end-to-end tests write a real temp YAML file and load it through `load_config` itself — one confirming the full translation happens correctly, one confirming the old format is rejected at that entry point too, not just when calling `translate_config` directly.
 
 ### TestResolveScheduleWindow (5)
 Selects the correct schedule entry for the current day, falls back to default, rejects duplicate days and invalid day names.
@@ -65,6 +74,8 @@ Spillover from outside the preferred window: not triggered when window is satisf
 Direct tests for `_select_with_min_block` (the `max_windows: null`, unbounded path): no blocks shorter than minimum, isolated cheap slot replaced, total minutes correct after disqualification, latest slot preferred on equal price, real price data, gap constraint respected, and window-coverage/`cmd_plan` exit-code checks that share this class — including `now_utc` clamping the coverage-check denominator and forecast-supplement filter to a live window's still-useful portion (a live window's already-elapsed time must never register as "missing" coverage, and a forecast supplement must never backfill it). Plus a real production regression: when the full requested slot count can't be reached, returns the largest achievable partial selection instead of nothing — previously an infeasible exact-match meant an entirely empty plan even when perfectly good, cheaper time was available; the partial result is confirmed to still respect `min_slot_minutes` on each block, not just grab whatever's cheapest.
 
 **`test_isolated_cheap_slot_with_price_ceiling`** — regression for the 2026-04-13 production bug: a cheap slot isolated by two above-ceiling neighbours must not be selected when it cannot form a valid block.
+
+**`test_cmd_plan_exits_when_prices_missing`** — mocks both forecast sources as unavailable, not just ENTSO-E. Without that it fell through to the live forecast API over the network, built a valid plan, and failed — long misdiagnosed as date-dependent. The whole suite now passes with the network blocked.
 
 ### TestSelectWithMaxWindows (11)
 Direct tests for `_select_with_max_windows` (the `max_windows: N ≥ 2` path): uses at most N blocks, picks the cheapest N clusters over more expensive ones, `max_windows: 1` matches `_best_continuous_window` exactly, `max_windows: null` matches the unbounded path exactly, a generously high `max_windows` also matches the unbounded path, `min_gap_minutes`/`min_slot_minutes` enforced identically to the unbounded case, infeasible window budgets return `[]` cleanly, latest-slot tiebreak on equal price. Same graceful-degradation fix as `TestSelectWithMinBlock` above, verified for the bounded-window-count DP specifically.

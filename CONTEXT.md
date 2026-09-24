@@ -381,8 +381,8 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 ## Test suite
 
-431 tests, 3 skipped:
-- `test/test_charging_planner.py` (291) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
+467 tests, 3 skipped:
+- `test/test_charging_planner.py` (327) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
 - `test/test_deliver.py` (27) — redundant-delivery protection: full decision matrix, persisted-record read/write, `dispatch()`-level integration
 - `test/test_deliver_chargeamps.py` (46) — login/cache, connector mode, period fields, period timing
 - `test/test_deliver_easee.py` (26) — day-of-week mapping, weekly/basic plan payloads, deliver routing
@@ -414,6 +414,51 @@ The E-grade functions are large orchestrators (`cmd_plan`, `_plan_one_profile`, 
 ---
 
 ## Configuration reference
+
+`config.yaml` is written in a compact, user-facing format. `translate_config` converts it into the internal shape `parse_configs` (and everything downstream — the DP, `_resolve_planning_horizon`, `deliver.py`'s `_extract_deliveries`, the dashboard via `config.json`) has always consumed, unchanged. See "Config format translation" below for why it's built this way.
+
+```yaml
+area: FI
+timezone: Europe/Helsinki
+
+profiles:
+  - name: topup
+    schedule:
+      mon-fri: { window: 21:00-06:30, required: 1.5 }
+      sat-sun: { window: any,         required: 4.5 }
+    delivery:
+      - chargeamps: { charger: CHARGER_ID_1, connector: 1, max_amps: 16.0, restore_mode: true }
+
+  - name: overnight
+    schedule:
+      mon-sun: { window: 21:00-06:30, required: 4 }
+    max_windows: 4              # optional — see Slot selection for what this bounds
+    delivery:
+      - myskoda: { vin: SKODA_VIN }
+```
+
+`ENTSOE_API_KEY` injects the secret at runtime — never put a real key in the file. Every profile setting other than `schedule:` is optional; see `README.md`'s "Charging profile reference" for the full list of what's optional and its default, and `delivery/README.md` for what's optional per handler.
+
+### Config format translation
+
+Two format layers, kept deliberately separate:
+
+- **The file you write** (`profiles:`, `schedule: { mon-fri: {...} }`, `delivery:`) — compact, day-range keys, one-line handler blocks. This is what changed in the config-simplification work; nothing below this line needs to know it exists.
+- **What `parse_configs` has always consumed** (`charging:`, `schedule: [{days: [...], ...}]`, `deliveries:`) — unchanged since before that work started.
+
+`translate_config`, called from `load_config` right after `yaml.safe_load`, converts one into the other:
+
+- **Day-range keys** (`mon-fri`, `sat,sun`, `mon-wed,fri`) expand to full day-name lists via `_parse_day_key`. Ranges run forward `mon→sun` only — `fri-mon` is rejected, not silently wrapped, since a wrapping range is ambiguous about which days it actually means.
+- **`window: "21:00-06:30"` or `"any"`** splits into the internal `preferred_window_start`/`preferred_window_end` pair via `_parse_window_string`.
+- **`price_limit: none | avg | <number>`** maps to `max_price_cents_kwh: null | "avg" | <number>` via `_translate_price_limit`. `"none"` (the string) is handled explicitly — YAML's bare `none` parses as the string `"none"`, not Python `None`; only `null`/`~`/an empty value do.
+- **`delivery:` entries** (`{handler_name: {params...}}`) become `{"handler": ..., "charge_point_id": ..., ...}` via `_translate_delivery_entry`, with handler-specific key renames from `_DELIVERY_KEY_ALIASES`: `vin`→`charge_point_id` for MyŠkoda; `charger`→`charge_point_id`, `connector`→`connector_id`, `max_amps`→`max_charging_rate` for Charge Amps and Easee (both share the same alias shape since both are charger-based, unlike MyŠkoda's vehicle-based `vin`). A handler with no entry in that table — any future handler — passes its keys through unchanged, so adding a handler never *requires* touching the translator; adding it to the table is optional, for friendlier key names only.
+- **Every schedule entry must state `required`** — there is no profile-level fallback in the new format (the old top-level `required_hours`/`preferred_window_start`/`preferred_window_end` still get merged in from `CHARGING_DEFAULTS` after translation, but only so `ch["required_hours"]` never `KeyError`s; they're never actually read once every schedule entry has its own value).
+- **Every one of the 7 days must be covered, by exactly one entry** — checked explicitly in the translator, not left to `_validate_charging_profile`'s existing same-schedule duplicate-day check (which catches a day appearing in *two* entries, not a day appearing in *none*). A day silently falling through to an unconfigured default would violate Guiding Principle 1.
+- **The old `charging:` key is rejected outright**, not accepted as a fallback — deliberately no backward compatibility. A config author gets one clear error pointing at the new format, not a plan silently built from whatever the old key happened to still mean.
+
+**What this translator is not, on purpose.** It does not import anything from `delivery/`, and it does not know a handler's window-count limit (MyŠkoda's 4-slot cap, say) to fold into `max_windows` automatically — that was considered and rejected. `max_windows` stays a plain value the user sets, exactly as before: the DP needs the real bound *before* it runs to produce a genuinely optimal plan for that bound, not a plan built with a different bound and then found to not fit — so the constraint has to be known upstream, and "upstream" here means "the user states it," not "the loader goes and asks a handler module." A component that crossed into `delivery/` to answer that question would be new coupling this project has deliberately avoided everywhere else (see "Architecture & data flow"), for a benefit — auto-derived defaults — that isn't worth introducing it for.
+
+### Internal shape (what `translate_config` produces, and what tests build directly)
 
 ```yaml
 entsoe:
@@ -472,22 +517,22 @@ Seven color pairs considered as alternative themes for the dashboard. Current th
 
 ## Future work
 
-**`config.yaml` simplification** — flagged as the next priority after v2.0.0 ships.
+**`config.yaml` simplification** — flagged as the next priority after v2.0.0 ships. **Status: the format itself has shipped** (`translate_config`, documented in "Configuration reference" above) — day-range schedule keys, single-string windows, one-line delivery blocks. What follows is the original framing this started from, kept for context, with each point's status noted.
 
-**Guiding question to start from**: what outcome is someone actually trying to achieve, and does the config reflect that — not what the DP needs as inputs. Most of `config.yaml` today is two different kinds of thing, flattened into one list with equal visual weight:
+**Guiding question this started from**: what outcome is someone actually trying to achieve, and does the config reflect that — not what the DP needs as inputs. Most of `config.yaml` was two different kinds of thing, flattened into one list with equal visual weight:
 - **What the user actually wants**: "my car should be ready by 7am on weekdays," "charge whenever it's cheap on weekends, I don't care when," "give it a quick top-up sometimes during the day." These map to a real intention — a departure time, roughly how much charge is needed, whether there's a fixed daily rhythm or not.
 - **How the DP should go about it**: `min_slot_minutes`, `min_gap_minutes`, `max_windows` are optimization knobs — genuinely useful, but implementation concerns (don't let the charger click on/off every 15 minutes, don't split into more pieces than makes sense) exposed as top-level config because that was the direct route from "the DP needs this parameter" to "here's a YAML key," not because a typical user has an independent opinion about them.
 
-**Hypothesis worth testing** (not a conclusion): an outcome-level surface (departure time, target charge, loose/strict about splitting) with sensible defaults, and today's mechanism-level knobs demoted to an advanced/override tier rather than sitting flat alongside everything else. Needs iteration before committing to anything, not a single redesign pass.
+**Still open — not addressed by the shipped translator, which is a syntax change only:** the deeper reframing this question pointed at (an outcome-level surface with `min_slot_minutes`/`min_gap_minutes`/`max_windows` demoted to an advanced/override tier, rather than sitting flat alongside `schedule:` as they still do today) was never pursued. The new format makes the same knobs easier to *write*; it doesn't change which knobs exist or what a user has to understand to use them.
 
-Concrete pain points observed in the current file (`overnight`/`topup` profiles, 62 lines) that any redesign should account for, regardless of which direction it takes:
-1. **Top-level window fields duplicate schedule-entry fields with an unstated relationship.** A profile's top-level `preferred_window_start`/`preferred_window_end`/`required_hours` and a `schedule:` entry's own copies of the same fields can say the same thing (as they currently do for both profiles) or diverge — and nothing in the YAML itself explains what the top-level fields are actually *for* once a schedule exists. (They're not vestigial: `_resolve_planning_horizon`'s bare-vs-schedule branch and the day-ahead weekday lookup both depend on them — see "Window resolution" above. But that's implementation detail a config author shouldn't need to know to safely edit their own file.) Someone editing only the top-level fields, expecting them to be the "default," could get a confusing result if a `schedule:` entry silently doesn't match.
-2. **Delivery entries mix handler-specific fields into one flat, undocumented-in-YAML dict.** `connector_id`/`max_charging_rate`/`restore_mode` (Charge Amps) vs. `api_key_env`/`set_charge_mode` (MyŠkoda) vs. Easee's own set — no schema distinguishing which keys are valid for which handler, no validation catching a typo'd or misplaced key, relies entirely on `README.md`/`delivery/README.md` for a config author to know what's legal.
-3. **Every profile repeats near-identical fields and comments** (`min_gap_minutes`, `max_price_cents_kwh`, etc.) with no shared-defaults mechanism — `CHARGING_DEFAULTS` exists in code but has no YAML-level equivalent an author can lean on to avoid restating the same value and comment per profile.
-4. **Unquoted `HH:MM` values misparse.** YAML reads a bare `21:00` as the integer `1260`, which is why every window time must be quoted today. (An earlier version of this note claimed `any` has the same risk — wrong, verified: a bare `any` parses as the string `"any"`. So does a single-string window like `21:00-06:30`, which is why that format needs no quoting at all.)
-5. **Window defaults disagree between paths.** When a profile omits its window, the merged load path gives `00:00`–`23:59` (`CHARGING_DEFAULTS`), while `_parse_one_profile`'s own fallback gives `23:45` — and on that un-merged path a missing window is treated as `any`. Different meanings, not just different numbers. Resolved by the redesign making the window required rather than defaulted.
+**Considered and explicitly rejected**: having the config loader auto-derive `max_windows` from a delivery handler's own declared limit (e.g. MyŠkoda's 4-slot cap). Rejected because the DP needs the real bound *before* it runs to produce a genuinely optimal plan for that bound — catching an overage after planning would mean a plan built for the wrong bound, not a smaller optimal one — and because it would require the config loader to import from `delivery/`, a coupling this project has deliberately avoided everywhere else. See "Config format translation" above for the full reasoning. `max_windows` stays a plain value the user sets.
 
-Whatever the eventual shape, it should be validated against real config-authoring friction (dig up how many of the above pain points actually caused a real mistake or question, not just theoretical footguns) before committing to a specific schema change.
+Original pain points and their status:
+1. **Top-level window fields duplicated schedule-entry fields with an unstated relationship.** *Resolved* — the new format has no top-level window/`required_hours` at all; `schedule:` is the only source, and every day must be covered explicitly (checked at translation time).
+2. **Delivery entries mixed handler-specific fields into one flat, undocumented-in-YAML dict.** *Partially resolved* — the new format gives each handler its own readable key names (`vin`, `charger`, `connector`, `max_amps`), but there's still no validation catching a typo'd or misplaced key; an unrecognized key still silently passes through unused, same as before.
+3. **Every profile repeated near-identical fields and comments with no shared-defaults mechanism.** *Not resolved* — `min_slot_minutes`/`min_gap_minutes`/`max_windows`/`price_limit` are still stated per-profile when they differ from the default; no YAML-level anchor or shared-block mechanism was introduced. `CHARGING_DEFAULTS` is now a genuine single source of truth *in code* (an unrelated fix, this session), but that doesn't give a config author anything new to lean on in the YAML itself.
+4. **Unquoted `HH:MM` values misparsed.** *Resolved* — a single-string window (`21:00-06:30`) parses as a string with no quoting needed at all; there's no longer a field that accepts a bare, quote-requiring `HH:MM` value.
+5. **Window defaults disagreed between paths depending on how a profile omitted its window.** *Resolved* — the new format requires `required` on every schedule entry and full 7-day coverage, so there's no longer a "profile omitted its window" case to disagree about.
 
 **Dashboard can show a plan that was never delivered** — see "Architecture & data flow" above for the mechanism. Usually harmless, since a skipped-as-redundant plan (rule 4) is byte-identical to what's actually running. But rule 3 (live-window protection) is a real gap: the skipped plan reflects a live, time-clamped recompute with different windows than the earlier pre-window plan that's actually delivered and running — so the dashboard would display a schedule that was deliberately never sent, while the vehicle/charger runs something else. Same underlying issue, lower frequency, already existed for plain delivery failures (API error, network issue) before any of this session's work — the publish step has never been conditioned on delivery success.
 

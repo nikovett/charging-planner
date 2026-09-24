@@ -97,6 +97,186 @@ DEFAULT_CONFIG = {
 
 }
 
+# ===========================================================================
+# Config format translation
+# ===========================================================================
+#
+# config.yaml is written in a compact, user-facing format (profiles:,
+# schedule: { mon-fri: {...} }, single-string window:, delivery:) that is
+# purely syntax — a shorter way to write the exact same schedule model the
+# planner has always had. translate_config() converts it into the internal
+# shape load_config()/parse_configs() already consume (entsoe:/charging:,
+# schedule: [{days: [...], ...}], deliveries:), so nothing downstream of
+# this function — the DP, window resolution, delivery dispatch, the
+# dashboard — needs to know the user-facing format exists at all.
+
+_DAY_ABBR = {
+    "mon": "monday", "tue": "tuesday", "wed": "wednesday", "thu": "thursday",
+    "fri": "friday", "sat": "saturday", "sun": "sunday",
+}
+
+# Per-handler renames from the compact delivery: key names to the internal
+# names each deliver_<handler>.py entry dict already expects. A handler not
+# listed here (or a key not listed for it) passes through unchanged, so
+# adding a new handler never requires touching this translator.
+_DELIVERY_KEY_ALIASES = {
+    "myskoda":    {"vin": "charge_point_id"},
+    "chargeamps": {"charger": "charge_point_id", "connector": "connector_id",
+                   "max_amps": "max_charging_rate"},
+    "easee":      {"charger": "charge_point_id", "max_amps": "max_charging_rate"},
+}
+
+
+def _parse_day_key(key: str) -> list[str]:
+    """Expand a schedule: day-group key ('mon-fri', 'sat,sun', 'fri') to full
+    day names. Ranges run forward mon->sun only; comma-separated groups and
+    single days are both accepted, and can be mixed ('mon-wed,fri')."""
+    days: list[str] = []
+    for token in str(key).lower().split(","):
+        token = token.strip()
+        if "-" in token:
+            a, b = (t.strip() for t in token.split("-", 1))
+            start, end = _DAY_ABBR.get(a), _DAY_ABBR.get(b)
+            if start is None or end is None:
+                raise ConfigError(
+                    f"charging.schedule key '{key}': unknown day in range '{token}' "
+                    f"— use 3-letter abbreviations (mon, tue, wed, thu, fri, sat, sun)."
+                )
+            i, j = _DAY_NAMES.index(start), _DAY_NAMES.index(end)
+            if i > j:
+                raise ConfigError(
+                    f"charging.schedule key '{key}': range '{token}' runs backward — "
+                    f"ranges go forward mon\u2192sun only, e.g. 'fri-mon' is not valid."
+                )
+            days.extend(_DAY_NAMES[i:j + 1])
+        else:
+            day = _DAY_ABBR.get(token)
+            if day is None:
+                raise ConfigError(
+                    f"charging.schedule key '{key}': unknown day '{token}' "
+                    f"— use 3-letter abbreviations (mon, tue, wed, thu, fri, sat, sun)."
+                )
+            days.append(day)
+    return days
+
+
+def _parse_window_string(window, schedule_key: str) -> tuple[str, str]:
+    """Split a single-string window ('21:00-06:30' or 'any') into
+    (start, end). Both sides quote-free in YAML — see config.yaml's own
+    comment on why 'HH:MM-HH:MM' needs no quoting where a bare 'HH:MM' would."""
+    if isinstance(window, str) and window.strip().lower() == "any":
+        return "any", "any"
+    if not isinstance(window, str) or "-" not in window:
+        raise ConfigError(
+            f"charging.schedule['{schedule_key}'].window must be 'any' or "
+            f"'HH:MM-HH:MM', got: {window!r}."
+        )
+    start, _, end = window.partition("-")
+    return start.strip(), end.strip()
+
+
+def _translate_price_limit(value):
+    """price_limit: none | avg | <number> -> max_price_cents_kwh: null | "avg" | <number>.
+
+    'none' is handled explicitly because YAML's bare `none` parses as the
+    string "none", not Python None — only `null`/`~`/an empty value do.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() == "none":
+        return None
+    return value
+
+
+def _translate_delivery_entry(raw_entry: dict) -> dict:
+    """Convert one delivery: list item ({handler_name: {params...}}) into the
+    internal deliveries: entry shape ({"handler": ..., "charge_point_id": ..., ...}).
+    """
+    if not isinstance(raw_entry, dict) or len(raw_entry) != 1:
+        raise ConfigError(
+            f"charging.delivery entries must be a single-key mapping, "
+            f"e.g. '- myskoda: {{ vin: SKODA_VIN }}' — got: {raw_entry!r}."
+        )
+    (handler, params), = raw_entry.items()
+    params = dict(params or {})
+    aliases = _DELIVERY_KEY_ALIASES.get(handler, {})
+    entry = {"handler": handler}
+    for key, value in params.items():
+        entry[aliases.get(key, key)] = value
+    return entry
+
+
+def translate_config(raw: dict) -> dict:
+    """Translate the user-facing config.yaml format into the internal shape
+    load_config() merges over defaults. See the module comment above this
+    function for what this is and isn't responsible for.
+
+    Raises ConfigError (not a partial/best-effort result) if 'charging' is
+    present instead of 'profiles' — the old format is not supported, and a
+    config author should get one clear error, not a silently wrong plan.
+    """
+    if "charging" in raw:
+        raise ConfigError(
+            "config.yaml uses the old 'charging:' format, which is no longer "
+            "supported. Convert to 'profiles:' — see README.md's config example."
+        )
+    if "profiles" not in raw:
+        return raw  # nothing to translate — let existing validation report what's missing
+
+    entsoe = {
+        "api_key": "",
+        "area": raw.get("area", "FI"),
+        "timezone": raw.get("timezone", "UTC"),
+    }
+
+    charging = []
+    for profile in raw["profiles"]:
+        name = profile.get("name", "default")
+        schedule_raw = profile.get("schedule") or {}
+
+        schedule = []
+        covered: set[str] = set()
+        for key, entry in schedule_raw.items():
+            days = _parse_day_key(key)
+            start, end = _parse_window_string(entry.get("window"), key)
+            if "required" not in entry:
+                raise ConfigError(
+                    f"Profile '{name}', schedule['{key}']: 'required' (hours) is "
+                    f"required — every schedule entry must state how much charging it needs."
+                )
+            sched_entry = {
+                "days": days,
+                "preferred_window_start": start,
+                "preferred_window_end": end,
+                "required_hours": entry["required"],
+            }
+            schedule.append(sched_entry)
+            covered.update(days)
+
+        missing = set(_DAY_NAMES) - covered
+        if missing:
+            raise ConfigError(
+                f"Profile '{name}': schedule doesn't cover every day of the week — "
+                f"missing {sorted(missing)}. A day with no entry would silently use "
+                f"an unconfigured default; add an explicit entry for it instead."
+            )
+
+        charging_profile = {"name": name, "schedule": schedule}
+        for key in ("max_windows", "min_slot_minutes", "min_gap_minutes"):
+            if key in profile:
+                charging_profile[key] = profile[key]
+        if "price_limit" in profile:
+            charging_profile["max_price_cents_kwh"] = _translate_price_limit(profile["price_limit"])
+
+        if profile.get("delivery"):
+            charging_profile["deliveries"] = [
+                _translate_delivery_entry(e) for e in profile["delivery"]
+            ]
+
+        charging.append(charging_profile)
+
+    return {"entsoe": entsoe, "charging": charging}
+
 
 def load_config(path: str) -> dict:
     """Load config from a YAML file, merging over defaults.
@@ -112,6 +292,7 @@ def load_config(path: str) -> dict:
             sys.exit(1)
         with open(path) as f:
             user_cfg = yaml.safe_load(f) or {}
+        user_cfg = translate_config(user_cfg)
         # Deep-merge everything except charging, which we handle separately
         charging_override = user_cfg.pop("charging", None)
         _deep_merge(config, user_cfg)

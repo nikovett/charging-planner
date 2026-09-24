@@ -70,92 +70,59 @@ All configuration lives in a single `config.yaml` file. Deliveries are configure
 ### Multiple profiles with deliveries
 
 ```yaml
-entsoe:
-  api_key: ""
-  area: FI
-  timezone: Europe/Helsinki
+area: FI
+timezone: Europe/Helsinki       # ENTSOE_API_KEY supplies the secret at runtime — never commit a key
 
-charging:
+profiles:
   - name: topup
-    required_hours: 1.5
-    max_windows: null
-    min_slot_minutes: 30
-    min_gap_minutes: 15
-    preferred_window_start: "22:00"
-    preferred_window_end: "06:30"
     schedule:
-      - days: [monday, tuesday, wednesday, thursday, friday]
-        preferred_window_start: "22:00"
-        preferred_window_end: "06:30"
-        required_hours: 1.5
-      - days: [saturday, sunday]
-        preferred_window_start: any     # any start + any end = no window constraint
-        preferred_window_end: any
-        required_hours: 4.5
-    deliveries:
-      - handler: chargeamps
-        charge_point_id: CHARGER_ID_1
-        connector_id: 1
-        max_charging_rate: 16.0
-        restore_mode: false
+      mon-fri: { window: 22:00-06:30, required: 1.5 }
+      sat-sun: { window: any,         required: 4.5 }   # any = no window constraint, cheapest slots from run time onward
+    delivery:
+      - chargeamps: { charger: CHARGER_ID_1, connector: 1, max_amps: 16.0 }
 
   - name: overnight
-    required_hours: 4.5
+    schedule:
+      mon-sun: { window: 21:00-06:30, required: 4.5 }
     max_windows: 1
-    preferred_window_start: "21:00"
-    preferred_window_end: "06:30"
-    deliveries:
-      - handler: chargeamps
-        charge_point_id: CHARGER_ID_2
-        connector_id: 1
-        max_charging_rate: 16.0
-        restore_mode: true
+    delivery:
+      - chargeamps: { charger: CHARGER_ID_2, restore_mode: true }
 
 ```
 
-`charge_point_id` accepts either a single env var name or a list — when a list is given, the same plan is delivered to every charger independently. Timezone is set once in the `entsoe:` block and applies to all profiles and delivery handlers.
+`delivery:` entries use each handler's own field names — `charger`/`vin` for the charge point ID, plus whatever else that handler accepts (see "Charging profile reference" for the full per-key list, and `delivery/README.md` for every handler's options and defaults). `charger`/`vin` accepts either a single env var name or a list — when a list is given, the same plan is delivered to every charger independently. Every key other than `schedule:` is optional; a value only needs stating when it differs from its default. `mon-sun` covers all seven days in one entry — day keys accept a single day (`fri`), a forward range (`mon-fri`), a comma list (`sat,sun`), or a mix (`mon-wed,fri`); every day of the week must be covered by exactly one entry. Timezone is set once at the top level and applies to every profile and delivery handler.
 
 ### Charging profile reference
 
 | Key | Default | Description |
 |---|---|---|
-| `entsoe.api_key` | — | **Required.** ENTSO-E security token |
-| `entsoe.area` | `FI` | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
-| `entsoe.timezone` | `null` | IANA timezone name (e.g. `"Europe/Helsinki"`). `null` = auto-detect from system. Applies to all profiles |
-| `charging.name` | `"default"` | Profile name — used in the output filename (`plan-{name}.json`) |
-| `charging.required_hours` | `4` | Hours of charging to schedule |
-| `charging.max_windows` | `null` | `null` = unlimited blocks (cheapest individual slots, DP-optimal, may be split across the window); `1` = one unbroken block; `N` (≥2) = at most N separate blocks, DP-optimal within that budget |
-| `charging.min_slot_minutes` | `30` | Minimum continuous block length. The charger should not run for less than this duration. Must be 15 minutes or more and a multiple of 15 (the price slot resolution) |
-| `charging.min_gap_minutes` | `15` | Minimum gap between charging blocks. Prevents the charger toggling off and straight back on. Must be a multiple of 15. `0` = no gap constraint. Can be set independently of `min_slot_minutes` — e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps |
-| `charging.max_price_cents_kwh` | `null` | Skip slots above this price (c€/kWh). `null` = no ceiling. `"avg"` = dynamic daily market average — ceiling is set to today's average price at plan time |
-| `charging.preferred_window_start` | `00:00` | Start of preferred charging window (`HH:MM`), or `any`. `any` start = use all slots from script run time. `any` + `HH:MM` end = charge anytime until departure time. Both `any` = no constraint. |
-| `charging.preferred_window_end` | `23:59` | End of preferred charging window (`HH:MM`), or `any`. If earlier than `preferred_window_start` the window wraps midnight. Use `23:45` for end of day. `HH:MM` start + `any` end = charge from that time until last available price. Both `any` = no constraint. |
-| `charging.schedule` | `[]` | Optional list of day-specific overrides. Each entry has a `days` list (`monday`–`sunday`) and optionally `preferred_window_start`, `preferred_window_end`, and `required_hours`. Any of these can be omitted to fall back to the top-level value. The first matching entry for the target day is used. |
+| `area` | — | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
+| `timezone` | — | **Required.** IANA timezone name (e.g. `Europe/Helsinki`). Applies to every profile and delivery handler |
+| `profiles[].name` | — | **Required.** Profile name — used in the output filename (`plan-{name}.json`) |
+| `profiles[].schedule` | — | **Required.** A mapping of day-group keys to `{ window, required }`. Day keys: a single day (`fri`), a forward range (`mon-fri`), a comma list (`sat,sun`), or a mix (`mon-wed,fri`) — every day of the week must be covered by exactly one entry. `window` is `HH:MM-HH:MM`, or `any` for no constraint (cheapest slots from the run time onward). `required` is hours of charging to schedule that day |
+| `profiles[].max_windows` | `null` (unlimited) | `null` = unlimited blocks (cheapest individual slots, DP-optimal, may be split across the window); `1` = one unbroken block; `N` (≥2) = at most N separate blocks, DP-optimal within that budget. A handler may reject a plan with more blocks than it can accept — see the handler's own reference in `delivery/README.md` |
+| `profiles[].min_slot_minutes` | `30` | Minimum continuous block length. The charger should not run for less than this duration. Must be 15 minutes or more and a multiple of 15 (the price slot resolution) |
+| `profiles[].min_gap_minutes` | `15` | Minimum gap between charging blocks. Prevents the charger toggling off and straight back on. Must be a multiple of 15. `0` = no gap constraint. Can be set independently of `min_slot_minutes` — e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps |
+| `profiles[].price_limit` | `none` | Skip slots above this price. `none` = no ceiling. `avg` = dynamic daily market average — ceiling is set to today's average price at plan time. A number = a fixed ceiling in c€/kWh |
+| `profiles[].delivery` | — | Optional list of delivery targets. Omit entirely to plan for the dashboard only, without sending anywhere. Each entry is `{ handler_name: { ...handler-specific keys... } }` — see `delivery/README.md` for every handler's keys and defaults |
 
 ### Preferred window behaviour
 
-**The planner always plans for tomorrow.** The preferred window for tomorrow is taken from the matching `schedule` entry if one exists, otherwise from the top-level `preferred_window_start` / `preferred_window_end`.
+**A window's end is the departure deadline; its start is when the car is expected to be home and plugged in.** The gap between them is usually looser than `required` needs — that slack is what `min_slot_minutes`/`min_gap_minutes`/`max_windows` optimize within, not time the car is expected to be actively charging throughout. A schedule entry is indexed by the day it gets the car ready *for*, not by the date its window starts on — the `mon-fri` entry's window for, say, Wednesday actually starts Tuesday evening.
 
-A preferred window where start > end (e.g. `22:00–06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00–23:45`) stays within the target day. Note that `00:00–23:45` excludes the last 15-minute slot of the day — use `any` if you want truly unconstrained selection. When both fields are set to `any` (or omitted), there is no window constraint — the planner picks the cheapest slots from all available prices from the script run onwards.
+A window where start > end (e.g. `21:00-06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00-23:45`) stays within the target day. `any` means no constraint at all — the planner picks the cheapest slots from all available prices from the run time onward. There's no equivalent of `any` for just one side of a window; a window is either a full `HH:MM-HH:MM` range or entirely `any`.
 
-| Schedule entry | Used by | Plans |
-|---|---|---|
-| `saturday: any` | Friday's run | cheapest slots from all available prices |
-| `sunday: any` | Saturday's run | cheapest slots from all available prices |
-| `monday: 22:00–06:30` | Sunday's run | Monday (Sunday evening–Monday morning) |
-| `friday: 22:00–06:30` | Thursday's run | Friday (Thursday evening–Friday morning) |
+**Catching a delayed run.** A normal run plans tomorrow's window (day-ahead prices are published for the next day). But if a run fires late enough that tonight's overnight window has already opened, it still targets that live window rather than skipping ahead to the next occurrence — using whatever time remains from the run onward, never discarding hours of a still-usable window. This only applies to overnight (midnight-wrapping) windows; a same-day window that's already passed by the time a delayed run fires is simply gone for that day, same as it always was.
 
-Days not listed in `schedule` use the top-level preferred window.
+**Slot selection** — for `max_windows: 1`, the planner evaluates all possible contiguous blocks of `required` length and picks the cheapest. For `max_windows: null` (unlimited) or `max_windows: N` (N ≥ 2), it uses dynamic programming to find the globally cheapest combination of blocks that together cover exactly `required` — unlimited or capped at N separate blocks respectively — where every block is ≥ `min_slot_minutes` and every gap between blocks is ≥ `min_gap_minutes`. Adjacent selected blocks are merged into a single charging window automatically. If the full `required` amount can't be reached at all (too little time remains, or the window is too fragmented), the planner uses everything it can rather than producing nothing, and reports the shortfall.
 
-**Slot selection** — for `max_windows: 1`, the planner evaluates all possible contiguous blocks of `required_hours` length and picks the cheapest. For `max_windows: null` (unlimited) or `max_windows: N` (N ≥ 2), it uses dynamic programming to find the globally cheapest combination of blocks that together cover exactly `required_hours` — unlimited or capped at N separate blocks respectively — where every block is ≥ `min_slot_minutes` and every gap between blocks is ≥ `min_gap_minutes`. Adjacent selected blocks are merged into a single charging window automatically.
+**Per-day required hours** — each schedule entry states its own `required`, so a single profile can act as a true per-car profile: 1.5h on weekdays for a short commute, 4.5h on weekends for a longer charge.
 
-**Per-day required hours** — `required_hours` can be overridden per day within a `schedule` entry, independently of the window override. This allows a single profile to act as a true per-car profile: 1.5h on weekdays for a short commute, 4.5h on weekends for a longer charge. The top-level `required_hours` is the fallback when no schedule entry specifies it.
+**Preferred window and spillover** — slots within the configured window are the primary candidates. If the window doesn't contain enough slots to satisfy `required` (too few slots, or all above `price_limit`), the planner adds the cheapest available slots from *before* the window to cover the deficit — never past the window's end, and never before the actual run time, so a delayed run's spillover can't reach into time that's already elapsed. When the window is `any`, all available slots from the run time onward are candidates from the start.
 
-**Preferred window and spillover** — slots within the configured preferred window are the primary candidates. If the window doesn't contain enough slots to satisfy `required_hours` (too few slots, or all above `max_price_cents_kwh`), the planner adds the cheapest available slots from outside the window to cover the deficit — but never past `preferred_window_end`. When no window is configured (`any`), all available slots are candidates from the start.
+**Dynamic price ceiling** — `price_limit: avg` uses today's market average as the ceiling, resolved at plan time from the available price data. This avoids hardcoding a number that may become stale as market conditions change. A partial plan is still possible if all slots in the window happen to be above the average, but this is uncommon in practice.
 
-**Dynamic price ceiling** — setting `max_price_cents_kwh: "avg"` uses today's market average as the ceiling, resolved at plan time from the available price data. This avoids hardcoding a number that may become stale as market conditions change. A partial plan is still possible if all slots in the window happen to be above the average, but this is uncommon in practice.
-
-**Guaranteed charge until departure time** — setting `required_hours` longer than the window with `max_windows: 1` ensures the block always ends exactly at `preferred_window_end`. Not applicable when using `any`.
+**Guaranteed charge until departure time** — setting `required` longer than the window with `max_windows: 1` ensures the block always ends exactly at the window's end. Not applicable when using `any`.
 
 ---
 
@@ -222,7 +189,7 @@ To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose
 
 ## Delivery
 
-`delivery/deliver.py` reads the `deliveries:` block inside each charging profile and dispatches the plan to the right handler. Three are included out of the box — `chargeamps` (tested), `easee` (untested), `myskoda` (tested, delivers to the vehicle instead of a charger) — and adding a new one requires no changes to the planner or the dispatcher.
+`delivery/deliver.py` reads the `delivery:` block inside each charging profile and dispatches the plan to the right handler. Three are included out of the box — `chargeamps` (tested), `easee` (untested), `myskoda` (tested, delivers to the vehicle instead of a charger) — and adding a new one requires no changes to the planner or the dispatcher.
 
 See [`delivery/README.md`](delivery/README.md) for handler config keys, environment variables, and per-handler behaviour.
 

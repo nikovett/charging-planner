@@ -1,7 +1,7 @@
 # Delivery
 
 Dispatches charging plans to chargers and vehicles. `deliver.py` reads the
-`deliveries:` block inside each charging profile in `config.yaml`, resolves
+`delivery:` block inside each charging profile in `config.yaml`, resolves
 charger IDs from environment variables, and calls the correct handler module.
 
 ---
@@ -19,40 +19,29 @@ charger IDs from environment variables, and calls the correct handler module.
 
 ## Configuration
 
-Deliveries are configured inside each charging profile in `config.yaml`.
+Delivery targets are configured inside each charging profile in `config.yaml`, one list entry per target.
 
 ```yaml
-entsoe:
-  timezone: "Europe/Helsinki"
+area: FI
+timezone: Europe/Helsinki
 
-charging:
+profiles:
   - name: overnight
+    schedule:
+      mon-sun: { window: 21:00-06:30, required: 4 }
     max_windows: 1
-    ...
-    deliveries:
-      - handler: chargeamps
-        charge_point_id: CHARGER_ID_1
-        connector_id: 1
-        max_charging_rate: 16.0
-        restore_mode: false
-
-      - handler: myskoda
-        charge_point_id: SKODA_VIN
-        api_key_env: SKODA_API_KEY
-        # profile_name: "Koti"           # optional — omit if vehicle has only one charging profile
-        set_charge_mode: PREFERRED_CHARGING_TIMES  # or false to skip, or any other valid mode
+    delivery:
+      - chargeamps: { charger: CHARGER_ID_1, connector: 1, max_amps: 16.0 }
+      - myskoda:    { vin: SKODA_VIN, api_key_env: SKODA_API_KEY,
+                       # profile_name: Koti                       # optional — omit if the vehicle has only one charging profile
+                       set_charge_mode: PREFERRED_CHARGING_TIMES } # or false to skip, or any other valid mode
 ```
 
-`timezone` is set once in the `entsoe:` block and passed to all handlers automatically.
+`timezone` is set once at the top level and passed to all handlers automatically. Each `delivery:` entry is `{ handler_name: { params... } }` — the handler name is the key, not a field inside it, so the same handler can appear more than once in one profile (e.g. two Charge Amps chargers on different connectors) as two separate entries.
 
-**Keys shared by every handler:**
+**Every handler needs a way to identify the charge point** — the env var name (not the ID itself) holding the charger ID or VIN, under a handler-specific key: `charger` for Charge Amps and Easee, `vin` for MyŠkoda. Accepts a string or a list of env var names.
 
-| Key | Default | Description |
-|---|---|---|
-| `handler` | — | **Required.** Which handler to use — maps to `delivery/deliver_<handler>.py` |
-| `charge_point_id` | — | **Required.** Name of the env var holding the charger ID or VIN (not the ID itself). Accepts a string or a list of env var names |
-
-To stop delivering to a target without losing its settings, comment the entry out. A profile with no `deliveries:` still plans; the plan just isn't sent anywhere.
+To stop delivering to a target without losing its settings, comment the entry out. A profile with no `delivery:` still plans; the plan just isn't sent anywhere.
 
 Every other key is handler-specific and optional — see each handler's table below. Only set a key when you want something other than its default.
 
@@ -78,9 +67,9 @@ windows shift by -604800s.
 
 | Key | Default | Description |
 |---|---|---|
-| `charge_point_id` | — | **Required.** Env var whose value is the Charge Amps charger ID. Accepts a string or list. |
-| `connector_id` | `1` | Connector index on the charger |
-| `max_charging_rate` | `16.0` | Maximum current in amps (A) |
+| `charger` | — | **Required.** Env var whose value is the Charge Amps charger ID. Accepts a string or list. |
+| `connector` | `1` | Connector index on the charger |
+| `max_amps` | `16.0` | Maximum current in amps (A) |
 | `restore_mode` | `false` | Restore connector mode after delivery if it was not already `Schedule` |
 
 **Environment variables:**
@@ -89,7 +78,7 @@ windows shift by -604800s.
 |---|---|
 | `CHARGER_USERNAME` | `my.charge.space` login email |
 | `CHARGER_PASSWORD` | `my.charge.space` login password |
-| `CHARGER_ID_<N>` | Charger ID — referenced by `charge_point_id` |
+| `CHARGER_ID_<N>` | Charger ID — referenced by `charger` |
 
 ---
 
@@ -104,8 +93,8 @@ Delivers via the official Easee REST API (`api.easee.com`).
 
 | Key | Default | Description |
 |---|---|---|
-| `charge_point_id` | — | **Required.** Env var whose value is the Easee charger serial number. |
-| `max_charging_rate` | `16` | Maximum current in amps (A), integer |
+| `charger` | — | **Required.** Env var whose value is the Easee charger serial number. |
+| `max_amps` | `16` | Maximum current in amps (A), integer |
 
 **Environment variables:**
 
@@ -113,7 +102,7 @@ Delivers via the official Easee REST API (`api.easee.com`).
 |---|---|
 | `CHARGER_USERNAME` | Easee account username (email or phone number with country code) |
 | `CHARGER_PASSWORD` | Easee account password |
-| `CHARGER_ID_<N>` | Easee charger serial number — referenced by `charge_point_id` |
+| `CHARGER_ID_<N>` | Easee charger serial number — referenced by `charger` |
 
 ---
 
@@ -161,7 +150,7 @@ covered by unit tests but not yet verified against real hardware.
 
 | Key | Default | Description |
 |---|---|---|
-| `charge_point_id` | — | **Required.** Env var whose value is the VIN (17 characters). |
+| `vin` | — | **Required.** Env var whose value is the VIN (17 characters). |
 | `api_key_env` | `SKODA_API_KEY` | Env var holding the MyŠkoda API key |
 | `profile_name` | — | Charging profile name to update (e.g. `"Koti"`, `"Home"`). Optional when the vehicle has only one charging profile — omit it and the single profile is used automatically. Required when there are multiple profiles. |
 | `set_charge_mode` | `PREFERRED_CHARGING_TIMES` | Charge mode to set after profile update. Any valid MyŠkoda charge mode string (`MANUAL`, `TIMER`, `TIMER_CHARGING_WITH_CLIMATISATION`, `PREFERRED_CHARGING_TIMES`, `ONLY_OWN_CURRENT`, `IMMEDIATE_DISCHARGING`, `HOME_STORAGE_CHARGING`), or `false` to skip. New modes added by Škoda are passed through as-is. |
@@ -170,7 +159,7 @@ covered by unit tests but not yet verified against real hardware.
 
 | Variable | Description |
 |---|---|
-| `SKODA_VIN` | Vehicle Identification Number (17 characters) — referenced by `charge_point_id` |
+| `SKODA_VIN` | Vehicle Identification Number (17 characters) — referenced by `vin` |
 | `SKODA_API_KEY` | API key from the MyŠkoda app |
 
 **GitHub Actions secrets required:**
@@ -195,13 +184,13 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
     plan:             Plan dict from charging_planner.py
     charge_point_id:  Resolved charger/vehicle ID (env var already read by dispatcher)
     entry:            Delivery config entry from config.yaml
-    timezone:         IANA timezone name from the entsoe: block
+    timezone:         IANA timezone name from the top-level timezone: key
 
     Returns True on success, False on failure.
     """
 ```
 
-3. Add a delivery entry in `config.yaml` with `handler: <name>` and handler-specific keys
+3. Add a delivery entry in `config.yaml`: `- <name>: { charge_point_id: ENV_VAR_NAME, ...other keys }`. Optionally add friendlier key names for that handler to `_DELIVERY_KEY_ALIASES` in `charging_planner.py` — without one, config authors use the internal key names directly, which still works.
 4. Add the relevant env vars to `.github/workflows/schedule.yml`
 
 The dispatcher finds and loads the script automatically — no changes to `deliver.py` needed.

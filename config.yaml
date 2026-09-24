@@ -1,39 +1,22 @@
 # Charging Planner configuration
-# Only non-default values are set. Every option and its default:
-#   profile options  -> README.md, "Charging profile reference"
-#   delivery options -> delivery/README.md, "Configuration" and each handler's table
+# Every profile option and its default -> README.md, "Charging profile reference"
+# Every delivery option and its default -> delivery/README.md
 
-entsoe:
-  api_key: ""                   # never commit a key — injected from ENTSOE_API_KEY
-  area: FI
-  timezone: Europe/Helsinki
+area: FI
+timezone: Europe/Helsinki       # ENTSOE_API_KEY supplies the secret at runtime — never commit a key
 
-charging:
+profiles:
   - name: topup
-    schedule:                   # each entry = the day the car must be ready
-      - days: [monday, tuesday, wednesday, thursday, friday]
-        preferred_window_start: "21:00"   # quote times — unquoted 21:00 parses as a number
-        preferred_window_end: "06:30"
-        required_hours: 3.5
-      - days: [saturday, sunday]
-        preferred_window_start: any       # any + any = charge whenever cheapest
-        preferred_window_end: any
-        required_hours: 4.5
-    deliveries:
-      - handler: chargeamps
-        charge_point_id: CHARGER_ID_1     # env var holding the charger ID
-        restore_mode: true
+    schedule:
+      mon-fri: { window: 21:00-06:30, required: 3.5 }
+      sat-sun: { window: any,         required: 4.5 }   # any = charge whenever cheapest
+    delivery:
+      - chargeamps: { charger: CHARGER_ID_1, restore_mode: true }   # charger = env var holding the ID
 
   - name: overnight
-    required_hours: 4           # applies to every schedule entry below
-    max_windows: 4              # required by the myskoda handler (vehicle has 4 slots)
     schedule:
-      - days: [monday, tuesday, wednesday, thursday, friday]
-        preferred_window_start: "21:00"
-        preferred_window_end: "06:30"
-      - days: [saturday, sunday]
-        preferred_window_start: any
-        preferred_window_end: any
-    deliveries:
-      - handler: myskoda
-        charge_point_id: SKODA_VIN        # env var holding the VIN
+      mon-fri: { window: 21:00-06:30, required: 4 }
+      sat-sun: { window: any,         required: 4 }
+    max_windows: 4                                       # required by the myskoda handler (vehicle has 4 slots)
+    delivery:
+      - myskoda: { vin: SKODA_VIN }                       # vin = env var holding the VIN
