@@ -425,7 +425,7 @@ profiles:
   - name: topup
     schedule:
       mon-fri: { window: 21:00-06:30, required: 1.5 }
-      sat-sun: { window: any,         required: 4.5 }
+      sat-sun: { window: any-any,     required: 4.5 }
     delivery:
       - chargeamps: { charger: CHARGER_ID_1, connector: 1, max_amps: 16.0, restore_mode: true }
 
@@ -449,7 +449,7 @@ Two format layers, kept deliberately separate:
 `translate_config`, called from `load_config` right after `yaml.safe_load`, converts one into the other:
 
 - **Day-range keys** (`mon-fri`, `sat,sun`, `mon-wed,fri`) expand to full day-name lists via `_parse_day_key`. Ranges run forward `mon→sun` only — `fri-mon` is rejected, not silently wrapped, since a wrapping range is ambiguous about which days it actually means.
-- **`window: "21:00-06:30"` or `"any"`** splits into the internal `preferred_window_start`/`preferred_window_end` pair via `_parse_window_string`.
+- **`window:`** splits into the internal `preferred_window_start`/`preferred_window_end` pair via `_parse_window_string`. `"any-any"` is the documented no-constraint form — chosen over a bare `"any"` for readability, since it mirrors the `"HH:MM-HH:MM"` shape rather than being a one-off special case (a bare `"any"` is still accepted, checked first as a shortcut for the same result, but not the form shown in examples or documentation). Anything else is split on the first `-` with no further validation at the parsing step — `"21:00-06:30"` gives a normal fixed window, and either side can independently be `"any"` (`"any-06:30"`, `"21:00-any"`) for an open start or open end, exactly matching what the internal format has always supported. Whether each side is a valid `HH:MM` or `"any"` is still `_validate_charging_profile`'s job downstream, unchanged.
 - **`price_limit: none | avg | <number>`** maps to `max_price_cents_kwh: null | "avg" | <number>` via `_translate_price_limit`. `"none"` (the string) is handled explicitly — YAML's bare `none` parses as the string `"none"`, not Python `None`; only `null`/`~`/an empty value do.
 - **`delivery:` entries** (`{handler_name: {params...}}`) become `{"handler": ..., "charge_point_id": ..., ...}` via `_translate_delivery_entry`, with handler-specific key renames from `_DELIVERY_KEY_ALIASES`: `vin`→`charge_point_id` for MyŠkoda; `charger`→`charge_point_id`, `connector`→`connector_id`, `max_amps`→`max_charging_rate` for Charge Amps and Easee (both share the same alias shape since both are charger-based, unlike MyŠkoda's vehicle-based `vin`). A handler with no entry in that table — any future handler — passes its keys through unchanged, so adding a handler never *requires* touching the translator; adding it to the table is optional, for friendlier key names only.
 - **Every schedule entry must state `required`** — there is no profile-level fallback in the new format (the old top-level `required_hours`/`preferred_window_start`/`preferred_window_end` still get merged in from `CHARGING_DEFAULTS` after translation, but only so `ch["required_hours"]` never `KeyError`s; they're never actually read once every schedule entry has its own value).

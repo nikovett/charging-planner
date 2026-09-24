@@ -9,14 +9,14 @@ profiles:
   - name: topup
     schedule:
       mon-fri: { window: 21:00-06:30, required: 3.5 }
-      sat-sun: { window: any,         required: 4.5 }   # any = charge whenever cheapest
+      sat-sun: { window: any-any,     required: 4.5 }   # any-any = charge whenever cheapest
     delivery:
       - chargeamps: { charger: CHARGER_ID_1, restore_mode: true }   # charger = env var holding the ID
 
   - name: overnight
     schedule:
       mon-fri: { window: 21:00-06:30, required: 4 }
-      sat-sun: { window: any,         required: 4 }
+      sat-sun: { window: any-any,     required: 4 }
     max_windows: 4                                       # required by the myskoda handler (vehicle has 4 slots)
     delivery:
       - myskoda: { vin: SKODA_VIN }                       # vin = env var holding the VIN

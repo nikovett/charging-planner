@@ -161,14 +161,17 @@ def _parse_day_key(key: str) -> list[str]:
 
 
 def _parse_window_string(window, schedule_key: str) -> tuple[str, str]:
-    """Split a single-string window ('21:00-06:30' or 'any') into
-    (start, end). Both sides quote-free in YAML — see config.yaml's own
-    comment on why 'HH:MM-HH:MM' needs no quoting where a bare 'HH:MM' would."""
+    """Split a single-string window ('21:00-06:30', 'any-any', 'any-06:30',
+    '21:00-any') into (start, end). 'any-any' (documented form) and a bare
+    'any' (accepted shorthand, same result) both mean no constraint on
+    either side. One side alone can be 'any' for an open start or open end.
+    Both sides quote-free in YAML — see config.yaml's own comment on why
+    'HH:MM-HH:MM' needs no quoting where a bare 'HH:MM' would."""
     if isinstance(window, str) and window.strip().lower() == "any":
         return "any", "any"
     if not isinstance(window, str) or "-" not in window:
         raise ConfigError(
-            f"charging.schedule['{schedule_key}'].window must be 'any' or "
+            f"charging.schedule['{schedule_key}'].window must be 'any-any' or "
             f"'HH:MM-HH:MM', got: {window!r}."
         )
     start, _, end = window.partition("-")

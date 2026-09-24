@@ -77,7 +77,7 @@ profiles:
   - name: topup
     schedule:
       mon-fri: { window: 22:00-06:30, required: 1.5 }
-      sat-sun: { window: any,         required: 4.5 }   # any = no window constraint, cheapest slots from run time onward
+      sat-sun: { window: any-any,     required: 4.5 }   # any-any = no window constraint, cheapest slots from run time onward
     delivery:
       - chargeamps: { charger: CHARGER_ID_1, connector: 1, max_amps: 16.0 }
 
@@ -99,7 +99,7 @@ profiles:
 | `area` | — | **Required.** Bidding zone short code or full EIC (e.g. `FI`, `10YFI-1--------U`) |
 | `timezone` | — | **Required.** IANA timezone name (e.g. `Europe/Helsinki`). Applies to every profile and delivery handler |
 | `profiles[].name` | — | **Required.** Profile name — used in the output filename (`plan-{name}.json`) |
-| `profiles[].schedule` | — | **Required.** A mapping of day-group keys to `{ window, required }`. Day keys: a single day (`fri`), a forward range (`mon-fri`), a comma list (`sat,sun`), or a mix (`mon-wed,fri`) — every day of the week must be covered by exactly one entry. `window` is `HH:MM-HH:MM`, or `any` for no constraint (cheapest slots from the run time onward). `required` is hours of charging to schedule that day |
+| `profiles[].schedule` | — | **Required.** A mapping of day-group keys to `{ window, required }`. Day keys: a single day (`fri`), a forward range (`mon-fri`), a comma list (`sat,sun`), or a mix (`mon-wed,fri`) — every day of the week must be covered by exactly one entry. `window` is `HH:MM-HH:MM`, `any-any` for no constraint at all, or a mix (`any-06:30`, `21:00-any`) for an open start or open end — see "Preferred window behaviour" below. `required` is hours of charging to schedule that day |
 | `profiles[].max_windows` | `null` (unlimited) | `null` = unlimited blocks (cheapest individual slots, DP-optimal, may be split across the window); `1` = one unbroken block; `N` (≥2) = at most N separate blocks, DP-optimal within that budget. A handler may reject a plan with more blocks than it can accept — see the handler's own reference in `delivery/README.md` |
 | `profiles[].min_slot_minutes` | `30` | Minimum continuous block length. The charger should not run for less than this duration. Must be 15 minutes or more and a multiple of 15 (the price slot resolution) |
 | `profiles[].min_gap_minutes` | `15` | Minimum gap between charging blocks. Prevents the charger toggling off and straight back on. Must be a multiple of 15. `0` = no gap constraint. Can be set independently of `min_slot_minutes` — e.g. `min_slot_minutes: 120` with `min_gap_minutes: 15` gives 2h blocks with 15-minute gaps |
@@ -110,7 +110,7 @@ profiles:
 
 **A window's end is the departure deadline; its start is when the car is expected to be home and plugged in.** The gap between them is usually looser than `required` needs — that slack is what `min_slot_minutes`/`min_gap_minutes`/`max_windows` optimize within, not time the car is expected to be actively charging throughout. A schedule entry is indexed by the day it gets the car ready *for*, not by the date its window starts on — the `mon-fri` entry's window for, say, Wednesday actually starts Tuesday evening.
 
-A window where start > end (e.g. `21:00-06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00-23:45`) stays within the target day. `any` means no constraint at all — the planner picks the cheapest slots from all available prices from the run time onward. There's no equivalent of `any` for just one side of a window; a window is either a full `HH:MM-HH:MM` range or entirely `any`.
+A window where start > end (e.g. `21:00-06:30`) wraps midnight — it starts the evening before the target day and ends the morning of the target day. A window where start < end (e.g. `00:00-23:45`) stays within the target day. `any-any` means no constraint at all — the planner picks the cheapest slots from all available prices from the run time onward. One side alone can be `any` too: `any-06:30` charges anytime as long as it's done by a fixed deadline (useful when you don't care when charging starts, only that it finishes in time), and `21:00-any` starts at a fixed time with no fixed end (useful when you want charging to begin promptly but are fine with it running as long as needed within the available prices).
 
 **Catching a delayed run.** A normal run plans tomorrow's window (day-ahead prices are published for the next day). But if a run fires late enough that tonight's overnight window has already opened, it still targets that live window rather than skipping ahead to the next occurrence — using whatever time remains from the run onward, never discarding hours of a still-usable window. This only applies to overnight (midnight-wrapping) windows; a same-day window that's already passed by the time a delayed run fires is simply gone for that day, same as it always was.
 

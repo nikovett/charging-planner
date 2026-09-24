@@ -539,6 +539,11 @@ class TestParseWindowString(unittest.TestCase):
     def test_any(self):
         self.assertEqual(_parse_window_string("any", "k"), ("any", "any"))
 
+    def test_any_any(self):
+        # The documented no-constraint form — mirrors HH:MM-HH:MM's shape,
+        # more readable than the bare 'any' shortcut. Same result either way.
+        self.assertEqual(_parse_window_string("any-any", "k"), ("any", "any"))
+
     def test_any_case_insensitive(self):
         self.assertEqual(_parse_window_string("ANY", "k"), ("any", "any"))
 
@@ -547,6 +552,12 @@ class TestParseWindowString(unittest.TestCase):
 
     def test_same_day_range(self):
         self.assertEqual(_parse_window_string("09:00-17:00", "k"), ("09:00", "17:00"))
+
+    def test_any_start_fixed_end(self):
+        self.assertEqual(_parse_window_string("any-06:30", "k"), ("any", "06:30"))
+
+    def test_fixed_start_any_end(self):
+        self.assertEqual(_parse_window_string("21:00-any", "k"), ("21:00", "any"))
 
     def test_missing_dash_raises(self):
         with self.assertRaises(ConfigError):
