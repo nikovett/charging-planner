@@ -340,6 +340,32 @@ class TestAvgPriceCeiling(unittest.TestCase):
 
 class TestParseConfigs(unittest.TestCase):
 
+    def test_min_gap_default_is_15(self):
+        from charging_planner import CHARGING_DEFAULTS
+        self.assertEqual(CHARGING_DEFAULTS["min_gap_minutes"], 15)
+
+    def test_omitted_min_gap_and_min_slot_use_charging_defaults_without_merge(self):
+        # Regression: parsing and validation used hardcoded fallbacks
+        # (min_gap 30) that disagreed with CHARGING_DEFAULTS (min_gap 15), so
+        # any path that skipped the defaults merge silently got 30. Both now
+        # read CHARGING_DEFAULTS. Calls _parse_one_profile directly with a
+        # profile that omits both keys, i.e. the un-merged path.
+        import charging_planner as cp
+        cfg = cp._parse_one_profile(
+            {"api_key": "abc", "area": "FI", "timezone": "Europe/Helsinki"},
+            {"name": "test", "required_hours": 2,
+             "preferred_window_start": "00:00", "preferred_window_end": "06:00"},
+        )
+        self.assertEqual(cfg.min_gap_minutes, cp.CHARGING_DEFAULTS["min_gap_minutes"])
+        self.assertEqual(cfg.min_slot_minutes, cp.CHARGING_DEFAULTS["min_slot_minutes"])
+
+    def test_plan_params_defaults_match_charging_defaults(self):
+        import charging_planner as cp
+        import dataclasses
+        fields = {f.name: f.default for f in dataclasses.fields(cp.PlanParams)}
+        self.assertEqual(fields["min_gap_minutes"], cp.CHARGING_DEFAULTS["min_gap_minutes"])
+        self.assertEqual(fields["min_slot_minutes"], cp.CHARGING_DEFAULTS["min_slot_minutes"])
+
     BASE_RAW = {
         "entsoe": {"api_key": "abc", "area": "FI", "timezone": "Europe/Helsinki"},
         "charging": [{
@@ -1720,13 +1746,26 @@ class TestSelectWithMinBlock(unittest.TestCase):
                                     "forecast backfilled already-elapsed time")
 
     def test_cmd_plan_exits_when_prices_missing(self):
-        """cmd_plan exits cleanly if fetched prices don't cover any profile's window."""
+        """cmd_plan exits cleanly if fetched prices don't cover any profile's
+        window and no forecast fallback is available either.
+
+        Both forecast sources must be mocked out: this test predates forecast
+        supplementation, and without these patches the planner correctly falls
+        through to the live nordpool-predict-fi source over the network, gets
+        real data, builds a valid plan and never exits — a failure that looked
+        date-dependent but was actually network-dependent.
+        """
         from charging_planner import cmd_plan
+        import tempfile
         import unittest.mock as mock
 
         # Only 1h of prices — far below 90% of any window
         one_hour = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 4)
-        with mock.patch("charging_planner.fetch_entsoe_prices", return_value=one_hour):
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=one_hour), \
+             mock.patch("charging_planner.fetch_forecast_prices",
+                        side_effect=PricesNotYetAvailable("forecast unavailable")), \
+             mock.patch("charging_planner.fetch_forecast_display_slots", return_value=[]):
             with self.assertRaises(SystemExit) as ctx:
                 cmd_plan({
                     "entsoe": {"api_key": "x", "area": "FI", "timezone": "Europe/Helsinki"},
@@ -1736,7 +1775,7 @@ class TestSelectWithMinBlock(unittest.TestCase):
                         "preferred_window_start": "00:00",
                         "preferred_window_end": "06:30",
                     }],
-                }, output_dir="/tmp")
+                }, output_dir=tmpdir)
         self.assertEqual(ctx.exception.code, 1)
 
 

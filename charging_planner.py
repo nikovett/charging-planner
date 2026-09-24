@@ -232,12 +232,12 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
     if not isinstance(req_hours, (int, float)) or req_hours <= 0:
         errors.append(f"charging.required_hours must be a positive number, got: {req_hours!r}.")
 
-    min_slot = ch.get("min_slot_minutes", 30)
+    min_slot = ch.get("min_slot_minutes", CHARGING_DEFAULTS["min_slot_minutes"])
     if not isinstance(min_slot, (int, float)) or min_slot < 15:
         errors.append(f"charging.min_slot_minutes must be 15 minutes or more (the price slot resolution), got: {min_slot!r}.")
     elif int(min_slot) % 15 != 0:
         errors.append(f"charging.min_slot_minutes={min_slot} must be divisible by 15.")
-    min_gap = ch.get("min_gap_minutes", 30)
+    min_gap = ch.get("min_gap_minutes", CHARGING_DEFAULTS["min_gap_minutes"])
     if not isinstance(min_gap, (int, float)) or min_gap < 0:
         errors.append(f"charging.min_gap_minutes must be non-negative, got: {min_gap!r}.")
     elif int(min_gap) % 15 != 0:
@@ -419,8 +419,8 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         name=str(ch.get("name", "default")),
         required_minutes=int(ch["required_hours"] * 60),
         max_windows=ch.get("max_windows"),
-        min_slot_minutes=int(ch.get("min_slot_minutes", 30)),
-        min_gap_minutes=int(ch.get("min_gap_minutes", 30)),
+        min_slot_minutes=int(ch.get("min_slot_minutes", CHARGING_DEFAULTS["min_slot_minutes"])),
+        min_gap_minutes=int(ch.get("min_gap_minutes", CHARGING_DEFAULTS["min_gap_minutes"])),
         max_price_eur=None if (ceil_cents is None or ceil_is_avg) else ceil_cents / 100.0,
         max_price_is_avg=ceil_is_avg,
         preferred_window_start=ch.get("preferred_window_start", "00:00"),
@@ -1923,8 +1923,8 @@ class PlanParams:
     preferred_window_start: str
     preferred_window_end:   str
     max_price_eur:          Optional[float] = None
-    min_slot_minutes:       int             = 30
-    min_gap_minutes:        int             = 30
+    min_slot_minutes:       int             = CHARGING_DEFAULTS["min_slot_minutes"]
+    min_gap_minutes:        int             = CHARGING_DEFAULTS["min_gap_minutes"]
     max_windows:            Optional[int]   = None
     forecast_slots:         list            = None  # display-only, not used for selection
     supplement_starts:      object          = None  # set of starts of forecast supplement slots
