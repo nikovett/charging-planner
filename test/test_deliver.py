@@ -244,6 +244,110 @@ class TestShouldSkipRedundantDelivery(unittest.TestCase):
 # Persisted record read/write
 # ===========================================================================
 
+class TestDeliverModuleConfigLoading(unittest.TestCase):
+    """Regression coverage for a real bug: deliver.py used to have its own,
+    completely independent load_config function — a bare yaml.safe_load with
+    no call to charging_planner.translate_config at all. When config.yaml
+    moved to the new profiles:/schedule:/delivery: format, charging_planner's
+    own load_config (used by the planner) translated it correctly, but
+    deliver.py's separate copy never got the update: it looked for the old
+    charging: key, found nothing, and every profile's deliveries silently
+    vanished — "No delivery entries found in any charging profile — nothing
+    to do." No error, no traceback, just quietly not delivering.
+
+    Every other test in this file calls deliver's functions directly within
+    one already-imported Python process — which shares whatever module
+    state already exists and would never have caught this, since the bug
+    was specifically that deliver.py's own import/definition of load_config
+    differed from charging_planner's. Only a real subprocess invocation,
+    exercising deliver.py's actual __main__ entry point and its own
+    sys.path/import resolution, reproduces the failure mode. That test is
+    below; the fix — deleting the duplicate and importing
+    charging_planner.load_config directly — makes divergence like this
+    structurally impossible, not just currently absent.
+    """
+
+    def test_deliver_has_no_local_load_config(self):
+        # The whole fix: there is exactly one load_config in this codebase.
+        self.assertFalse(hasattr(deliver, "load_config"),
+                         "deliver.py must not define its own load_config — "
+                         "it must use deliver.cp.load_config (charging_planner's)")
+
+    def test_deliver_uses_charging_planners_load_config(self):
+        import charging_planner
+        self.assertIs(deliver.cp.load_config, charging_planner.load_config)
+
+    def test_new_format_config_found_via_deliver_modules_own_import(self):
+        # Exercises deliver.py's own imported load_config, not a separately
+        # imported charging_planner in the test process — proving the
+        # translation actually happens on the path deliver.py itself uses.
+        raw = {
+            "area": "FI", "timezone": "Europe/Helsinki",
+            "profiles": [{
+                "name": "overnight",
+                "schedule": {"mon-sun": {"window": "any-any", "required": 2}},
+                "delivery": [{"myskoda": {"vin": "SKODA_VIN"}}],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as d:
+            path = str(Path(d) / "config.yaml")
+            import yaml
+            with open(path, "w") as f:
+                yaml.safe_dump(raw, f)
+            cfg = deliver.cp.load_config(path)
+            with mock.patch.dict("os.environ", {"SKODA_VIN": "SKODA_VIN_VALUE"}):
+                entries = deliver._extract_deliveries(cfg)
+        self.assertEqual(len(entries), 1)
+        profile_name, timezone, entry, charge_point_ids = entries[0]
+        self.assertEqual(profile_name, "overnight")
+        self.assertEqual(entry["handler"], "myskoda")
+        self.assertEqual(charge_point_ids, ["SKODA_VIN_VALUE"])
+
+    def test_real_subprocess_finds_deliveries_with_new_format_config(self):
+        # The test that actually reproduces the original bug: runs
+        # delivery/deliver.py as a real subprocess, exactly as the GHA
+        # workflow and a person on the command line both do — from the repo
+        # root, as `python delivery/deliver.py ... --config config.yaml`.
+        # Prior to the fix, this specific invocation path (not any direct
+        # function call) printed "No delivery entries found" for a
+        # perfectly valid new-format config.
+        import os
+        import subprocess
+
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            config_path = d / "config.yaml"
+            config_path.write_text(
+                "area: FI\n"
+                "timezone: Europe/Helsinki\n"
+                "profiles:\n"
+                "  - name: overnight\n"
+                "    schedule:\n"
+                "      mon-sun: { window: any-any, required: 2 }\n"
+                "    delivery:\n"
+                "      - myskoda: { vin: SKODA_VIN }\n"
+            )
+            plan_path = d / "plan-overnight.json"
+            plan_path.write_text(json.dumps({
+                "profile": "overnight", "date": "2026-09-24",
+                "window_starts_utc": ["2026-09-24T20:30:00+00:00"],
+                "window_ends_utc": ["2026-09-24T21:00:00+00:00"],
+                "generated_at": "2026-09-24T11:45:33+00:00",
+                "configured_window_start_utc": "2026-09-24T18:00:00+00:00",
+                "schedule_uses_forecast": False,
+            }))
+            env = dict(os.environ, SKODA_VIN="VIN1", SKODA_API_KEY="dummy")
+            result = subprocess.run(
+                ["python3", str(repo_root / "delivery" / "deliver.py"),
+                 str(plan_path), "--config", str(config_path)],
+                cwd=str(d), env=env, capture_output=True, text=True, timeout=30,
+            )
+        combined = result.stdout + result.stderr
+        self.assertNotIn("No delivery entries found", combined)
+        self.assertIn("Delivering profile 'overnight'", combined)
+
+
 class TestDeliveredRecordPersistence(unittest.TestCase):
 
     def test_round_trip(self):

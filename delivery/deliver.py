@@ -11,22 +11,21 @@ Usage:
 
 Deliveries are configured inside each charging profile in config.yaml:
 
-    charging:
-      - name: "topup"
-        ...
-        deliveries:
-          - handler: chargeamps         # → delivery/deliver_chargeamps.py
-            charge_point_id: CHARGER_ID_1
-            connector_id: 1
-            max_charging_rate: 16.0
+    profiles:
+      - name: topup
+        schedule:
+          mon-sun: { window: 21:00-06:30, required: 2 }
+        delivery:
+          - chargeamps: { charger: CHARGER_ID_1, connector: 1, max_amps: 16.0 }   # → delivery/deliver_chargeamps.py
 
 
-Timezone is taken from the charging profile and passed to handlers directly —
-it does not need to be repeated inside delivery entries.
+Timezone is set once at the top level of config.yaml and passed to handlers
+directly — it does not need to be repeated inside delivery entries.
 
-'charge_point_id' accepts either a single string or a list of strings.
-Each resolved ID is delivered independently; all are attempted even if one
-fails — the exit code reflects whether all succeeded.
+Each handler's charge-point-ID key (e.g. 'charger', 'vin') accepts either a
+single string or a list of strings. Each resolved ID is delivered
+independently; all are attempted even if one fails — the exit code reflects
+whether all succeeded.
 
 Exit code is 0 only if every delivery succeeded. Failures are surfaced via
 non-zero exit so the GitHub Actions job is marked as failed and the operator
@@ -57,10 +56,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-try:
-    import yaml
-except ImportError:
-    yaml = None
+# charging_planner.py lives one directory up from this script (the repo
+# root); sys.path[0] is this script's own directory when run directly
+# (`python delivery/deliver.py ...`), not the repo root, so a bare
+# `import charging_planner` would fail regardless of the caller's CWD.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import charging_planner as cp
 
 # ===========================================================================
 # Logging
@@ -79,17 +80,6 @@ CHARGER_DIR = Path(__file__).parent.resolve()
 # ===========================================================================
 # Config
 # ===========================================================================
-
-def load_config(path: str) -> dict:
-    if yaml is None:
-        log.error("PyYAML is not installed. Run: pip install pyyaml")
-        sys.exit(1)
-    if not os.path.exists(path):
-        log.error("Config file not found: %s", path)
-        sys.exit(1)
-    with open(path) as f:
-        cfg = yaml.safe_load(f) or {}
-    return cfg
 
 
 def _extract_deliveries(config: dict) -> list[tuple[str, str, dict, list[str]]]:
@@ -479,7 +469,14 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    config = load_config(args.config)
+    try:
+        config = cp.load_config(args.config)
+    except FileNotFoundError:
+        log.error("Config file not found: %s", args.config)
+        sys.exit(1)
+    except cp.ConfigError as exc:
+        log.error("Config error: %s", exc)
+        sys.exit(1)
 
     # Load plan files
     plans_by_profile: dict[str, dict] = {}

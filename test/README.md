@@ -1,6 +1,6 @@
 # Test Suite
 
-467 tests across five files. Run from the repo root:
+474 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -10,7 +10,7 @@ Or individually:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 327 tests, 3 skipped
-PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 27 tests
+PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 31 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 41 tests
@@ -130,6 +130,9 @@ GHA step-summary per-profile section: profile name, required hours, window table
 ## test_deliver.py (20 tests)
 
 The dispatcher itself — primarily redundant-delivery protection (see CONTEXT.md "Redundant delivery protection" for the full rationale).
+
+### TestDeliverModuleConfigLoading (4)
+Regression coverage for a real bug: `deliver.py` used to have its own, completely independent `load_config` — a bare `yaml.safe_load` never calling `charging_planner.translate_config` — so when `config.yaml` moved to the new `profiles:` format, the planner's own `load_config` translated correctly but `deliver.py`'s separate copy silently found zero delivery entries for every profile, no error, just "No delivery entries found." Confirms there's exactly one `load_config` in the codebase (`hasattr(deliver, "load_config")` is `False`; `deliver.cp.load_config is charging_planner.load_config`); confirms a new-format config loaded via `deliver.py`'s own imported `load_config` resolves delivery entries correctly. The critical one: `test_real_subprocess_finds_deliveries_with_new_format_config` actually runs `delivery/deliver.py` as a real subprocess (`python3 delivery/deliver.py ... --config ...`, matching both the GHA workflow and manual use) — every other test in this file calls into `deliver`'s functions directly within an already-imported process, which shares whatever module state already exists and would never have caught this; only a real subprocess exercises `deliver.py`'s own `sys.path`/import resolution independently. Mutation-checked: temporarily reintroducing the old duplicate `load_config` makes all four tests fail as expected.
 
 ### TestShouldSkipRedundantDelivery (15)
 The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule yields to a real-price-based one or a differently-forecasted one, including when the new run is live mid-window (forecast-override beats live-window protection); two close-together forecast-based runs with byte-identical windows do *not* force a redundant redelivery just because the prior was an estimate — confirmed against real production data (a manual trigger before ENTSO-E's publish time, followed by a simulated second trigger moments later); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule) — also confirmed against real production data (a manual trigger fired 11 minutes into the window); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing; live-window protection is confirmed independent of plan completeness — a fully-satisfied, warning-free plan (no `plan_warning` key present at all) is still protected exactly like a partial one would be, since the function never inspects `required_minutes`/`total_minutes`/`plan_warning`. Plus two tests (using `assertLogs`, not just the return value) confirming the skip log actually names the specific `handler`/`charger` that was skipped, for both the rule-3 (live-window) and rule-4 (identical) skip messages — real production logs showed "Profile 'X': skipping delivery" with no handler/charger named at all, which the decision itself has always been scoped by but the log output didn't reflect.
