@@ -2608,6 +2608,12 @@ def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, s
     days list includes the weekday of target_date. Falls back to the
     top-level preferred_window_start / preferred_window_end if no entry matches.
     required_minutes_override is None when no schedule entry specifies required_hours.
+
+    Purely mechanical, no logging: _resolve_planning_horizon calls this once
+    per *candidate* date under consideration (not every candidate becomes the
+    actual target), so logging here would report every candidate checked
+    rather than the one decision that was actually made. The caller logs the
+    winning candidate once, after it's chosen.
     """
     day_name = _DAY_NAMES[target_date.weekday()]
     for entry in cfg.schedule:
@@ -2619,10 +2625,6 @@ def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, s
             req_override = None
             if "required_hours" in entry:
                 req_override = int(float(entry["required_hours"]) * 60)
-                log.info("Profile '%s': using schedule entry for %s (%s–%s, %d min)",
-                         cfg.name, day_name, s_str, e_str, req_override)
-            else:
-                log.info("Profile '%s': using schedule entry for %s (%s–%s)", cfg.name, day_name, s_str, e_str)
             return s_str, e_str, req_override
     if cfg.preferred_window_any:
         return "any", "any", None
@@ -2770,6 +2772,16 @@ def _resolve_planning_horizon(
                                 23, 0, tzinfo=timezone.utc) + timedelta(days=1)
     any_end_cap = min(last_price_utc, plan_horizon_utc)
 
+    def _log_target(target_date: date, start_str: str, end_str: str, req: Optional[int]) -> None:
+        """Log the single winning candidate — the decision, not the candidates checked."""
+        weekday = _DAY_NAMES[target_date.weekday()]
+        if req is not None:
+            log.info("Profile '%s': targeting %s's window (%s) — %s–%s local, %d min",
+                     cfg.name, weekday, target_date.isoformat(), start_str, end_str, req)
+        else:
+            log.info("Profile '%s': targeting %s's window (%s) — %s–%s local",
+                     cfg.name, weekday, target_date.isoformat(), start_str, end_str)
+
     has_schedule_or_any = (bool(cfg.schedule) or cfg.preferred_window_any
                            or cfg.window_start_any or cfg.window_end_any)
 
@@ -2784,18 +2796,21 @@ def _resolve_planning_horizon(
             )
             if result is not None:
                 ws, we, ss, es, r = result
+                _log_target(yesterday, ss, es, r)
                 return ws, we, ss, es, ws.astimezone(tz).date(), r
         result = _classify_window_instance(
             start_str, end_str, req, today, now_utc, any_end_cap, cfg, tz,
         )
         if result is not None:
             ws, we, ss, es, r = result
+            _log_target(today, ss, es, r)
             return ws, we, ss, es, ws.astimezone(tz).date(), r
         result = _classify_window_instance(
             start_str, end_str, req, tomorrow, now_utc, any_end_cap, cfg, tz,
         )
         assert result is not None, "tomorrow's window instance can never classify as elapsed"
         ws, we, ss, es, r = result
+        _log_target(tomorrow, ss, es, r)
         return ws, we, ss, es, ws.astimezone(tz).date(), r
 
     # Candidate 1: today's own schedule entry — what yesterday's run would
@@ -2806,9 +2821,8 @@ def _resolve_planning_horizon(
             c1_start_str, c1_end_str, c1_req, yesterday, now_utc, any_end_cap, cfg, tz,
         )
         if result is not None:
-            log.info("Profile '%s': targeting yesterday's still-open window (%s–%s local).",
-                     cfg.name, c1_start_str, c1_end_str)
             ws, we, ss, es, req = result
+            _log_target(yesterday, ss, es, req)
             return ws, we, ss, es, ws.astimezone(tz).date(), req
 
     # Candidate 2: tomorrow's schedule entry — the normal target.
@@ -2820,6 +2834,7 @@ def _resolve_planning_horizon(
     )
     assert result is not None, "tomorrow-anchored candidate can never classify as elapsed"
     ws, we, ss, es, req = result
+    _log_target(tomorrow, ss, es, req)
     return ws, we, ss, es, ws.astimezone(tz).date(), req
 
 
