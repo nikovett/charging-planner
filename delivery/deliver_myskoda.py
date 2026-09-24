@@ -45,7 +45,6 @@ Rate limit:
 config.yaml delivery entry:
     deliveries:
       - handler: myskoda
-        enabled: true
         charge_point_id: SKODA_VIN       # env var holding the VIN (required)
         api_key_env: SKODA_API_KEY        # env var holding the API key (default: SKODA_API_KEY)
         profile_name: "Home"              # charging profile name to update (optional if only one profile exists)

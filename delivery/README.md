@@ -45,6 +45,17 @@ charging:
 
 `timezone` is set once in the `entsoe:` block and passed to all handlers automatically.
 
+**Keys shared by every handler:**
+
+| Key | Default | Description |
+|---|---|---|
+| `handler` | — | **Required.** Which handler to use — maps to `delivery/deliver_<handler>.py` |
+| `charge_point_id` | — | **Required.** Name of the env var holding the charger ID or VIN (not the ID itself). Accepts a string or a list of env var names |
+
+To stop delivering to a target without losing its settings, comment the entry out. A profile with no `deliveries:` still plans; the plan just isn't sent anywhere.
+
+Every other key is handler-specific and optional — see each handler's table below. Only set a key when you want something other than its default.
+
 ---
 
 ## Handler reference

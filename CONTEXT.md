@@ -375,6 +375,8 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 **ntfy removed** — forecast warning visible on dashboard; delivery failures exit non-zero → GHA emails operator.
 
+**Delivery `enabled` key removed** — it behaved exactly like omitting the entry (the dispatcher skipped it with the same `continue`, no record, no API calls); its only other effect was a dashboard badge reading "off" instead of "—". Commenting an entry out keeps its settings just as well. Deliberately *not* rejected at load time: an old config still containing `enabled: false` is now silently ignored, so that entry **will deliver**. Accepted because the only user's config no longer has the key; if this project ever gains other users, unknown-key validation for delivery entries (config Future work, pain point #2) would close this.
+
 ---
 
 ## Test suite
