@@ -2545,6 +2545,98 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn("plan-overnight.json", files)
 
 
+class TestLogVerbosity(unittest.TestCase):
+    """A normal run's log used to repeat the same handful of facts (the
+    target window, in UTC and again in local time; the candidate slot
+    count; the scheduled total, average price, and window count) across
+    four separate INFO lines, all before print_plan_summary printed the
+    same numbers again in the pretty console block immediately after.
+    Demoted to DEBUG — still available for real troubleshooting via
+    --debug, just not cluttering a normal run. One exception: spillover
+    (minutes scheduled outside the preferred window) is not shown anywhere
+    else, including print_plan_summary, so it stays at INFO — split into
+    its own line rather than demoted along with the rest."""
+
+    _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
+
+    RAW_CONFIG = {
+        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
+        "charging": [{
+            "name": "topup", "required_hours": 2, "max_windows": None,
+            "min_slot_minutes": 30,
+            "preferred_window_start": "00:00", "preferred_window_end": "06:30",
+        }],
+    }
+
+    def _make_prices(self):
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        slots = []
+        for i in range(192):
+            t = base + timedelta(minutes=15 * i)
+            local_h = t.astimezone(FI_TZ).hour
+            price = 1.5 if (local_h < 7 or local_h >= 22) else 8.0
+            slots.append(Slot(
+                start=t, end=t + timedelta(minutes=15),
+                duration_minutes=15, price_eur_kwh=price / 100, slot=i,
+            ))
+        return slots
+
+    def _run(self, config=None):
+        import charging_planner as cp
+        import tempfile
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return self._FROZEN_NOW if tz is None else self._FROZEN_NOW.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=self._make_prices()):
+            cp.cmd_plan(config or self.RAW_CONFIG, output_dir=tmpdir)
+
+    def test_demoted_lines_absent_at_info_level(self):
+        with self.assertLogs("charging_planner", level="INFO") as cm:
+            self._run()
+        combined = "\n".join(cm.output)
+        self.assertNotIn("Window UTC:", combined)
+        self.assertNotIn("slots inside", combined)
+        self.assertNotIn("Selecting", combined)
+        self.assertNotIn("min scheduled, avg", combined)
+
+    def test_demoted_lines_present_at_debug_level(self):
+        with self.assertLogs("charging_planner", level="DEBUG") as cm:
+            self._run()
+        combined = "\n".join(cm.output)
+        self.assertIn("Window UTC:", combined)
+        self.assertIn("slots inside", combined)
+        self.assertIn("Selecting", combined)
+        self.assertIn("min scheduled, avg", combined)
+
+    def test_spillover_reported_at_info_level_when_it_happens(self):
+        # A tiny window with plenty of candidate time available before it —
+        # unlike the demoted totals, "N min outside window" is unique to
+        # this line and shown nowhere else.
+        tight_config = {
+            "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "topup", "required_hours": 2, "max_windows": None,
+                "min_slot_minutes": 30,
+                "preferred_window_start": "05:00", "preferred_window_end": "05:30",
+            }],
+        }
+        with self.assertLogs("charging_planner", level="INFO") as cm:
+            self._run(tight_config)
+        combined = "\n".join(cm.output)
+        self.assertIn("scheduled outside the preferred window (spillover)", combined)
+
+    def test_no_spillover_line_when_window_is_sufficient(self):
+        with self.assertLogs("charging_planner", level="INFO") as cm:
+            self._run()
+        combined = "\n".join(cm.output)
+        self.assertNotIn("spillover", combined)
+
+
 
 # ===========================================================================
 # 11. Real ENTSO-E data

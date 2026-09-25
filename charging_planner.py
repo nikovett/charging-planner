@@ -1497,7 +1497,7 @@ def select_charging_windows(
 
     n_slots = required_minutes // slot_dur
     if _log:
-        log.info("Selecting %d slots × %d min = %d min of charging", n_slots, slot_dur, required_minutes)
+        log.debug("Selecting %d slots × %d min = %d min of charging", n_slots, slot_dur, required_minutes)
 
     candidates = prices
     if max_price is not None:
@@ -1977,7 +1977,7 @@ def filter_preferred_window(
         else:
             outside.append(slot)
 
-    log.info("Preferred window %s–%s local: %d slots inside, %d outside",
+    log.debug("Preferred window %s–%s local: %d slots inside, %d outside",
              window_start_local, window_end_local, len(inside), len(outside))
 
     return inside, outside
@@ -3051,7 +3051,7 @@ def _plan_one_profile(
     win_start_utc, win_end_utc, win_start_str, win_end_str, plan_date, sched_required_minutes = \
         _resolve_planning_horizon(cfg, now_utc, tz.zone, all_prices)
 
-    log.info("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
+    log.debug("Window UTC: %s – %s", win_start_utc.isoformat(), win_end_utc.isoformat())
 
     # display_prices: slots up to (today+1) 23:00 UTC — the same end boundary as
     # the ENTSO-E request, so optimal selection always compares against the same
@@ -3171,9 +3171,12 @@ def _plan_one_profile(
     spilled     = total_min - sum(s.duration_minutes for s in selected
                                   if win_start_utc <= s.start < win_end_utc)
     spill_str   = f", {spilled} min outside window" if spilled > 0 else ""
-    log.info("Profile '%s': %d/%d min scheduled, avg %.2f c€/kWh, %d window%s%s",
+    log.debug("Profile '%s': %d/%d min scheduled, avg %.2f c€/kWh, %d window%s%s",
              cfg.name, total_min, effective_required, avg_c,
              n_windows, "s" if n_windows != 1 else "", spill_str)
+    if spilled > 0:
+        log.info("Profile '%s': %d min scheduled outside the preferred window (spillover)",
+                 cfg.name, spilled)
 
     print_plan_summary(plan, future_prices)
     output_path = os.path.join(output_dir, f"plan-{cfg.name}.json")

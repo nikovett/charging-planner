@@ -371,6 +371,8 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 ## Design decisions
 
+**A normal run's log shouldn't repeat the same facts through four separate lines.** The pre-cleanup log stated the target window and required minutes in the decision line, then the same window again in UTC (`Window UTC: ...`), then the same window a third time with candidate counts (`Preferred window ... slots inside, outside`), then the same required-minutes figure re-derived as a multiplication (`Selecting N slots × 15 min = ...`), then the scheduled total/average price/window count — immediately followed by `print_plan_summary` printing those exact same three numbers again in the pretty console block. Demoted all four to `log.debug` (available via `--debug`, not deleted) rather than removing them outright, since they're genuinely useful for troubleshooting, just not for a normal run's signal-to-noise. One exception, not demoted: spillover (minutes scheduled outside the preferred window) isn't shown anywhere else, including `print_plan_summary` — split into its own `log.info` line rather than folded into the demoted summary line it used to share.
+
 **Forecast supplement gated to FI** — `fetch_forecast_display_slots` returns `[]` for non-FI areas internally. Non-FI areas with partial prices proceed with what they have.
 
 **OCPP delivery handler removed** — requires direct WebSocket access, incompatible with GHA-first architecture. OCPP ChargingProfile remains in plan JSON for downstream systems.

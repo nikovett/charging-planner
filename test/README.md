@@ -1,6 +1,6 @@
 # Test Suite
 
-475 tests across five files. Run from the repo root:
+479 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 328 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 332 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 31 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (328 tests)
+## test_charging_planner.py (332 tests)
 
 ### TestConfigValidation (18)
 Validation of `config.yaml` fields: required keys, type checks, range checks for `required_hours`, `min_slot_minutes`, `min_gap_minutes`, `max_price_cents_kwh`, `preferred_window`, and `max_windows` (null/positive-int accepted; zero, negative, float, bool, and string rejected — `bool` is a subclass of `int` in Python, so it needs an explicit check).
@@ -91,6 +91,9 @@ ENTSO-E XML parsing: slot count, 15-min duration, sort order, ordinal sequencing
 
 ### TestEndToEnd (11)
 Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable. Plus five delayed-run regression tests: a run firing mid-window still targets tonight's live window rather than skipping to the next night; with an artificially-cheap already-elapsed slot planted to tempt the DP, confirms it's never selected; a live window with too little time left to fit `required_hours` still uses 100% of what remains (never rolls to the next occurrence) and honestly reports the shortfall via `plan_warning`; the companion case — a live window with a comfortable 1h buffer over `required_hours` — produces a complete plan with no warning, confirming the shortfall handling above is specific to genuine insufficiency, not just running late; the same too-little-time scenario repeated with `max_windows: null` (the actual default) instead of `1` — the DP behind it used to return a completely empty plan in this situation rather than the same graceful partial result `max_windows: 1` already produced.
+
+### TestLogVerbosity (4)
+A normal run's log used to repeat the same handful of facts across four separate `INFO` lines (the target window in UTC, then again in local time with candidate counts, the required-minutes figure re-derived as a multiplication, and the scheduled total/average price/window count) before `print_plan_summary` printed those same three numbers again in the pretty console block immediately after. All four demoted to `log.debug` — confirms they're genuinely absent from a normal (`INFO`-level) run and still present with `--debug` enabled, so nothing was deleted, just quieted. One exception: spillover (minutes scheduled outside the preferred window) isn't shown anywhere else, so it stays at `INFO`, split into its own line — confirms it's reported when spillover genuinely happens and silent when it doesn't. Mutation-checked: reintroducing one demoted line at `INFO` level makes the absence test fail as expected.
 
 ### TestPriceSourceRules (9)
 Price source selection rules (rules 1–4): real prices used when sufficient, forecast display appended, forecast supplement used when window not covered, `price_source` field set correctly, supplement slots tagged `forecasted: true`.
