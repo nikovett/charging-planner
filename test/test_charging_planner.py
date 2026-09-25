@@ -30,7 +30,7 @@ from charging_planner import (
     Config,
     ConfigError,
     PlanParams,
-    PricesNotYetAvailable,
+    PriceDataUnavailable,
     Slot,
     TzInfo,
     _best_continuous_window,
@@ -52,6 +52,7 @@ from charging_planner import (
     _window_bar,
     build_ocpp_charging_profile,
     build_plan,
+    fetch_entsoe_prices,
     filter_preferred_window,
     merge_continuous_slots,
     parse_configs,
@@ -1173,6 +1174,118 @@ class TestRealEntsoEData(unittest.TestCase):
         self.assertLess(avg_selected, 0.10)
 
 
+class TestFetchEntsoePricesCoverage(unittest.TestCase):
+    """fetch_entsoe_prices used to raise PriceDataUnavailable whenever its
+    own data didn't reach tomorrow, specifically to trigger the Elering/
+    Sähkötin fallback — but those sources republish the same underlying
+    Nord Pool day-ahead auction ENTSO-E does. If ENTSO-E is reachable and
+    parses fine but tomorrow's auction hasn't cleared yet, no other real
+    source has it either (confirmed against a real production log: Elering
+    "succeeded" with data stopping at the exact same timestamp ENTSO-E's own
+    check had already rejected — a wasted network call, not a genuine second
+    opinion). Fixed: ENTSO-E now accepts whatever real future data it has,
+    matching Elering/Sähkötin's own (always-had) behavior; cmd_plan's
+    coverage check handles supplementing with forecast regardless of which
+    source won. Still raises for a genuine absence of usable data — that's
+    a different, real failure signal worth falling back for.
+    """
+
+    @staticmethod
+    def _single_day_xml(day: date, price=3.0):
+        # PT15M matching real ENTSO-E resolution; 96 points = one full day.
+        start = datetime(day.year, day.month, day.day, tzinfo=UTC) - timedelta(hours=1)
+        end = start + timedelta(hours=24)
+        points = "".join(
+            f'<Point><position>{i + 1}</position><price.amount>{price}</price.amount></Point>'
+            for i in range(96)
+        )
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">'
+            '<TimeSeries><Period>'
+            f'<timeInterval><start>{start.strftime("%Y-%m-%dT%H:%MZ")}</start>'
+            f'<end>{end.strftime("%Y-%m-%dT%H:%MZ")}</end></timeInterval>'
+            '<resolution>PT15M</resolution>'
+            f'{points}'
+            '</Period></TimeSeries></Publication_MarketDocument>'
+        )
+
+    def test_partial_coverage_not_reaching_tomorrow_does_not_raise(self):
+        # now = midday today; XML only covers today -- doesn't reach tomorrow.
+        today = date(2026, 9, 25)
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=UTC)
+        xml = self._single_day_xml(today)
+
+        class F(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now if tz is None else now.astimezone(tz)
+
+        with mock.patch("charging_planner.datetime", F), \
+             mock.patch("charging_planner._http_request_with_retry", return_value=xml):
+            result = fetch_entsoe_prices("fake-key", "FI")
+        self.assertGreater(len(result), 0)
+        self.assertTrue(all(s.end.date() <= today for s in result))
+
+    def test_zero_usable_future_data_still_raises(self):
+        # All slots strictly in the past -- a genuine absence of data, not
+        # just short coverage. Must still trigger the fallback chain.
+        stale_day = date(2026, 9, 20)
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=UTC)
+        xml = self._single_day_xml(stale_day)
+
+        class F(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now if tz is None else now.astimezone(tz)
+
+        with mock.patch("charging_planner.datetime", F), \
+             mock.patch("charging_planner._http_request_with_retry", return_value=xml):
+            with self.assertRaises(PriceDataUnavailable):
+                fetch_entsoe_prices("fake-key", "FI")
+
+    def test_full_coverage_still_works_as_before(self):
+        # Coverage genuinely reaching tomorrow must still succeed -- this
+        # fix only changes the "short coverage" case, not the normal path.
+        today = date(2026, 9, 25)
+        tomorrow = today + timedelta(days=1)
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=UTC)
+        start1 = datetime(today.year, today.month, today.day, tzinfo=UTC) - timedelta(hours=1)
+        start2 = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=UTC) - timedelta(hours=1)
+
+        def series(start):
+            end = start + timedelta(hours=24)
+            points = "".join(
+                f'<Point><position>{i + 1}</position><price.amount>3.0</price.amount></Point>'
+                for i in range(96)
+            )
+            return (
+                '<TimeSeries><Period>'
+                f'<timeInterval><start>{start.strftime("%Y-%m-%dT%H:%MZ")}</start>'
+                f'<end>{end.strftime("%Y-%m-%dT%H:%MZ")}</end></timeInterval>'
+                '<resolution>PT15M</resolution>'
+                f'{points}'
+                '</Period></TimeSeries>'
+            )
+
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">'
+            f'{series(start1)}{series(start2)}'
+            '</Publication_MarketDocument>'
+        )
+
+        class F(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now if tz is None else now.astimezone(tz)
+
+        with mock.patch("charging_planner.datetime", F), \
+             mock.patch("charging_planner._http_request_with_retry", return_value=xml):
+            result = fetch_entsoe_prices("fake-key", "FI")
+        self.assertTrue(any(s.start.date() >= tomorrow for s in result))
+
+
 class TestPriceSourceRules(unittest.TestCase):
     """Tests for the four price source rules:
 
@@ -1330,9 +1443,9 @@ class TestPriceSourceRules(unittest.TestCase):
                 with mock.patch("charging_planner.fetch_entsoe_prices",
                                side_effect=Exception("unavailable")):
                     with mock.patch("charging_planner.fetch_elering_prices",
-                                   side_effect=PricesNotYetAvailable("unavailable")):
+                                   side_effect=PriceDataUnavailable("unavailable")):
                         with mock.patch("charging_planner.fetch_sahkotin_prices",
-                                       side_effect=PricesNotYetAvailable("unavailable")):
+                                       side_effect=PriceDataUnavailable("unavailable")):
                             with mock.patch("charging_planner.fetch_forecast_prices",
                                            return_value=forecast):
                                 with mock.patch("charging_planner.fetch_forecast_display_slots",
@@ -1498,13 +1611,32 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
 
     def _run(self, area, entsoe, elering=None, sahkotin=None, forecast=None,
              elprisetjustnu=None, hvakosterstrommen=None):
-        """Run cmd_plan with all fetch functions explicitly patched."""
+        """Run cmd_plan with all fetch functions explicitly patched.
+
+        Regression note: this used to always wrap every argument in a brand
+        new mock.Mock() via _side(), even when the caller had already set up
+        its own outer mock.patch(..., mock_x) specifically to assert on it
+        afterward. Since this method's own `with mock.patch(...)` block runs
+        *inside* that outer patch and is what's actually active during
+        cmd_plan's execution, the caller's mock was shadowed for the whole
+        call and never actually saw the real call (or lack of one) — making
+        every mock_x.assert_not_called() in this class trivially true
+        regardless of what cmd_plan actually did. Confirmed via mutation:
+        making cmd_plan call fetch_elering_prices unconditionally right
+        after a successful ENTSO-E fetch did not fail
+        test_fi_entsoe_success_elering_not_called before this fix.
+        Fixed: when an argument is already a mock.Mock, use it directly as
+        the patch target instead of wrapping it in a new one — so a caller
+        that wants to assert on a specific mock now actually can.
+        """
         import charging_planner as cp
         import tempfile
 
-        _unavail = PricesNotYetAvailable("unavailable")
+        _unavail = PriceDataUnavailable("unavailable")
 
         def _side(v):
+            if isinstance(v, mock.Mock):
+                return v
             if v is None:
                 return mock.Mock(side_effect=_unavail)
             if isinstance(v, list):
@@ -1533,10 +1665,24 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
     def test_fi_entsoe_success_elering_not_called(self):
         prices = self._make_prices()
         mock_el = mock.Mock(side_effect=AssertionError("should not be called"))
-        with mock.patch("charging_planner.fetch_elering_prices", mock_el), \
-             mock.patch("charging_planner.fetch_forecast_display_slots", return_value=[]):
-            self._run("FI", entsoe=prices)
+        self._run("FI", entsoe=prices, elering=mock_el)
         mock_el.assert_not_called()
+
+    def test_fi_entsoe_short_coverage_still_elering_not_called(self):
+        # The actual regression this covers: entsoe=prices above uses full
+        # 48h coverage, which was never the case that broke. Short coverage
+        # (real data, just doesn't reach tomorrow) is the scenario that used
+        # to wrongly fall through to Elering even though ENTSO-E itself is
+        # perfectly reachable — Elering republishes the same Nord Pool
+        # auction and would get the exact same shortfall, wasting a call.
+        short_prices = self._make_prices(hours=10)
+        mock_el = mock.Mock(side_effect=AssertionError("should not be called"))
+        mock_sah = mock.Mock(side_effect=AssertionError("should not be called"))
+        plans = self._run("FI", entsoe=short_prices, elering=mock_el, sahkotin=mock_sah,
+                          forecast=self._make_prices(hours=183))
+        mock_el.assert_not_called()
+        mock_sah.assert_not_called()
+        self.assertEqual(plans[0]["price_source"], "forecast")
 
     def test_fi_entsoe_success_price_source(self):
         plans = self._run("FI", entsoe=self._make_prices())
@@ -1554,8 +1700,7 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
     def test_fi_elering_success_sahkotin_not_called(self):
         prices = self._make_prices()
         mock_sah = mock.Mock(side_effect=AssertionError("should not be called"))
-        with mock.patch("charging_planner.fetch_sahkotin_prices", mock_sah):
-            self._run("FI", entsoe=Exception("down"), elering=prices)
+        self._run("FI", entsoe=Exception("down"), elering=prices, sahkotin=mock_sah)
         mock_sah.assert_not_called()
 
     # ── FI: ENTSO-E + Elering fail → Sähkötin ────────────────────────────────
@@ -1564,18 +1709,17 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         prices = self._make_prices()
         plans = self._run("FI",
                           entsoe=Exception("down"),
-                          elering=PricesNotYetAvailable("down"),
+                          elering=PriceDataUnavailable("down"),
                           sahkotin=prices)
         self.assertEqual(plans[0]["price_source"], "Sähkötin")
 
     def test_fi_sahkotin_success_forecast_not_called(self):
         prices = self._make_prices()
         mock_fc = mock.Mock(side_effect=AssertionError("should not be called"))
-        with mock.patch("charging_planner.fetch_forecast_prices", mock_fc):
-            self._run("FI",
-                      entsoe=Exception("down"),
-                      elering=PricesNotYetAvailable("down"),
-                      sahkotin=prices)
+        self._run("FI",
+                  entsoe=Exception("down"),
+                  elering=PriceDataUnavailable("down"),
+                  sahkotin=prices, forecast=mock_fc)
         mock_fc.assert_not_called()
 
     # ── FI: all real sources fail → forecast ──────────────────────────────────
@@ -1584,8 +1728,8 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         prices = self._make_prices()
         plans = self._run("FI",
                           entsoe=Exception("down"),
-                          elering=PricesNotYetAvailable("down"),
-                          sahkotin=PricesNotYetAvailable("down"),
+                          elering=PriceDataUnavailable("down"),
+                          sahkotin=PriceDataUnavailable("down"),
                           forecast=prices)
         self.assertEqual(plans[0]["price_source"], "forecast")
 
@@ -1593,9 +1737,9 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             self._run("FI",
                       entsoe=Exception("down"),
-                      elering=PricesNotYetAvailable("down"),
-                      sahkotin=PricesNotYetAvailable("down"),
-                      forecast=PricesNotYetAvailable("down"))
+                      elering=PriceDataUnavailable("down"),
+                      sahkotin=PriceDataUnavailable("down"),
+                      forecast=PriceDataUnavailable("down"))
         self.assertEqual(ctx.exception.code, 1)
 
     # ── EE: ENTSO-E succeeds ──────────────────────────────────────────────────
@@ -1617,11 +1761,19 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
 
     def _run_all_patched(self, area, entsoe_exc, elering_exc,
                          mock_sah, mock_fc, mock_ep=None, mock_hv=None):
-        """Run cmd_plan with every fetcher patched; mocks passed in are used directly."""
+        """Run cmd_plan with every fetcher patched; mocks passed in are used directly.
+
+        elering_exc may be a plain exception (the usual case: Elering is
+        expected to be tried and fail, so the caller doesn't need to inspect
+        it) or a mock.Mock the caller wants to assert on afterward (e.g. "was
+        this even called for an area where it's not in the chain at all") —
+        same fix as _run's own _side(), for the same reason: a Mock created
+        here from a raw exception can never be the caller's own mock_el.
+        """
         import charging_planner as cp
         import tempfile
 
-        _unavail = PricesNotYetAvailable("unavailable")
+        _unavail = PriceDataUnavailable("unavailable")
 
         class _FrozenDatetime(datetime):
             @classmethod
@@ -1629,6 +1781,8 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
                 return TestAreaFallbackChainIntegration._FROZEN_NOW if tz is None \
                     else TestAreaFallbackChainIntegration._FROZEN_NOW.astimezone(tz)
 
+        mock_el = elering_exc if isinstance(elering_exc, mock.Mock) \
+            else mock.Mock(side_effect=elering_exc)
         if mock_ep is None:
             mock_ep = mock.Mock(side_effect=_unavail)
         if mock_hv is None:
@@ -1638,8 +1792,7 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
              mock.patch("charging_planner.datetime", _FrozenDatetime), \
              mock.patch("charging_planner.fetch_entsoe_prices",
                         side_effect=entsoe_exc), \
-             mock.patch("charging_planner.fetch_elering_prices",
-                        side_effect=elering_exc), \
+             mock.patch("charging_planner.fetch_elering_prices",           mock_el), \
              mock.patch("charging_planner.fetch_sahkotin_prices",          mock_sah), \
              mock.patch("charging_planner.fetch_forecast_prices",          mock_fc), \
              mock.patch("charging_planner.fetch_elprisetjustnu_prices",    mock_ep), \
@@ -1648,22 +1801,22 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
             return cp.cmd_plan(self._config(area), output_dir=tmpdir)
 
     def test_ee_sahkotin_never_called(self):
-        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_sah = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
         with self.assertRaises(SystemExit):
             self._run_all_patched("EE",
                                   entsoe_exc=Exception("down"),
-                                  elering_exc=PricesNotYetAvailable("down"),
+                                  elering_exc=PriceDataUnavailable("down"),
                                   mock_sah=mock_sah, mock_fc=mock_fc)
         mock_sah.assert_not_called()
 
     def test_ee_forecast_never_called(self):
-        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_sah = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
         with self.assertRaises(SystemExit):
             self._run_all_patched("EE",
                                   entsoe_exc=Exception("down"),
-                                  elering_exc=PricesNotYetAvailable("down"),
+                                  elering_exc=PriceDataUnavailable("down"),
                                   mock_sah=mock_sah, mock_fc=mock_fc)
         mock_fc.assert_not_called()
 
@@ -1671,7 +1824,7 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             self._run("EE",
                       entsoe=Exception("down"),
-                      elering=PricesNotYetAvailable("down"))
+                      elering=PriceDataUnavailable("down"))
         self.assertEqual(ctx.exception.code, 1)
 
     # ── SE1: ENTSO-E → elprisetjustnu.se ─────────────────────────────────────
@@ -1687,25 +1840,25 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         self.assertEqual(plans[0]["price_source"], "elprisetjustnu.se")
 
     def test_se1_elering_never_called(self):
-        mock_el = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_ep  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_el = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_sah = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_ep  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
         with self.assertRaises(SystemExit):
             self._run_all_patched("SE1",
                                   entsoe_exc=Exception("down"),
-                                  elering_exc=PricesNotYetAvailable("unavailable"),
+                                  elering_exc=mock_el,
                                   mock_sah=mock_sah, mock_fc=mock_fc, mock_ep=mock_ep)
         mock_el.assert_not_called()
 
     def test_se1_sahkotin_never_called(self):
-        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_ep  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_sah = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_ep  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
         with self.assertRaises(SystemExit):
             self._run_all_patched("SE1",
                                   entsoe_exc=Exception("down"),
-                                  elering_exc=PricesNotYetAvailable("unavailable"),
+                                  elering_exc=PriceDataUnavailable("unavailable"),
                                   mock_sah=mock_sah, mock_fc=mock_fc, mock_ep=mock_ep)
         mock_sah.assert_not_called()
 
@@ -1713,7 +1866,7 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             self._run("SE1",
                       entsoe=Exception("down"),
-                      elprisetjustnu=PricesNotYetAvailable("down"))
+                      elprisetjustnu=PriceDataUnavailable("down"))
         self.assertEqual(ctx.exception.code, 1)
 
     # ── NO1: ENTSO-E → hvakosterstrommen.no ──────────────────────────────────
@@ -1729,14 +1882,14 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         self.assertEqual(plans[0]["price_source"], "hvakosterstrommen.no")
 
     def test_no1_elering_never_called(self):
-        mock_el = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_hv  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_el = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_sah = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_hv  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
         with self.assertRaises(SystemExit):
             self._run_all_patched("NO1",
                                   entsoe_exc=Exception("down"),
-                                  elering_exc=PricesNotYetAvailable("unavailable"),
+                                  elering_exc=mock_el,
                                   mock_sah=mock_sah, mock_fc=mock_fc, mock_hv=mock_hv)
         mock_el.assert_not_called()
 
@@ -1744,19 +1897,19 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             self._run("NO1",
                       entsoe=Exception("down"),
-                      hvakosterstrommen=PricesNotYetAvailable("down"))
+                      hvakosterstrommen=PriceDataUnavailable("down"))
         self.assertEqual(ctx.exception.code, 1)
 
     # ── DE: ENTSO-E only — no fallback at all ────────────────────────────────
 
     def test_de_no_fallback_beyond_entsoe(self):
-        mock_el  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_sah = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
-        mock_fc  = mock.Mock(side_effect=PricesNotYetAvailable("unavailable"))
+        mock_el  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_sah = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
+        mock_fc  = mock.Mock(side_effect=PriceDataUnavailable("unavailable"))
         with self.assertRaises(SystemExit):
             self._run_all_patched("DE",
                                   entsoe_exc=Exception("down"),
-                                  elering_exc=PricesNotYetAvailable("unavailable"),
+                                  elering_exc=mock_el,
                                   mock_sah=mock_sah, mock_fc=mock_fc)
         mock_el.assert_not_called()
         mock_sah.assert_not_called()
@@ -1769,9 +1922,8 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         # 6h of prices won't reach tomorrow noon
         short_prices = self._make_prices(hours=6)
         mock_fc = mock.Mock(side_effect=AssertionError("should not be called"))
-        with mock.patch("charging_planner.fetch_forecast_prices", mock_fc):
-            with self.assertRaises(SystemExit):
-                self._run("EE", entsoe=short_prices)
+        with self.assertRaises(SystemExit):
+            self._run("EE", entsoe=short_prices, forecast=mock_fc)
         mock_fc.assert_not_called()
 
 
@@ -1922,11 +2074,11 @@ class TestForecastDisplayReuse(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, \
              mock.patch("charging_planner.datetime", _FrozenDatetime), \
              mock.patch("charging_planner.fetch_entsoe_prices",
-                        side_effect=cp.PricesNotYetAvailable("x")), \
+                        side_effect=cp.PriceDataUnavailable("x")), \
              mock.patch("charging_planner.fetch_elering_prices",
-                        side_effect=cp.PricesNotYetAvailable("x")), \
+                        side_effect=cp.PriceDataUnavailable("x")), \
              mock.patch("charging_planner.fetch_sahkotin_prices",
-                        side_effect=cp.PricesNotYetAvailable("x")), \
+                        side_effect=cp.PriceDataUnavailable("x")), \
              mock.patch("charging_planner.fetch_forecast_display_slots") as ffds, \
              mock.patch("charging_planner._http_request_with_retry", return_value=json.dumps(
                  [[int(s.start.timestamp() * 1000), 5.0] for s in forecast[::4]])):
@@ -2880,7 +3032,7 @@ class TestSelectWithMinBlock(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, \
              mock.patch("charging_planner.fetch_entsoe_prices", return_value=one_hour), \
              mock.patch("charging_planner.fetch_forecast_prices",
-                        side_effect=PricesNotYetAvailable("forecast unavailable")), \
+                        side_effect=PriceDataUnavailable("forecast unavailable")), \
              mock.patch("charging_planner.fetch_forecast_display_slots", return_value=[]):
             with self.assertRaises(SystemExit) as ctx:
                 cmd_plan({

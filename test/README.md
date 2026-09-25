@@ -1,6 +1,6 @@
 # Test Suite
 
-486 tests across five files. Run from the repo root:
+490 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 342 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 346 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 31 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (342 tests)
+## test_charging_planner.py (346 tests)
 
 #### Config
 
@@ -51,14 +51,19 @@ ENTSO-E XML parsing: slot count, 15-min duration, sort order, ordinal sequencing
 ### TestRealEntsoEData (12)
 Integration tests against a bundled ENTSO-E XML fixture: prices in plausible range, known peak price, `min_slot_minutes` respected, overnight windows stay within window, real-world slot selection.
 
+### TestFetchEntsoePricesCoverage (3)
+Regression: `fetch_entsoe_prices` used to raise `PriceDataUnavailable` whenever its own data didn't reach tomorrow, specifically to trigger the Elering/Sähkötin fallback — but those sources republish the same underlying Nord Pool day-ahead auction, so if ENTSO-E is reachable and parses fine but tomorrow's auction hasn't cleared yet, no other real source has it either (confirmed against a real production log: Elering "succeeded" with data stopping at the exact same timestamp ENTSO-E's own check had already rejected). Confirms partial-but-real coverage now returns normally rather than raising; confirms a genuine absence of usable future data still raises (a different, real failure signal); confirms full coverage reaching tomorrow still works exactly as before. Mutation-checked: reintroducing the old "must reach tomorrow" check makes the first test fail as expected.
+
 ### TestPriceSourceRules (9)
 Price source selection rules (rules 1–4): real prices used when sufficient, forecast display appended, forecast supplement used when window not covered, `price_source` field set correctly, supplement slots tagged `forecasted: true`.
 
 ### TestBuildFallbackChain (21)
 `_build_fallback_chain` composition for every supported area: FI, EE, LV, LT, SE1–SE4, NO1–NO5, unknown area. EIC code equivalence, chain order, cross-area assertions (SE chain ≠ NO chain, no Elering in SE/NO).
 
-### TestAreaFallbackChainIntegration (24)
-`cmd_plan` with all fetchers patched: for each area family (FI, EE, SE1, NO1) — ENTSO-E success, each fallback tried in order when prior fails, sources that should never be called are asserted not called, plan exits when all sources fail.
+### TestAreaFallbackChainIntegration (25)
+`cmd_plan` with all fetchers patched: for each area family (FI, EE, SE1, NO1) — ENTSO-E success, each fallback tried in order when prior fails, sources that should never be called are asserted not called, plan exits when all sources fail. Includes `test_fi_entsoe_short_coverage_still_elering_not_called`, covering the actual regression above at the chain-dispatch level: short (but real) ENTSO-E coverage must not trigger Elering or Sähkötin, and must still correctly reach the forecast supplement.
+
+**Regression in the test helpers themselves, found while adding that test, not introduced by it**: `_run` and `_run_all_patched` used to always wrap every fetch-function argument in a brand-new `mock.Mock()`, even when a test had set up its own outer `mock.patch(..., mock_el)` specifically to assert on it afterward — since `_run`'s own patch is what's actually active during `cmd_plan`'s execution, the caller's mock was shadowed the entire time and never saw whether the real code path called it, making every `mock_x.assert_not_called()` built this way trivially true regardless of what `cmd_plan` actually did. Confirmed concretely: mutating `cmd_plan` to call `fetch_elering_prices` unconditionally right after a successful ENTSO-E fetch did not fail `test_fi_entsoe_success_elering_not_called` before the fix. Nine tests across FI/EE/SE1/NO1/DE were affected; both helpers now use a caller-provided `mock.Mock` directly instead of wrapping it, and every corrected test was re-verified by mutation, not just re-run.
 
 ### TestForecastDisplayReuse (7)
 Regression: `fetch_forecast_prices` (the scheduling fallback, fetched uncapped from "now") and `fetch_forecast_display_slots` (histogram padding, a narrow 24h window) both hit the same `nordpool-predict-fi` endpoint — the display fetch's range is always a strict subset of what the fallback already retrieved. `cmd_plan` used to make both calls unconditionally, wasting a full network round-trip whenever the fallback genuinely triggered (the common case for a weekend `any`/`any` entry before next-day prices publish). Confirms the display fetch is skipped and the already-fetched data still reaches the plan JSON's forecast slots when the fallback ran (both for the supplement case and for forecast winning the fallback chain directly as the primary source, where `all_prices` itself is the reusable data, not a separate variable); confirms the separate display fetch still happens exactly once when neither case applies. Also covers `fetch_forecast_prices`'s own internal-logging redundancy: its `quiet` parameter suppresses its own two log lines (used at the supplement call site, where the caller already reports the one number that matters) while defaulting to normal, ENTSO-E/Elering/Sähkötin-consistent logging when called as a primary source — confirmed both directly and, since a direct-call test alone doesn't prove the real call site actually passes `quiet=True`, through a full `cmd_plan` run patching only the HTTP layer. Mutation-checked at every layer: disabling the display-fetch reuse path, and separately removing `quiet=True` from the call site, each make the corresponding test fail as expected.

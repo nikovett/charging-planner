@@ -649,9 +649,19 @@ def parse_configs(raw: dict) -> "list[Config]":
 ENTSOE_API = "https://web-api.tp.entsoe.eu/api"
 
 
-class PricesNotYetAvailable(Exception):
-    """Raised when ENTSO-E returns no slots for the requested date,
-    typically because next-day prices have not been published yet."""
+class PriceDataUnavailable(Exception):
+    """Raised by any price-fetch function, and by profile planning, when
+    usable price data couldn't be obtained — for any of several distinct
+    reasons: next-day prices genuinely not yet published (temporal), an
+    area not supported by a given source (permanent, not temporal), a
+    fetch or parse failure (technical, not temporal), or — from
+    _plan_one_profile — a profile's window still not covered even after
+    trying forecast supplementation (a scheduling shortfall, not a fetch
+    problem at all). Deliberately one broad exception type rather than
+    several precise ones: what a caller does about it (try the next
+    fallback source, abort the whole run, or skip just this profile) is
+    decided entirely by *where* it's caught, not by which of these reasons
+    produced it — the call site already knows what its own options are."""
 
 
 class ConfigError(Exception):
@@ -695,8 +705,14 @@ def fetch_entsoe_prices(
     tomorrow, so every possible preferred window (same-day or overnight) has
     the slots it needs regardless of what time of day the script runs.
 
-    Returns all slots (including historical), renumbered. Callers filter by their window.
-    Raises if no slots at all are returned (network/auth error).
+    Returns all slots (including historical), renumbered, as long as at least
+    one usable future slot exists — even if coverage doesn't reach tomorrow.
+    Does not fall back to Elering/Sähkötin for that reason: they republish the
+    same underlying Nord Pool day-ahead auction, so if ENTSO-E is reachable
+    but tomorrow's prices haven't cleared yet, no other real source has them
+    either. cmd_plan's own coverage check handles supplementing with forecast
+    when needed. Raises if no slots at all are returned (network/auth error,
+    or genuinely zero usable data).
     """
     eic   = _resolve_area(area)
     today = datetime.now(tz=timezone.utc).date()
@@ -722,7 +738,7 @@ def fetch_entsoe_prices(
                                        retry_codes={404, 500, 502, 503, 504})
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            raise PricesNotYetAvailable(
+            raise PriceDataUnavailable(
                 f"ENTSO-E returned 404 after retries — tomorrow's prices may not be "
                 f"published yet (ENTSO-E publishes at ~12:00 UTC)."
             )
@@ -734,25 +750,28 @@ def fetch_entsoe_prices(
     all_slots = _parse_entsoe_xml(raw, today, area)
 
     if not all_slots:
-        raise PricesNotYetAvailable("No price slots returned from ENTSO-E.")
+        raise PriceDataUnavailable("No price slots returned from ENTSO-E.")
 
     # Return all slots (including historical) renumbered — same as fetch_sahkotin_prices.
     # Past slots are used by the dashboard histogram; the scheduler ignores them
     # because it filters by window start which is always in the future.
     now_utc   = datetime.now(tz=timezone.utc)
-    tomorrow  = (now_utc.date() + timedelta(days=1))
-    # Require slots to extend into tomorrow — if ENTSO-E only returns today's
-    # prices (e.g. during maintenance returning a stale/partial response),
-    # treat it as unavailable so the Sähkötin fallback is tried.
+    # Not requiring slots to reach tomorrow here: ENTSO-E, Elering and Sähkötin
+    # all republish the same underlying Nord Pool day-ahead auction — if ENTSO-E
+    # is reachable but tomorrow's auction hasn't cleared yet, no other real
+    # source will have it either, so falling through to them would just be a
+    # second (or third) network call for data that structurally can't exist
+    # anywhere yet. Accept whatever real data ENTSO-E has and let cmd_plan's
+    # own "does the winning source reach tomorrow noon" check (see cmd_plan)
+    # decide whether to supplement with forecast — the one source that's
+    # actually independent of the auction's publish timing. Only a genuine
+    # fetch failure (network/HTTP/parse error, or zero usable data at all)
+    # should trigger the fallback chain; see the except clauses above and the
+    # check below for those.
     future_slots = [s for s in all_slots if s.start >= now_utc]
     if not future_slots:
-        raise PricesNotYetAvailable("ENTSO-E returned no usable future slots.")
+        raise PriceDataUnavailable("ENTSO-E returned no usable future slots.")
     last_future = max(s.start for s in future_slots)
-    if last_future.date() < tomorrow:
-        raise PricesNotYetAvailable(
-            f"ENTSO-E slots only reach {last_future.strftime('%Y-%m-%d %H:%M UTC')} — "
-            f"tomorrow's prices not yet available. Trying fallback."
-        )
     log.info("Fetched %d total slots (%d future, last: %s)", len(all_slots),
              len(future_slots), last_future.strftime("%Y-%m-%d %H:%M UTC"))
 
@@ -774,10 +793,10 @@ def fetch_sahkotin_prices(area: str = "FI") -> list[Slot]:
     Requests the same wide window as ENTSO-E: yesterday evening through
     the day after tomorrow.
 
-    Raises PricesNotYetAvailable if the fetch fails or returns no usable data.
+    Raises PriceDataUnavailable if the fetch fails or returns no usable data.
     """
     if area.upper() not in ("FI", "10YFI-1--------U"):
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"Sähkötin fallback is only available for area FI (got '{area}')."
         )
     now_utc = datetime.now(tz=timezone.utc)
@@ -793,16 +812,16 @@ def fetch_sahkotin_prices(area: str = "FI") -> list[Slot]:
         raw = _http_request_with_retry(req, timeout=20, retries=3, backoff=3.0,
                                        label="Sähkötin")
     except Exception as e:
-        raise PricesNotYetAvailable(f"Sähkötin fetch failed: {e}")
+        raise PriceDataUnavailable(f"Sähkötin fetch failed: {e}")
 
     try:
         data = json.loads(raw)
         prices = data["prices"]
     except Exception as e:
-        raise PricesNotYetAvailable(f"Sähkötin JSON parse failed: {e}")
+        raise PriceDataUnavailable(f"Sähkötin JSON parse failed: {e}")
 
     if not prices:
-        raise PricesNotYetAvailable("Sähkötin returned no price data.")
+        raise PriceDataUnavailable("Sähkötin returned no price data.")
 
     # Response: [{"date": "2024-01-01T00:00:00.000Z", "value": 4.961}, ...]
     # ?fix converts €/MWh → c€/kWh, so divide by 100 to get €/kWh ex-VAT
@@ -819,11 +838,11 @@ def fetch_sahkotin_prices(area: str = "FI") -> list[Slot]:
         ))
 
     if not slots:
-        raise PricesNotYetAvailable("Sähkötin returned no parseable slots.")
+        raise PriceDataUnavailable("Sähkötin returned no parseable slots.")
 
     # Check there are future slots available for scheduling
     if not any(s.end > now_utc for s in slots):
-        raise PricesNotYetAvailable("Sähkötin returned no usable future slots.")
+        raise PriceDataUnavailable("Sähkötin returned no usable future slots.")
 
     # Return all slots (including historical) renumbered — same as fetch_entsoe_prices.
     # Past slots are used by the dashboard histogram; the scheduler ignores them
@@ -907,12 +926,12 @@ def fetch_elering_prices(area: str = "FI") -> list[Slot]:
     structure as fetch_entsoe_prices — the rest of the pipeline requires no
     changes.
 
-    Raises PricesNotYetAvailable if the area is unsupported, the fetch fails,
+    Raises PriceDataUnavailable if the area is unsupported, the fetch fails,
     or the response contains no usable future data.
     """
     elering_field = ELERING_AREAS.get(area.upper())
     if not elering_field:
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"Elering fallback is not available for area '{area}'. "
             f"Supported: FI, EE, LV, LT."
         )
@@ -930,7 +949,7 @@ def fetch_elering_prices(area: str = "FI") -> list[Slot]:
         raw = _http_request_with_retry(req, timeout=20, retries=3, backoff=3.0,
                                        label="Elering")
     except Exception as e:
-        raise PricesNotYetAvailable(f"Elering fetch failed: {e}")
+        raise PriceDataUnavailable(f"Elering fetch failed: {e}")
 
     try:
         data   = json.loads(raw)
@@ -939,10 +958,10 @@ def fetch_elering_prices(area: str = "FI") -> list[Slot]:
         # Prices are in c€/kWh (confirmed from live data), 15-min native resolution.
         entries = data["data"][elering_field]
     except Exception as e:
-        raise PricesNotYetAvailable(f"Elering JSON parse failed: {e}")
+        raise PriceDataUnavailable(f"Elering JSON parse failed: {e}")
 
     if not entries:
-        raise PricesNotYetAvailable(f"Elering returned no price data for area '{area}'.")
+        raise PriceDataUnavailable(f"Elering returned no price data for area '{area}'.")
 
     # Prices are in EUR/MWh — divide by 1000 to get EUR/kWh ex-VAT.
     # (Session 18 incorrectly noted c€/kWh based on near-zero test prices;
@@ -961,10 +980,10 @@ def fetch_elering_prices(area: str = "FI") -> list[Slot]:
         ))
 
     if not slots:
-        raise PricesNotYetAvailable("Elering returned no parseable slots.")
+        raise PriceDataUnavailable("Elering returned no parseable slots.")
 
     if not any(s.end > now_utc for s in slots):
-        raise PricesNotYetAvailable("Elering returned no usable future slots.")
+        raise PriceDataUnavailable("Elering returned no usable future slots.")
 
     return [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
                  price_eur_kwh=s.price_eur_kwh, slot=i)
@@ -1005,7 +1024,7 @@ def _fetch_nordpool_day(host: str, area_code: str, fetch_date) -> list[Slot]:
 
     Shared by fetch_elprisetjustnu_prices and fetch_hvakosterstrommen_prices.
     Returns an empty list on 404 (tomorrow not yet published).
-    Raises PricesNotYetAvailable on any other failure.
+    Raises PriceDataUnavailable on any other failure.
     """
     date_str = fetch_date.strftime("%Y/%m-%d")
     url      = f"https://{host}/api/v1/prices/{date_str}_{area_code}.json"
@@ -1018,15 +1037,15 @@ def _fetch_nordpool_day(host: str, area_code: str, fetch_date) -> list[Slot]:
         if e.code == 404:
             log.info("%s: no prices for %s yet (404)", area_code, fetch_date)
             return []
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"{host} fetch failed for {fetch_date}: HTTP {e.code}")
     except Exception as e:
-        raise PricesNotYetAvailable(f"{host} fetch failed for {fetch_date}: {e}")
+        raise PriceDataUnavailable(f"{host} fetch failed for {fetch_date}: {e}")
 
     try:
         entries = json.loads(raw)
     except Exception as e:
-        raise PricesNotYetAvailable(f"{host} JSON parse failed for {fetch_date}: {e}")
+        raise PriceDataUnavailable(f"{host} JSON parse failed for {fetch_date}: {e}")
 
     if not isinstance(entries, list) or not entries:
         return []
@@ -1038,11 +1057,11 @@ def _nordpool_finalize(all_slots: list[Slot], host: str, area: str,
                        now_utc: datetime) -> list[Slot]:
     """Deduplicate, sort, check future coverage, renumber. Shared post-processing."""
     if not all_slots:
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"{host}: no price data returned for area '{area}'.")
 
     if not any(s.end > now_utc for s in all_slots):
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"{host}: no usable future slots for area '{area}'.")
 
     seen: set[datetime] = set()
@@ -1056,7 +1075,7 @@ def _nordpool_finalize(all_slots: list[Slot], host: str, area: str,
     last_future  = max(s.start for s in future_slots)
     tomorrow     = now_utc.date() + timedelta(days=1)
     if last_future.date() < tomorrow:
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"{host} slots only reach "
             f"{last_future.strftime('%Y-%m-%d %H:%M UTC')} — "
             f"tomorrow's prices not yet available.")
@@ -1080,12 +1099,12 @@ def fetch_elprisetjustnu_prices(area: str) -> list[Slot]:
     Tomorrow returns 404 until Nord Pool publishes (~13:00 local) — handled
     silently.
 
-    Raises PricesNotYetAvailable if the area is unsupported, a fetch fails,
+    Raises PriceDataUnavailable if the area is unsupported, a fetch fails,
     or the response contains no usable future data.
     """
     area_code = _ELPRISETJUSTNU_AREAS.get(area.upper())
     if not area_code:
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"elprisetjustnu.se is not available for area '{area}'. "
             f"Supported: SE1–SE4.")
 
@@ -1102,7 +1121,7 @@ def fetch_elprisetjustnu_prices(area: str) -> list[Slot]:
                 slot_end      = datetime.fromisoformat(entry["time_end"]).astimezone(timezone.utc)
                 price_eur_kwh = float(entry["EUR_per_kWh"])
             except (KeyError, ValueError) as e:
-                raise PricesNotYetAvailable(
+                raise PriceDataUnavailable(
                     f"{host} entry parse failed: {e} — entry: {entry}")
             # Native 15-min slots — use directly
             all_slots.append(Slot(start=slot_start, end=slot_end,
@@ -1123,12 +1142,12 @@ def fetch_hvakosterstrommen_prices(area: str) -> list[Slot]:
     Tomorrow returns 404 until Nord Pool publishes (~13:00 local) — handled
     silently.
 
-    Raises PricesNotYetAvailable if the area is unsupported, a fetch fails,
+    Raises PriceDataUnavailable if the area is unsupported, a fetch fails,
     or the response contains no usable future data.
     """
     area_code = _HVAKOSTERSTROMMEN_AREAS.get(area.upper())
     if not area_code:
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"hvakosterstrommen.no is not available for area '{area}'. "
             f"Supported: NO1–NO5.")
 
@@ -1145,7 +1164,7 @@ def fetch_hvakosterstrommen_prices(area: str) -> list[Slot]:
                 slot_end      = datetime.fromisoformat(entry["time_end"]).astimezone(timezone.utc)
                 price_eur_kwh = float(entry["EUR_per_kWh"])
             except (KeyError, ValueError) as e:
-                raise PricesNotYetAvailable(
+                raise PriceDataUnavailable(
                     f"{host} entry parse failed: {e} — entry: {entry}")
             # Hourly slots — expand to 4×15-min at the same price
             for q in range(4):
@@ -1170,7 +1189,7 @@ FINLAND_VAT = 1.255  # 25.5%
 def fetch_forecast_prices(area: str = "FI", quiet: bool = False) -> list[Slot]:
     """Fetch hourly price forecast from nordpool-predict-fi as a fallback.
 
-    Only available for the Finnish (FI) bidding zone. Raises PricesNotYetAvailable
+    Only available for the Finnish (FI) bidding zone. Raises PriceDataUnavailable
     for any other area since no equivalent public forecast exists.
 
     The JSON is a list of [unix_ms_utc, price_c_kwh_with_VAT] pairs at hourly
@@ -1189,10 +1208,10 @@ def fetch_forecast_prices(area: str = "FI", quiet: bool = False) -> list[Slot]:
     fallback-chain primary source instead (no separate caller-side line
     exists in that case).
 
-    Raises PricesNotYetAvailable if the fetch fails or returns no usable data.
+    Raises PriceDataUnavailable if the fetch fails or returns no usable data.
     """
     if area.upper() not in ("FI", "10YFI-1--------U"):
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"Forecast fallback is only available for area FI (got '{area}')."
         )
     if not quiet:
@@ -1202,15 +1221,15 @@ def fetch_forecast_prices(area: str = "FI", quiet: bool = False) -> list[Slot]:
         raw = _http_request_with_retry(req, timeout=15, retries=3, backoff=3.0,
                                        label="nordpool-predict-fi")
     except Exception as e:
-        raise PricesNotYetAvailable(f"Forecast fallback fetch failed: {e}")
+        raise PriceDataUnavailable(f"Forecast fallback fetch failed: {e}")
 
     try:
         data = json.loads(raw)
     except Exception as e:
-        raise PricesNotYetAvailable(f"Forecast fallback JSON parse failed: {e}")
+        raise PriceDataUnavailable(f"Forecast fallback JSON parse failed: {e}")
 
     if not data:
-        raise PricesNotYetAvailable("Forecast fallback returned empty data.")
+        raise PriceDataUnavailable("Forecast fallback returned empty data.")
 
     now_utc = datetime.now(tz=timezone.utc)
     slots: list[Slot] = []
@@ -1234,7 +1253,7 @@ def fetch_forecast_prices(area: str = "FI", quiet: bool = False) -> list[Slot]:
             ))
 
     if not slots:
-        raise PricesNotYetAvailable("Forecast fallback returned no usable future slots.")
+        raise PriceDataUnavailable("Forecast fallback returned no usable future slots.")
 
     # Return only non-past slots, renumbered — identical to fetch_entsoe_prices output
     usable = [s for s in slots if s.end > now_utc]
@@ -1391,7 +1410,7 @@ def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[Slot]
     unique = _xml_deduplicate(raw)
 
     if not unique:
-        raise PricesNotYetAvailable(
+        raise PriceDataUnavailable(
             f"No price slots found for area={area} date={target_date}."
         )
 
@@ -2746,7 +2765,7 @@ def _select_slots(
             )
             used_forecast = True
         else:
-            raise PricesNotYetAvailable(
+            raise PriceDataUnavailable(
                 f"Profile '{cfg.name}': window not fully covered and no forecast slots available."
             )
 
@@ -3266,7 +3285,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                 price_source = source_name
             log.info("Using %s prices.", price_source)
             break
-        except PricesNotYetAvailable as exc:
+        except PriceDataUnavailable as exc:
             log.warning("%s unavailable (%s)%s.", source_name, exc,
                         " — trying next source" if not is_last else "")
         except Exception as exc:
@@ -3313,7 +3332,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                 price_source = "forecast"
                 log.info("Supplemented with %d forecast slots (price_source=forecast).",
                          len(supplement))
-            except PricesNotYetAvailable as exc:
+            except PriceDataUnavailable as exc:
                 log.warning("%s", exc)
                 sys.exit(1)
 
@@ -3362,7 +3381,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                 supplement_starts=supplement_starts,
             )
             plans.append(plan)
-        except PricesNotYetAvailable as exc:
+        except PriceDataUnavailable as exc:
             log.warning("%s — skipping profile.", exc)
             skipped.append(cfg.name)
 

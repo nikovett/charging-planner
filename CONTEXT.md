@@ -114,7 +114,7 @@ The planner and delivery are deliberately two separate processes, not two functi
 
 ### Fallback chain
 
-Built dynamically from the configured area by `_build_fallback_chain(area)`. Each source raises `PricesNotYetAvailable` on failure; the next source in the chain is tried automatically.
+Built dynamically from the configured area by `_build_fallback_chain(area)`. Each source raises `PriceDataUnavailable` on failure; the next source in the chain is tried automatically.
 
 ```
 FI:        ENTSO-E → Elering → Sähkötin → nordpool-predict-fi (forecast)
@@ -126,7 +126,7 @@ other:     ENTSO-E only
 
 All sources use EUR/kWh ex-VAT. ENTSO-E returns EUR/MWh for all areas including SE and NO; the regional sources also provide EUR/kWh directly (SEK and NOK fields are present in SE/NO responses but unused — **why**: converting through SEK/NOK would need a live FX rate, an extra failure mode for no benefit when the source already provides EUR directly).
 
-1. **ENTSO-E** — primary. Day-ahead 15-min prices. Retries 5×, backoff 5s. Raises `PricesNotYetAvailable` if slots don't reach tomorrow (catches partial/stale responses e.g. during maintenance).
+1. **ENTSO-E** — primary. Day-ahead 15-min prices. Retries 5×, backoff 5s. Accepts any real future data, however short — does not raise for coverage falling short of tomorrow (see "ENTSO-E no longer triggers Elering/Sähkötin just for short coverage" below for why). Still raises `PriceDataUnavailable` for a genuine fetch/parse failure or zero usable future slots.
 2. **Elering** (`dashboard.elering.ee/api`) — actual Nord Pool 15-min prices for FI/EE/LV/LT. No API key. `price_source: "Elering"` in plan JSON, no dashboard warning.
 3. **Sähkötin** (`sahkotin.fi/api`) — actual Nord Pool 15-min prices, FI only, no API key. `price_source: "Sähkötin"`.
 4. **nordpool-predict-fi** — ML forecast blended with realized prices. FI only. `price_source: "forecast"` in plan JSON; triggers dashboard warning.
@@ -153,6 +153,14 @@ Three explicitly named pools, kept separate to stop data leaking across calculat
 - `display_prices` — all real slots including historical; used only for `price_slots` JSON output (the dashboard histogram wants the full history)
 - `future_prices` — real slots from now onwards; used for `price_stats`, the optimal-comparison calculation, and the scheduler itself
 - `forecast_slots` — predicted slots; appended to `price_slots` for display, never used in cost calculations or selection directly (selection only reaches forecast data via the coverage-supplement path above, which is deliberately separate)
+
+### ENTSO-E no longer triggers Elering/Sähkötin just for short coverage
+
+`fetch_entsoe_prices` used to raise `PriceDataUnavailable` whenever its own data didn't reach tomorrow — specifically to trigger the fallback chain. But ENTSO-E, Elering and Sähkötin all republish the *same* underlying Nord Pool day-ahead auction. If ENTSO-E is reachable and parses fine but tomorrow's auction hasn't cleared yet, no other real source has it either — confirmed against a real production log, not just reasoning about it: Elering "succeeded" immediately after ENTSO-E's own check rejected the data, with both stopping at the *exact same* timestamp. The Elering call added nothing; it just made the log read "Using Elering prices." when nothing had actually changed, right before the supplement warning fired anyway.
+
+Fixed: ENTSO-E now accepts whatever real future data it has and returns normally, exactly matching Elering's and Sähkötin's own (always-had) behavior. It still raises for a genuine absence of usable data (zero future slots at all, or a fetch failure) — that's a different, real signal worth falling back for. The area-specific 404 handling is unchanged for the same reason: a 404 means the *entire* requested period came back empty, not just short, which is different enough from "some real data, just not enough" that it wasn't touched by this fix.
+
+**A genuine, pre-existing test-infrastructure bug found while adding integration coverage for this fix, not introduced by it**: `TestAreaFallbackChainIntegration`'s `_run` helper always wrapped every fetch-function argument in a brand-new `mock.Mock()`, even when a test had already set up its own outer `mock.patch(..., mock_el)` specifically to assert on it afterward. Since `_run`'s own patch is what's actually active during `cmd_plan`'s execution (it runs *inside* the outer one), the caller's mock was shadowed for the entire call and never saw whether the real code path called it or not — making every `mock_x.assert_not_called()` built this way trivially true regardless of what `cmd_plan` actually did. Confirmed concretely, not just suspected: mutating `cmd_plan` to call `fetch_elering_prices` unconditionally right after a successful ENTSO-E fetch did not fail `test_fi_entsoe_success_elering_not_called` before this was fixed. Nine tests across FI/EE/SE1/NO1/DE were affected and corrected — `_run` and `_run_all_patched` now use a caller-provided `mock.Mock` directly instead of wrapping it, so passing a mock as the parameter (rather than relying on an outer `mock.patch`) is what actually makes it the active, inspectable one. Every corrected test was re-verified by mutation, not just re-run.
 
 ### Forecast display padding reuses the fallback fetch when one already happened
 
