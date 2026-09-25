@@ -1,18 +1,15 @@
 """
 Tests for charging_planner.py
 ==============================
-Organised by feature area:
+Organised by pipeline stage, mirroring CONTEXT.md's Reference section:
 
-  1. Configuration — parsing, validation, error handling
-  2. Time utilities — _hhmm_to_utc, _is_overnight, _resolve_window_utc
-  3. Window filtering — filter_preferred_window (same-day and overnight)
-  4. Slot selection — select_charging_windows, _best_continuous_window
-  5. Spillover — _select_spillover
-  6. Plan building
-  7. Plan building — build_plan, PlanParams
-  8. OCPP profile — build_ocpp_charging_profile, schema validation
-  9. XML parsing — _parse_entsoe_xml with realistic XML
- 10. End-to-end pipeline — cmd_plan with synthetic prices
+  1. Config — parsing, validation, day-key/window-string translation
+  2. Price acquisition — XML/fallback-chain parsing and dispatch
+  3. Window resolution — schedule entries, planning horizon, time utilities
+  4. Slot selection — filtering, spillover, the DP and its variants
+  5. Plan output — build_plan, OCPP profile, config.json
+  6. Display/reporting — console summary, GHA step summary
+  7. Integration — cmd_plan end to end, log verbosity
 """
 
 import contextlib
@@ -137,9 +134,275 @@ def make_plan_params(slots: list[Slot], selected: list[Slot],
     defaults.update(overrides)
     return PlanParams(**defaults)
 
+MINIMAL_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">
+  <TimeSeries>
+    <Period>
+      <timeInterval>
+        <start>2026-03-14T23:00Z</start>
+        <end>2026-03-15T23:00Z</end>
+      </timeInterval>
+      <resolution>PT15M</resolution>
+      <Point><position>1</position><price.amount>3.00</price.amount></Point>
+      <Point><position>5</position><price.amount>1.50</price.amount></Point>
+      <Point><position>9</position><price.amount>3.50</price.amount></Point>
+    </Period>
+  </TimeSeries>
+</Publication_MarketDocument>
+"""
+
+DUAL_SERIES_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">
+  <TimeSeries>
+    <Period>
+      <timeInterval>
+        <start>2026-03-13T23:00Z</start>
+        <end>2026-03-14T23:00Z</end>
+      </timeInterval>
+      <resolution>PT15M</resolution>
+      <Point><position>1</position><price.amount>2.00</price.amount></Point>
+    </Period>
+  </TimeSeries>
+  <TimeSeries>
+    <Period>
+      <timeInterval>
+        <start>2026-03-14T23:00Z</start>
+        <end>2026-03-15T23:00Z</end>
+      </timeInterval>
+      <resolution>PT15M</resolution>
+      <Point><position>1</position><price.amount>4.00</price.amount></Point>
+    </Period>
+  </TimeSeries>
+</Publication_MarketDocument>
+"""
+
+ERROR_XML = """\
+<Acknowledgement_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:acknowledgementdocument:7:1">
+  <Reason><code>999</code><text>Invalid security token</text></Reason>
+</Acknowledgement_MarketDocument>
+"""
+
+REAL_ENTSOE_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">
+<mRID>67ae7c1eb55f4a02b089a2fa84863e19</mRID>
+<revisionNumber>1</revisionNumber>
+<type>A44</type>
+<createdDateTime>2026-03-14T15:10:13Z</createdDateTime>
+<period.timeInterval>
+  <start>2026-03-12T23:00Z</start>
+  <end>2026-03-14T23:00Z</end>
+</period.timeInterval>
+<TimeSeries>
+  <mRID>1</mRID>
+  <businessType>A62</businessType>
+  <in_Domain.mRID codingScheme="A01">10YFI-1--------U</in_Domain.mRID>
+  <out_Domain.mRID codingScheme="A01">10YFI-1--------U</out_Domain.mRID>
+  <currency_Unit.name>EUR</currency_Unit.name>
+  <price_Measure_Unit.name>MWH</price_Measure_Unit.name>
+  <curveType>A03</curveType>
+  <Period>
+    <timeInterval>
+      <start>2026-03-12T23:00Z</start>
+      <end>2026-03-13T23:00Z</end>
+    </timeInterval>
+    <resolution>PT15M</resolution>
+    <Point><position>1</position><price.amount>2.07</price.amount></Point>
+    <Point><position>2</position><price.amount>2</price.amount></Point>
+    <Point><position>5</position><price.amount>1.99</price.amount></Point>
+    <Point><position>7</position><price.amount>1.98</price.amount></Point>
+    <Point><position>8</position><price.amount>1.97</price.amount></Point>
+    <Point><position>9</position><price.amount>1.5</price.amount></Point>
+    <Point><position>10</position><price.amount>1.48</price.amount></Point>
+    <Point><position>11</position><price.amount>1.32</price.amount></Point>
+    <Point><position>13</position><price.amount>1.95</price.amount></Point>
+    <Point><position>17</position><price.amount>1.82</price.amount></Point>
+    <Point><position>18</position><price.amount>1.96</price.amount></Point>
+    <Point><position>19</position><price.amount>1.99</price.amount></Point>
+    <Point><position>21</position><price.amount>2.04</price.amount></Point>
+    <Point><position>22</position><price.amount>2.41</price.amount></Point>
+    <Point><position>23</position><price.amount>2.63</price.amount></Point>
+    <Point><position>24</position><price.amount>2.62</price.amount></Point>
+    <Point><position>25</position><price.amount>3</price.amount></Point>
+    <Point><position>26</position><price.amount>3.99</price.amount></Point>
+    <Point><position>27</position><price.amount>4</price.amount></Point>
+    <Point><position>28</position><price.amount>4.19</price.amount></Point>
+    <Point><position>29</position><price.amount>5</price.amount></Point>
+    <Point><position>30</position><price.amount>4.96</price.amount></Point>
+    <Point><position>31</position><price.amount>4.99</price.amount></Point>
+    <Point><position>32</position><price.amount>4.98</price.amount></Point>
+    <Point><position>33</position><price.amount>4.99</price.amount></Point>
+    <Point><position>34</position><price.amount>4.79</price.amount></Point>
+    <Point><position>35</position><price.amount>3.38</price.amount></Point>
+    <Point><position>36</position><price.amount>2.69</price.amount></Point>
+    <Point><position>37</position><price.amount>2.68</price.amount></Point>
+    <Point><position>38</position><price.amount>2.63</price.amount></Point>
+    <Point><position>39</position><price.amount>2.56</price.amount></Point>
+    <Point><position>40</position><price.amount>2.3</price.amount></Point>
+    <Point><position>41</position><price.amount>2.54</price.amount></Point>
+    <Point><position>42</position><price.amount>2.12</price.amount></Point>
+    <Point><position>43</position><price.amount>2.1</price.amount></Point>
+    <Point><position>44</position><price.amount>2</price.amount></Point>
+    <Point><position>46</position><price.amount>2.02</price.amount></Point>
+    <Point><position>47</position><price.amount>1.99</price.amount></Point>
+    <Point><position>49</position><price.amount>2</price.amount></Point>
+    <Point><position>53</position><price.amount>1.99</price.amount></Point>
+    <Point><position>54</position><price.amount>2</price.amount></Point>
+    <Point><position>55</position><price.amount>2.1</price.amount></Point>
+    <Point><position>56</position><price.amount>2.15</price.amount></Point>
+    <Point><position>57</position><price.amount>1.97</price.amount></Point>
+    <Point><position>58</position><price.amount>2.07</price.amount></Point>
+    <Point><position>59</position><price.amount>2.14</price.amount></Point>
+    <Point><position>60</position><price.amount>2.85</price.amount></Point>
+    <Point><position>61</position><price.amount>2.33</price.amount></Point>
+    <Point><position>62</position><price.amount>3.06</price.amount></Point>
+    <Point><position>63</position><price.amount>3.39</price.amount></Point>
+    <Point><position>64</position><price.amount>4.99</price.amount></Point>
+    <Point><position>65</position><price.amount>5.29</price.amount></Point>
+    <Point><position>66</position><price.amount>6.3</price.amount></Point>
+    <Point><position>67</position><price.amount>6.83</price.amount></Point>
+    <Point><position>68</position><price.amount>8.25</price.amount></Point>
+    <Point><position>69</position><price.amount>7.06</price.amount></Point>
+    <Point><position>70</position><price.amount>7.94</price.amount></Point>
+    <Point><position>71</position><price.amount>8</price.amount></Point>
+    <Point><position>72</position><price.amount>8.56</price.amount></Point>
+    <Point><position>73</position><price.amount>8.17</price.amount></Point>
+    <Point><position>74</position><price.amount>8.2</price.amount></Point>
+    <Point><position>75</position><price.amount>8.35</price.amount></Point>
+    <Point><position>76</position><price.amount>8.5</price.amount></Point>
+    <Point><position>77</position><price.amount>8.46</price.amount></Point>
+    <Point><position>78</position><price.amount>8.12</price.amount></Point>
+    <Point><position>79</position><price.amount>7.92</price.amount></Point>
+    <Point><position>80</position><price.amount>7.56</price.amount></Point>
+    <Point><position>82</position><price.amount>7.47</price.amount></Point>
+    <Point><position>83</position><price.amount>7.22</price.amount></Point>
+    <Point><position>84</position><price.amount>6.47</price.amount></Point>
+    <Point><position>85</position><price.amount>7.02</price.amount></Point>
+    <Point><position>86</position><price.amount>6.98</price.amount></Point>
+    <Point><position>87</position><price.amount>6.88</price.amount></Point>
+    <Point><position>88</position><price.amount>6.37</price.amount></Point>
+    <Point><position>89</position><price.amount>6.46</price.amount></Point>
+    <Point><position>90</position><price.amount>6.18</price.amount></Point>
+    <Point><position>91</position><price.amount>6.04</price.amount></Point>
+    <Point><position>92</position><price.amount>5.37</price.amount></Point>
+    <Point><position>93</position><price.amount>5.57</price.amount></Point>
+    <Point><position>94</position><price.amount>5.47</price.amount></Point>
+    <Point><position>95</position><price.amount>5.28</price.amount></Point>
+    <Point><position>96</position><price.amount>5.08</price.amount></Point>
+  </Period>
+</TimeSeries>
+<TimeSeries>
+  <mRID>2</mRID>
+  <businessType>A62</businessType>
+  <in_Domain.mRID codingScheme="A01">10YFI-1--------U</in_Domain.mRID>
+  <out_Domain.mRID codingScheme="A01">10YFI-1--------U</out_Domain.mRID>
+  <currency_Unit.name>EUR</currency_Unit.name>
+  <price_Measure_Unit.name>MWH</price_Measure_Unit.name>
+  <curveType>A03</curveType>
+  <Period>
+    <timeInterval>
+      <start>2026-03-13T23:00Z</start>
+      <end>2026-03-14T23:00Z</end>
+    </timeInterval>
+    <resolution>PT15M</resolution>
+    <Point><position>1</position><price.amount>4.99</price.amount></Point>
+    <Point><position>5</position><price.amount>4.84</price.amount></Point>
+    <Point><position>6</position><price.amount>4.95</price.amount></Point>
+    <Point><position>7</position><price.amount>4.99</price.amount></Point>
+    <Point><position>9</position><price.amount>4.93</price.amount></Point>
+    <Point><position>10</position><price.amount>4.96</price.amount></Point>
+    <Point><position>11</position><price.amount>4.99</price.amount></Point>
+    <Point><position>12</position><price.amount>5</price.amount></Point>
+    <Point><position>14</position><price.amount>5.08</price.amount></Point>
+    <Point><position>15</position><price.amount>5.48</price.amount></Point>
+    <Point><position>16</position><price.amount>5.89</price.amount></Point>
+    <Point><position>17</position><price.amount>7.78</price.amount></Point>
+    <Point><position>18</position><price.amount>8.03</price.amount></Point>
+    <Point><position>19</position><price.amount>8.36</price.amount></Point>
+    <Point><position>20</position><price.amount>9.05</price.amount></Point>
+    <Point><position>21</position><price.amount>8.52</price.amount></Point>
+    <Point><position>22</position><price.amount>9.35</price.amount></Point>
+    <Point><position>23</position><price.amount>10.47</price.amount></Point>
+    <Point><position>24</position><price.amount>11.48</price.amount></Point>
+    <Point><position>25</position><price.amount>9.48</price.amount></Point>
+    <Point><position>26</position><price.amount>10.57</price.amount></Point>
+    <Point><position>27</position><price.amount>11.36</price.amount></Point>
+    <Point><position>28</position><price.amount>11.52</price.amount></Point>
+    <Point><position>29</position><price.amount>12.45</price.amount></Point>
+    <Point><position>30</position><price.amount>12.51</price.amount></Point>
+    <Point><position>31</position><price.amount>12.79</price.amount></Point>
+    <Point><position>32</position><price.amount>13.2</price.amount></Point>
+    <Point><position>33</position><price.amount>13.24</price.amount></Point>
+    <Point><position>34</position><price.amount>13.64</price.amount></Point>
+    <Point><position>35</position><price.amount>14.24</price.amount></Point>
+    <Point><position>36</position><price.amount>17.88</price.amount></Point>
+    <Point><position>37</position><price.amount>13.37</price.amount></Point>
+    <Point><position>38</position><price.amount>14.16</price.amount></Point>
+    <Point><position>39</position><price.amount>18.36</price.amount></Point>
+    <Point><position>40</position><price.amount>22.1</price.amount></Point>
+    <Point><position>41</position><price.amount>14.99</price.amount></Point>
+    <Point><position>42</position><price.amount>16.7</price.amount></Point>
+    <Point><position>43</position><price.amount>19.94</price.amount></Point>
+    <Point><position>44</position><price.amount>22.19</price.amount></Point>
+    <Point><position>45</position><price.amount>17.94</price.amount></Point>
+    <Point><position>46</position><price.amount>19.99</price.amount></Point>
+    <Point><position>47</position><price.amount>19.92</price.amount></Point>
+    <Point><position>48</position><price.amount>21.47</price.amount></Point>
+    <Point><position>49</position><price.amount>17.89</price.amount></Point>
+    <Point><position>50</position><price.amount>19.41</price.amount></Point>
+    <Point><position>51</position><price.amount>20.84</price.amount></Point>
+    <Point><position>52</position><price.amount>21.87</price.amount></Point>
+    <Point><position>53</position><price.amount>15.86</price.amount></Point>
+    <Point><position>54</position><price.amount>18.3</price.amount></Point>
+    <Point><position>55</position><price.amount>21.97</price.amount></Point>
+    <Point><position>56</position><price.amount>25.07</price.amount></Point>
+    <Point><position>57</position><price.amount>18.17</price.amount></Point>
+    <Point><position>58</position><price.amount>21.73</price.amount></Point>
+    <Point><position>59</position><price.amount>24.53</price.amount></Point>
+    <Point><position>60</position><price.amount>27.99</price.amount></Point>
+    <Point><position>61</position><price.amount>22.92</price.amount></Point>
+    <Point><position>62</position><price.amount>28.33</price.amount></Point>
+    <Point><position>63</position><price.amount>30</price.amount></Point>
+    <Point><position>64</position><price.amount>32.79</price.amount></Point>
+    <Point><position>65</position><price.amount>27.51</price.amount></Point>
+    <Point><position>66</position><price.amount>29.99</price.amount></Point>
+    <Point><position>67</position><price.amount>32.8</price.amount></Point>
+    <Point><position>68</position><price.amount>35.31</price.amount></Point>
+    <Point><position>69</position><price.amount>30.31</price.amount></Point>
+    <Point><position>70</position><price.amount>30.82</price.amount></Point>
+    <Point><position>71</position><price.amount>31.96</price.amount></Point>
+    <Point><position>72</position><price.amount>31.32</price.amount></Point>
+    <Point><position>73</position><price.amount>31.92</price.amount></Point>
+    <Point><position>74</position><price.amount>30.62</price.amount></Point>
+    <Point><position>75</position><price.amount>35</price.amount></Point>
+    <Point><position>76</position><price.amount>32</price.amount></Point>
+    <Point><position>77</position><price.amount>31.99</price.amount></Point>
+    <Point><position>78</position><price.amount>30</price.amount></Point>
+    <Point><position>79</position><price.amount>28</price.amount></Point>
+    <Point><position>80</position><price.amount>26.08</price.amount></Point>
+    <Point><position>81</position><price.amount>31.11</price.amount></Point>
+    <Point><position>82</position><price.amount>29.64</price.amount></Point>
+    <Point><position>83</position><price.amount>27.94</price.amount></Point>
+    <Point><position>84</position><price.amount>26.99</price.amount></Point>
+    <Point><position>85</position><price.amount>29.81</price.amount></Point>
+    <Point><position>86</position><price.amount>30</price.amount></Point>
+    <Point><position>89</position><price.amount>34.97</price.amount></Point>
+    <Point><position>90</position><price.amount>32</price.amount></Point>
+    <Point><position>91</position><price.amount>30.26</price.amount></Point>
+    <Point><position>92</position><price.amount>30</price.amount></Point>
+    <Point><position>93</position><price.amount>30.88</price.amount></Point>
+    <Point><position>94</position><price.amount>29.99</price.amount></Point>
+    <Point><position>95</position><price.amount>27.93</price.amount></Point>
+    <Point><position>96</position><price.amount>26.26</price.amount></Point>
+  </Period>
+</TimeSeries>
+</Publication_MarketDocument>
+"""
+
 
 # ===========================================================================
-# 1. Configuration
+# Config
 # ===========================================================================
 
 class TestConfigValidation(unittest.TestCase):
@@ -238,107 +501,6 @@ class TestConfigValidation(unittest.TestCase):
     def test_string_max_windows_raises(self):
         with self.assertRaises(ConfigError):
             validate_plan_config(self._cfg(max_windows="unlimited"))
-
-
-class TestAvgPriceCeiling(unittest.TestCase):
-    """Tests for max_price_cents_kwh: avg dynamic ceiling."""
-
-    # validate_plan_config expects charging as a single dict (not a list)
-    BASE_VALIDATE = {
-        "entsoe": {"api_key": "test", "area": "FI"},
-        "charging": {
-            "required_hours": 1,
-            "preferred_window_start": "22:00",
-            "preferred_window_end": "06:30",
-        },
-    }
-
-    # parse_configs expects charging as a list
-    BASE_PARSE = {
-        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
-        "charging": [{
-            "name": "topup",
-            "required_hours": 1,
-            "preferred_window_start": "22:00",
-            "preferred_window_end": "06:30",
-        }],
-    }
-
-    def _validate_cfg(self, ceil):
-        import copy
-        cfg = copy.deepcopy(self.BASE_VALIDATE)
-        cfg["charging"]["max_price_cents_kwh"] = ceil
-        return cfg
-
-    def _parse_cfg(self, ceil):
-        import copy
-        cfg = copy.deepcopy(self.BASE_PARSE)
-        cfg["charging"][0]["max_price_cents_kwh"] = ceil
-        return cfg
-
-    def test_avg_accepted_in_validation(self):
-        """'avg' is a valid value for max_price_cents_kwh."""
-        validate_plan_config(self._validate_cfg("avg"))  # should not raise
-
-    def test_avg_case_insensitive(self):
-        """'AVG' and 'Avg' are also valid."""
-        for val in ("AVG", "Avg"):
-            validate_plan_config(self._validate_cfg(val))  # should not raise
-
-    def test_numeric_still_valid(self):
-        """Numeric price ceiling still accepted."""
-        validate_plan_config(self._validate_cfg(5.0))  # should not raise
-
-    def test_invalid_string_rejected(self):
-        """Arbitrary strings are rejected."""
-        with self.assertRaises(ConfigError):
-            validate_plan_config(self._validate_cfg("max"))
-
-    def test_avg_sets_max_price_is_avg_flag(self):
-        """Parsing 'avg' sets max_price_is_avg=True and max_price_eur=None."""
-        configs = parse_configs(self._parse_cfg("avg"))
-        self.assertTrue(configs[0].max_price_is_avg)
-        self.assertIsNone(configs[0].max_price_eur)
-
-    def test_numeric_ceiling_leaves_flag_false(self):
-        """Numeric ceiling leaves max_price_is_avg=False."""
-        configs = parse_configs(self._parse_cfg(5.0))
-        self.assertFalse(configs[0].max_price_is_avg)
-        self.assertAlmostEqual(configs[0].max_price_eur, 0.05)
-
-    def test_avg_resolves_to_market_average(self):
-        """When avg ceiling is set, charging slots are at or below market average."""
-        import charging_planner as cp
-        import tempfile
-
-        _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return _FROZEN_NOW if tz is None else _FROZEN_NOW.astimezone(tz)
-
-        # 50 cheap slots at 0.01 EUR, 50 expensive at 0.09 EUR → avg = 0.05 EUR = 5 c€/kWh
-        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
-        slots = []
-        for i in range(100):
-            t = base + timedelta(minutes=15 * i)
-            price = 0.01 if i < 50 else 0.09
-            slots.append(Slot(start=t, end=t+timedelta(minutes=15),
-                              duration_minutes=15, price_eur_kwh=price, slot=i))
-
-        cfg = self._parse_cfg("avg")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch("charging_planner.datetime", _FrozenDatetime):
-                with mock.patch("charging_planner.fetch_entsoe_prices", return_value=slots):
-                    with mock.patch("charging_planner.fetch_forecast_display_slots", return_value=[]):
-                        plans = cp.cmd_plan(cfg, output_dir=tmpdir)
-
-        charging = [s for s in plans[0]["price_slots"] if s["charging"]]
-        for s in charging:
-            self.assertLessEqual(s["price_cents_kwh"], 5.0 + 0.001,
-                f"Slot {s['start_utc']} price {s['price_cents_kwh']} exceeds avg ceiling")
 
 
 class TestParseConfigs(unittest.TestCase):
@@ -493,10 +655,6 @@ class TestParseConfigs(unittest.TestCase):
                 },
             })
 
-
-# ===========================================================================
-# Config format translation
-# ===========================================================================
 
 class TestParseDayKey(unittest.TestCase):
 
@@ -733,990 +891,110 @@ class TestTranslateConfig(unittest.TestCase):
             os.unlink(path)
 
 
-# ===========================================================================
-# Schedule window resolution
-# ===========================================================================
+class TestAvgPriceCeiling(unittest.TestCase):
+    """Tests for max_price_cents_kwh: avg dynamic ceiling."""
 
-class TestResolveScheduleWindow(unittest.TestCase):
+    # validate_plan_config expects charging as a single dict (not a list)
+    BASE_VALIDATE = {
+        "entsoe": {"api_key": "test", "area": "FI"},
+        "charging": {
+            "required_hours": 1,
+            "preferred_window_start": "22:00",
+            "preferred_window_end": "06:30",
+        },
+    }
 
-    def _make_cfg(self, schedule):
-        from dataclasses import replace
+    # parse_configs expects charging as a list
+    BASE_PARSE = {
+        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
+        "charging": [{
+            "name": "topup",
+            "required_hours": 1,
+            "preferred_window_start": "22:00",
+            "preferred_window_end": "06:30",
+        }],
+    }
+
+    def _validate_cfg(self, ceil):
         import copy
-        raw = {
-            "entsoe": {"api_key": "abc", "area": "FI", "timezone": "Europe/Helsinki"},
-            "charging": [{
-                "name": "test",
-                "required_hours": 2,
-                "preferred_window_start": "22:00",
-                "preferred_window_end": "06:30",
-                "schedule": schedule,
-            }],
-        }
-        return parse_configs(raw)[0]
+        cfg = copy.deepcopy(self.BASE_VALIDATE)
+        cfg["charging"]["max_price_cents_kwh"] = ceil
+        return cfg
 
-    def test_weekday_matches_schedule_entry(self):
-        cfg = self._make_cfg([
-            {"days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
-             "preferred_window_start": "22:00", "preferred_window_end": "06:30"},
-            {"days": ["saturday", "sunday"],
-             "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
-        ])
-        # 2026-03-21 is a Saturday
-        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
-        self.assertEqual(start, "00:00")
-        self.assertEqual(end, "23:45")
+    def _parse_cfg(self, ceil):
+        import copy
+        cfg = copy.deepcopy(self.BASE_PARSE)
+        cfg["charging"][0]["max_price_cents_kwh"] = ceil
+        return cfg
 
-    def test_weekday_falls_back_to_default(self):
-        cfg = self._make_cfg([
-            {"days": ["saturday", "sunday"],
-             "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
-        ])
-        # 2026-03-16 is a Monday — no matching entry
-        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 16))
-        self.assertEqual(start, "22:00")
-        self.assertEqual(end, "06:30")
+    def test_avg_accepted_in_validation(self):
+        """'avg' is a valid value for max_price_cents_kwh."""
+        validate_plan_config(self._validate_cfg("avg"))  # should not raise
 
-    def test_empty_schedule_returns_defaults(self):
-        cfg = self._make_cfg([])
-        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
-        self.assertEqual(start, "22:00")
-        self.assertEqual(end, "06:30")
+    def test_avg_case_insensitive(self):
+        """'AVG' and 'Avg' are also valid."""
+        for val in ("AVG", "Avg"):
+            validate_plan_config(self._validate_cfg(val))  # should not raise
 
-    def test_first_matching_entry_wins(self):
-        cfg = self._make_cfg([
-            {"days": ["saturday"],
-             "preferred_window_start": "08:00", "preferred_window_end": "20:00"},
-            {"days": ["sunday"],
-             "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
-        ])
-        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
-        self.assertEqual(start, "08:00")
+    def test_numeric_still_valid(self):
+        """Numeric price ceiling still accepted."""
+        validate_plan_config(self._validate_cfg(5.0))  # should not raise
 
-    def test_any_window_returns_sentinel(self):
-        cfg = self._make_cfg([
-            {"days": ["saturday", "sunday"],
-             "preferred_window_start": "any", "preferred_window_end": "any"},
-        ])
-        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
-        self.assertEqual(start, "any")
-        self.assertEqual(end, "any")
+    def test_invalid_string_rejected(self):
+        """Arbitrary strings are rejected."""
+        with self.assertRaises(ConfigError):
+            validate_plan_config(self._validate_cfg("max"))
 
+    def test_avg_sets_max_price_is_avg_flag(self):
+        """Parsing 'avg' sets max_price_is_avg=True and max_price_eur=None."""
+        configs = parse_configs(self._parse_cfg("avg"))
+        self.assertTrue(configs[0].max_price_is_avg)
+        self.assertIsNone(configs[0].max_price_eur)
 
+    def test_numeric_ceiling_leaves_flag_false(self):
+        """Numeric ceiling leaves max_price_is_avg=False."""
+        configs = parse_configs(self._parse_cfg(5.0))
+        self.assertFalse(configs[0].max_price_is_avg)
+        self.assertAlmostEqual(configs[0].max_price_eur, 0.05)
 
+    def test_avg_resolves_to_market_average(self):
+        """When avg ceiling is set, charging slots are at or below market average."""
+        import charging_planner as cp
+        import tempfile
 
-class TestHhmmToUtc(unittest.TestCase):
+        _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
 
-    def test_utc_timezone(self):
-        result = _hhmm_to_utc("12:00", REF_DATE, UTC)
-        self.assertEqual(result, datetime(2026, 3, 15, 12, 0, tzinfo=UTC))
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return _FROZEN_NOW if tz is None else _FROZEN_NOW.astimezone(tz)
 
-    def test_positive_offset(self):
-        # Helsinki EET = UTC+2; 00:00 local = 22:00 UTC prev day
-        result = _hhmm_to_utc("00:00", REF_DATE, FI_TZ)
-        self.assertEqual(result, datetime(2026, 3, 14, 22, 0, tzinfo=UTC))
+        # 50 cheap slots at 0.01 EUR, 50 expensive at 0.09 EUR → avg = 0.05 EUR = 5 c€/kWh
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        slots = []
+        for i in range(100):
+            t = base + timedelta(minutes=15 * i)
+            price = 0.01 if i < 50 else 0.09
+            slots.append(Slot(start=t, end=t+timedelta(minutes=15),
+                              duration_minutes=15, price_eur_kwh=price, slot=i))
 
-    def test_with_minutes(self):
-        result = _hhmm_to_utc("06:30", REF_DATE, FI_TZ)
-        self.assertEqual(result, datetime(2026, 3, 15, 4, 30, tzinfo=UTC))
+        cfg = self._parse_cfg("avg")
 
-    def test_dst_transition(self):
-        # 2026-03-29: Helsinki clocks forward at 03:00 EET → 04:00 EEST
-        # Before transition: 01:00 Helsinki = 23:00 UTC
-        # After transition: 04:00 Helsinki = 01:00 UTC
-        dst_date = date(2026, 3, 29)
-        result = _hhmm_to_utc("04:00", dst_date, FI_TZ)
-        self.assertEqual(result, datetime(2026, 3, 29, 1, 0, tzinfo=UTC))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with mock.patch("charging_planner.datetime", _FrozenDatetime):
+                with mock.patch("charging_planner.fetch_entsoe_prices", return_value=slots):
+                    with mock.patch("charging_planner.fetch_forecast_display_slots", return_value=[]):
+                        plans = cp.cmd_plan(cfg, output_dir=tmpdir)
 
-
-class TestIsOvernight(unittest.TestCase):
-
-    def test_same_day_not_overnight(self):
-        self.assertFalse(_is_overnight("00:00", "06:30"))
-        self.assertFalse(_is_overnight("08:00", "22:00"))
-
-    def test_overnight_detected(self):
-        self.assertTrue(_is_overnight("22:00", "06:30"))
-        self.assertTrue(_is_overnight("23:00", "01:00"))
-
-
-class TestResolveWindowUtc(unittest.TestCase):
-
-    def test_same_day_window_end_after_start(self):
-        start, end = _resolve_window_utc("00:00", "06:00", FI_TZ,
-                                          _anchor_date=REF_DATE)
-        self.assertGreater(end, start)
-
-    def test_same_day_values(self):
-        # REF_DATE 2026-03-15, EET = UTC+2
-        # 00:00 local = 2026-03-14T22:00Z, 06:00 local = 2026-03-15T04:00Z
-        start, end = _resolve_window_utc("00:00", "06:00", FI_TZ,
-                                          _anchor_date=REF_DATE)
-        self.assertEqual(start, datetime(2026, 3, 14, 22, 0, tzinfo=UTC))
-        self.assertEqual(end,   datetime(2026, 3, 15, 4,  0, tzinfo=UTC))
-
-    def test_overnight_end_on_next_day(self):
-        # 22:00–06:30 overnight: end must be after start in UTC
-        start, end = _resolve_window_utc("22:00", "06:30", FI_TZ,
-                                          _anchor_date=REF_DATE)
-        self.assertGreater(end, start)
-
-    def test_overnight_end_utc_values(self):
-        # REF_DATE 2026-03-15 is EET (UTC+2)
-        # 22:00 Helsinki = 20:00 UTC; 06:30 next day Helsinki = 04:30 UTC
-        start, end = _resolve_window_utc("22:00", "06:30", FI_TZ,
-                                          _anchor_date=REF_DATE)
-        self.assertEqual(start, datetime(2026, 3, 15, 20, 0,  tzinfo=UTC))
-        self.assertEqual(end,   datetime(2026, 3, 16, 4,  30, tzinfo=UTC))
+        charging = [s for s in plans[0]["price_slots"] if s["charging"]]
+        for s in charging:
+            self.assertLessEqual(s["price_cents_kwh"], 5.0 + 0.001,
+                f"Slot {s['start_utc']} price {s['price_cents_kwh']} exceeds avg ceiling")
 
 
 # ===========================================================================
-# 2b. Planning horizon resolution
+# Price acquisition
 # ===========================================================================
-
-class TestResolvePlanningHorizon(unittest.TestCase):
-    """Covers the scenario matrix worked out for the 'delayed run' fix: which
-    window instance (yesterday's still-open tail, today's, or tomorrow's)
-    _resolve_planning_horizon targets, for every window shape and every
-    before/live/elapsed timing relative to now.
-
-    All dates below are in EET (UTC+2, before the 2026-03-29 DST transition)
-    unless noted. now_utc is passed explicitly — no datetime mocking needed.
-    """
-
-    DAY1 = date(2026, 3, 17)   # Tuesday
-    DAY2 = date(2026, 3, 18)   # Wednesday
-
-    def _far_future_prices(self):
-        # Reaches well past any plan_horizon_utc used in these tests, so
-        # any_end_cap is governed by plan_horizon, not by data availability.
-        return [make_slot(datetime(2026, 3, 21, 0, 0, tzinfo=UTC))]
-
-    # --- Overnight, fixed (21:00-06:30 EET = 19:00-04:30 UTC) ---
-
-    def test_overnight_before_start_targets_today(self):
-        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
-        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)   # 12:00 EET, well before 19:00Z
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-        self.assertEqual(plan_date, self.DAY1)
-        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
-        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
-
-    def test_overnight_live_evening_half_still_targets_today(self):
-        # The bug this whole fix is for: a delayed run firing after start.
-        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
-        now = datetime(2026, 3, 17, 21, 0, tzinfo=UTC)   # 23:00 EET — after 19:00Z start
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-        self.assertEqual(plan_date, self.DAY1, "must NOT skip to tomorrow")
-        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
-        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
-
-    def test_overnight_live_early_morning_tail_targets_yesterday(self):
-        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
-        now = datetime(2026, 3, 18, 2, 0, tzinfo=UTC)    # 04:00 EET — inside 3/17's tail
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-        self.assertEqual(plan_date, self.DAY1, "must catch yesterday's still-open window")
-        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
-        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
-
-    def test_overnight_after_both_closed_targets_tonight(self):
-        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
-        now = datetime(2026, 3, 18, 6, 0, tzinfo=UTC)    # 08:00 EET — well past 04:30Z end
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-        self.assertEqual(plan_date, self.DAY2)
-        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
-        self.assertEqual(we, datetime(2026, 3, 19, 4, 30, tzinfo=UTC))
-
-    # --- Same-day, fixed (09:00-17:00 EET = 07:00-15:00 UTC) ---
-
-    def test_same_day_before_start_targets_today(self):
-        cfg = make_config(preferred_window_start="09:00", preferred_window_end="17:00")
-        now = datetime(2026, 3, 17, 5, 0, tzinfo=UTC)    # 07:00 EET, before 07:00Z start
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-        self.assertEqual(plan_date, self.DAY1)
-        self.assertEqual(ws, datetime(2026, 3, 17, 7, 0, tzinfo=UTC))
-        self.assertEqual(we, datetime(2026, 3, 17, 15, 0, tzinfo=UTC))
-
-    def test_same_day_live_still_targets_today(self):
-        cfg = make_config(preferred_window_start="09:00", preferred_window_end="17:00")
-        now = datetime(2026, 3, 17, 8, 0, tzinfo=UTC)    # 10:00 EET — inside 07:00-15:00Z
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-        self.assertEqual(plan_date, self.DAY1, "must NOT skip to tomorrow")
-        self.assertEqual(ws, datetime(2026, 3, 17, 7, 0, tzinfo=UTC))
-        self.assertEqual(we, datetime(2026, 3, 17, 15, 0, tzinfo=UTC))
-
-    def test_same_day_after_end_targets_tomorrow(self):
-        cfg = make_config(preferred_window_start="09:00", preferred_window_end="17:00")
-        now = datetime(2026, 3, 17, 16, 0, tzinfo=UTC)   # 18:00 EET — after 15:00Z end
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-        self.assertEqual(plan_date, self.DAY2)
-        self.assertEqual(ws, datetime(2026, 3, 18, 7, 0, tzinfo=UTC))
-        self.assertEqual(we, datetime(2026, 3, 18, 15, 0, tzinfo=UTC))
-
-    # --- any / any ---
-
-    def test_any_any_always_live_from_now(self):
-        cfg = make_config(preferred_window_any=True,
-                          preferred_window_start="any", preferred_window_end="any")
-        now = datetime(2026, 3, 17, 8, 0, tzinfo=UTC)
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
-            cfg, now, FI_TZ, self._far_future_prices(),
-        )
-        self.assertEqual(ws, now)
-        self.assertEqual(ss, "any")
-        self.assertEqual(es, "any")
-
-    # --- any start, fixed end ---
-    #
-    # window_start_any / window_end_any count as "schedule or any" (matching
-    # the original code's own trigger condition), so these go through the
-    # day-ahead (tomorrow-indexed) branch just like a real schedule would —
-    # the fixed end is always tomorrow's occurrence, regardless of whether
-    # today's own occurrence has already passed. There's no "is today's
-    # occurrence still valid" nuance for this shape in that branch, matching
-    # the original code's own behavior for it exactly (see the docstring's
-    # "Schedule (or top-level any) present" case).
-
-    def test_any_start_fixed_end_always_targets_tomorrows_occurrence(self):
-        cfg = make_config(window_start_any=True, preferred_window_end="06:30")
-        for label, now in [
-            ("before today's end", datetime(2026, 3, 17, 2, 0, tzinfo=UTC)),
-            ("after today's end",  datetime(2026, 3, 17, 5, 0, tzinfo=UTC)),
-        ]:
-            with self.subTest(label):
-                ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
-                self.assertEqual(ws, now)
-                self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
-                self.assertEqual(plan_date, self.DAY1, "ws falls on today's date since start=now")
-
-    # --- fixed start, any end ---
-    #
-    # Same day-ahead indexing as above: candidate 1 (today's own entry) only
-    # ever applies to overnight shapes, so a "fixed start, any end" entry is
-    # always reached via candidate 2, anchored to tomorrow.
-
-    def test_fixed_start_any_end_before_start(self):
-        cfg = make_config(preferred_window_start="21:00", window_end_any=True)
-        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
-            cfg, now, FI_TZ, self._far_future_prices(),
-        )
-        self.assertEqual(plan_date, self.DAY2)
-        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
-        self.assertEqual(es, "any")
-
-    def test_fixed_start_any_end_required_hours_still_bounds_the_cap(self):
-        # any_end_cap is min(last available price, plan_horizon) regardless
-        # of which candidate is used — a required_minutes that can't fit
-        # before that cap is still meaningful, even though this shape is
-        # always tomorrow-anchored (no live/elapsed check on this branch).
-        cfg = make_config(preferred_window_start="21:00", window_end_any=True,
-                          required_minutes=60)
-        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
-            cfg, now, FI_TZ, self._far_future_prices(),
-        )
-        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
-        self.assertEqual(we, datetime(2026, 3, 18, 23, 0, tzinfo=UTC))
-        self.assertEqual(es, "any")
-
-    def test_any_end_bound_by_realistic_price_data_not_plan_horizon(self):
-        # Regression: every other test in this class uses
-        # _far_future_prices() specifically so plan_horizon is always the
-        # binding constraint on any_end_cap — none of them verify the
-        # actually-common case, where realistic (near-term) price data is
-        # the *more* restrictive bound. Real day-ahead prices only ever
-        # cover roughly today + tomorrow (published once daily) — an
-        # any/any window must never be planned as if cheap prices existed
-        # further out than they actually do.
-        #
-        # Friday run: real prices exist for Friday (published Thursday) and
-        # Saturday (published Friday, "day-ahead" for tomorrow) — nothing
-        # for Sunday yet, since that only publishes on Saturday itself.
-        cfg = make_config(schedule=[
-            {"days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
-             "preferred_window_start": "21:00", "preferred_window_end": "06:30",
-             "required_hours": 3.5},
-            {"days": ["saturday", "sunday"],
-             "preferred_window_start": "any", "preferred_window_end": "any",
-             "required_hours": 4.5},
-        ])
-        realistic_prices = [
-            make_slot(datetime(2026, 9, 24, 21, 0, tzinfo=UTC)   # Friday 00:00 EEST
-                     + timedelta(minutes=15 * i))
-            for i in range(191)   # Fri 00:00 EEST -> Sat 23:45 EEST, nothing beyond
-        ]
-        last_real_price_end = max(s.end for s in realistic_prices)
-
-        now = datetime(2026, 9, 25, 13, 0, tzinfo=UTC)   # Friday 16:00 EEST
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
-            cfg, now, FI_TZ, realistic_prices,
-        )
-        self.assertEqual(ss, "any")
-        self.assertEqual(we, last_real_price_end,
-                         "any-any window end must be bound by the actual last "
-                         "real price slot, not extended into Sunday just "
-                         "because a generic plan_horizon ceiling allows it")
-        self.assertEqual(we.astimezone(FI_TZ).date(), date(2026, 9, 26),
-                         "must stop at Saturday night local — never reach Sunday, "
-                         "which has no real published prices yet from Friday's run")
-
-    # --- schedule spanning a weekday/weekend-shape boundary ---
-    #
-    # A schedule entry is indexed by the day the charging is *for*: the
-    # "monday" entry describes the session that gets the car ready for
-    # Monday, which for an overnight shape actually starts Sunday evening.
-    # This is the exact regression caught in production: on a Sunday with a
-    # weekday-overnight/weekend-any schedule, targeting Sunday's own any/any
-    # entry meant Monday's fixed window was never even considered.
-
-    def test_schedule_regression_weekend_any_does_not_mask_weekday_overnight(self):
-        # The precise scenario from the production bug report: Saturday and
-        # Sunday are any/any, Monday-Friday are a fixed overnight window.
-        # A normal Sunday-afternoon run must still target Monday's fixed
-        # window (starting Sunday evening), not Sunday's own any/any.
-        cfg = make_config(schedule=[
-            {"days": ["saturday", "sunday"], "preferred_window_start": "any", "preferred_window_end": "any"},
-            {"days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
-             "preferred_window_start": "21:00", "preferred_window_end": "06:30"},
-        ])
-        now = datetime(2026, 3, 15, 14, 0, tzinfo=UTC)   # 2026-03-15 is REF_DATE, a Sunday; 16:00 EET
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
-            cfg, now, FI_TZ, self._far_future_prices(),
-        )
-        self.assertEqual(ss, "21:00", "must use Monday's fixed window, not Sunday's any/any")
-        self.assertEqual(es, "06:30")
-        self.assertEqual(ws, datetime(2026, 3, 15, 19, 0, tzinfo=UTC), "starts Sunday evening")
-        self.assertEqual(we, datetime(2026, 3, 16, 4, 30, tzinfo=UTC))
-        self.assertEqual(plan_date, REF_DATE)   # Sunday — the date the window starts on
-
-    def test_schedule_yesterday_tail_uses_todays_own_schedule_entry(self):
-        # Wednesday's own entry (21:00-06:30, describing the session that
-        # gets the car ready for Wednesday) actually starts Tuesday evening.
-        # Checked early Wednesday morning, its tail must still be caught —
-        # via WEDNESDAY's (today's) own entry, not Tuesday's (which could be
-        # any shape at all and is never even queried for this check).
-        cfg = make_config(schedule=[
-            {"days": ["wednesday"], "preferred_window_start": "21:00", "preferred_window_end": "06:30"},
-            {"days": ["thursday"],  "preferred_window_start": "any",   "preferred_window_end": "any"},
-        ])
-        now = datetime(2026, 3, 18, 2, 0, tzinfo=UTC)    # 04:00 EET Wednesday
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
-            cfg, now, FI_TZ, self._far_future_prices(),
-        )
-        self.assertEqual(ss, "21:00")
-        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC), "starts Tuesday evening")
-        self.assertEqual(plan_date, self.DAY1)   # Tuesday — the date the window starts on
-
-    def test_schedule_elapsed_today_rolls_to_tomorrows_own_shape(self):
-        # Tuesday: same-day 09:00-17:00, already elapsed. Wednesday: any/any.
-        # Must resolve via WEDNESDAY's entry for the rollover (candidate 1
-        # only ever applies to overnight shapes, so same-day never blocks
-        # this transition).
-        cfg = make_config(schedule=[
-            {"days": ["tuesday"],   "preferred_window_start": "09:00", "preferred_window_end": "17:00"},
-            {"days": ["wednesday"], "preferred_window_start": "any",   "preferred_window_end": "any"},
-        ])
-        now = datetime(2026, 3, 17, 16, 0, tzinfo=UTC)   # 18:00 EET Tuesday — after 15:00Z end
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
-            cfg, now, FI_TZ, self._far_future_prices(),
-        )
-        self.assertEqual(ss, "any")
-        self.assertEqual(es, "any")
-        self.assertEqual(ws, now)
-        self.assertEqual(plan_date, self.DAY1, "ws falls on today's date since any/any starts now")
-
-    def test_schedule_required_hours_override_follows_target_date(self):
-        # Monday run targets Tuesday's entry (day-ahead) — its override must
-        # be the one that comes back, not any other date's.
-        cfg = make_config(schedule=[
-            {"days": ["tuesday"], "preferred_window_start": "21:00",
-             "preferred_window_end": "06:30", "required_hours": 3.5},
-        ])
-        now = datetime(2026, 3, 16, 10, 0, tzinfo=UTC)   # Monday, well before the target window
-        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
-            cfg, now, FI_TZ, self._far_future_prices(),
-        )
-        self.assertEqual(req, 210)   # 3.5h
-        self.assertEqual(ws, datetime(2026, 3, 16, 19, 0, tzinfo=UTC))
-
-
-class TestClassifyWindowInstance(unittest.TestCase):
-    """Direct tests of _classify_window_instance's "fixed start, any end"
-    elapsed behavior (required_minutes no longer fits before any_end_cap) —
-    not reachable via _resolve_planning_horizon for this shape combination,
-    since window_end_any always routes through the tomorrow-anchored branch
-    there (matching the original code's own behavior for it), but the
-    behavior itself is real and worth covering directly."""
-
-    def _far_future_prices(self):
-        return [make_slot(datetime(2026, 3, 21, 0, 0, tzinfo=UTC))]
-
-    def test_live_when_required_still_fits(self):
-        cfg = make_config(required_minutes=60)
-        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)
-        any_end_cap = datetime(2026, 3, 18, 23, 0, tzinfo=UTC)   # ~27h out
-        result = _classify_window_instance(
-            "21:00", "any", None, date(2026, 3, 17), now, any_end_cap, cfg, FI_TZ,
-        )
-        self.assertIsNotNone(result)
-        ws, we, ss, es, req = result
-        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
-        self.assertEqual(we, any_end_cap)
-
-    def test_elapsed_when_required_no_longer_fits(self):
-        cfg = make_config(required_minutes=40 * 60)   # 40h — more than the ~27h available
-        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)
-        any_end_cap = datetime(2026, 3, 18, 23, 0, tzinfo=UTC)
-        result = _classify_window_instance(
-            "21:00", "any", None, date(2026, 3, 17), now, any_end_cap, cfg, FI_TZ,
-        )
-        self.assertIsNone(result, "40h no longer fits before the cap — must classify as elapsed")
-
-    def test_before_start_always_upcoming_regardless_of_required(self):
-        cfg = make_config(required_minutes=40 * 60)
-        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)   # before 19:00Z start
-        any_end_cap = datetime(2026, 3, 18, 23, 0, tzinfo=UTC)
-        result = _classify_window_instance(
-            "21:00", "any", None, date(2026, 3, 17), now, any_end_cap, cfg, FI_TZ,
-        )
-        self.assertIsNotNone(result, "not started yet — required-fits check shouldn't even apply")
-
-
-
-# ===========================================================================
-# 3. Window filtering
-# ===========================================================================
-
-class TestFilterPreferredWindow(unittest.TestCase):
-
-    def _run(self, slots, start_hhmm, end_hhmm, anchor=REF_DATE):
-        ws, we = _resolve_window_utc(start_hhmm, end_hhmm, FI_TZ,
-                                      _anchor_date=anchor)
-        return filter_preferred_window(slots, ws, we, start_hhmm, end_hhmm)
-
-    def test_slots_inside_same_day_window(self):
-        # 00:00–06:00 Helsinki; slots at 01:00, 03:00, 08:00 local
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)  # 00:00 Helsinki
-        slots = [
-            make_slot(base + timedelta(hours=1)),   # 01:00 — inside
-            make_slot(base + timedelta(hours=3)),   # 03:00 — inside
-            make_slot(base + timedelta(hours=8)),   # 08:00 — outside
-        ]
-        inside, outside = self._run(slots, "00:00", "06:00")
-        self.assertEqual(len(inside),  2)
-        self.assertEqual(len(outside), 1)
-
-    def test_overnight_evening_slots_inside(self):
-        # 22:00–06:30 window; slot at 22:30 Helsinki (tonight) should be inside
-        base = datetime(2026, 3, 15, 20, 30, tzinfo=UTC)  # 22:30 Helsinki
-        slots = [make_slot(base)]
-        inside, _ = self._run(slots, "22:00", "06:30")
-        self.assertEqual(len(inside), 1)
-
-    def test_overnight_morning_slots_inside(self):
-        # 06:00 Helsinki next morning = 03:00 UTC — inside 22:00–06:30 window
-        base = datetime(2026, 3, 16, 3, 0, tzinfo=UTC)  # 06:00 Helsinki
-        slots = [make_slot(base)]
-        inside, _ = self._run(slots, "22:00", "06:30")
-        self.assertEqual(len(inside), 1)
-
-    def test_overnight_midday_slots_outside(self):
-        # 14:00 Helsinki = 12:00 UTC — outside 22:00–06:30 window
-        base = datetime(2026, 3, 15, 12, 0, tzinfo=UTC)
-        slots = [make_slot(base)]
-        _, outside = self._run(slots, "22:00", "06:30")
-        self.assertEqual(len(outside), 1)
-
-    def test_empty_input(self):
-        inside, outside = self._run([], "00:00", "06:00")
-        self.assertEqual(inside, [])
-        self.assertEqual(outside, [])
-
-
-# ===========================================================================
-# 4. Slot selection
-# ===========================================================================
-
-class TestSelectChargingWindows(unittest.TestCase):
-
-    def _slots(self, count=24, price_cents=3.0):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        return slots_from(base, count, price_cents=price_cents)
-
-    def test_selects_required_minutes(self):
-        selected = select_charging_windows(self._slots(), required_minutes=60)
-        total = sum(s.duration_minutes for s in selected)
-        self.assertEqual(total, 60)
-
-    def test_selects_cheapest_slots(self):
-        slots = self._slots(24, price_cents=5.0)
-        # Make slots 4–7 cheaper
-        for i in [4, 5, 6, 7]:
-            slots[i] = replace(slots[i], price_eur_kwh=0.01)
-        selected = select_charging_windows(slots, required_minutes=60)
-        cheap_starts = {slots[i].start for i in [4, 5, 6, 7]}
-        self.assertTrue(all(s.start in cheap_starts for s in selected))
-
-    def test_max_windows_1_returns_one_block(self):
-        slots = self._slots(24)
-        selected = select_charging_windows(slots, required_minutes=60,
-                                           max_windows=1)
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        self.assertEqual(len(groups), 1)
-
-    def test_min_slot_minutes_enforced(self):
-        slots = self._slots(24)
-        selected = select_charging_windows(slots, required_minutes=120,
-                                           min_slot_minutes=30)
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        for group in groups:
-            duration = sum(s.duration_minutes for s in group)
-            self.assertGreaterEqual(duration, 30)
-
-    def test_max_price_ceiling_respected(self):
-        slots = self._slots(24, price_cents=5.0)
-        # Only 4 slots are cheap enough
-        for i in range(4):
-            slots[i] = replace(slots[i], price_eur_kwh=0.01)
-        selected = select_charging_windows(slots, required_minutes=60,
-                                           max_price=0.02)
-        self.assertLessEqual(len(selected), 4)
-        for s in selected:
-            self.assertLessEqual(s.price_eur_kwh, 0.02)
-
-    def test_empty_prices_returns_empty(self):
-        self.assertEqual(select_charging_windows([], required_minutes=60), [])
-
-    def test_latest_slot_preferred_on_equal_price(self):
-        # All slots same price — should prefer the latest ones
-        slots = self._slots(8)
-        selected = select_charging_windows(slots, required_minutes=15)
-        self.assertEqual(selected[0].start, slots[-1].start)
-
-
-class TestBestContinuousWindow(unittest.TestCase):
-
-    def _slots(self, count=8):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        return slots_from(base, count)
-
-    def test_returns_cheapest_continuous_window(self):
-        slots = self._slots(8)
-        # Make slots 2–5 cheaper
-        for i in [2, 3, 4, 5]:
-            slots[i] = replace(slots[i], price_eur_kwh=0.01)
-        result = _best_continuous_window(slots, slots, n_slots=4)
-        self.assertEqual(len(result), 4)
-        self.assertEqual(result[0].start, slots[2].start)
-
-    def test_fallback_stays_within_candidates(self):
-        slots = self._slots(8)
-        # Only slots 0–1 and 6–7 are candidates — no 4-slot window fits
-        candidates = [s for i, s in enumerate(slots) if i in (0, 1, 6, 7)]
-        result = _best_continuous_window(candidates, slots, n_slots=4)
-        # Returns longest contiguous block within candidates, not outside
-        candidate_starts = {s.start for s in candidates}
-        for s in result:
-            self.assertIn(s.start, candidate_starts)
-
-    def test_respects_temporal_continuity(self):
-        # Build slots with a time gap in the middle
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        evening = slots_from(base, 4)
-        morning = slots_from(base + timedelta(hours=6), 4)  # gap of 5h
-        all_slots = evening + morning
-        result = _best_continuous_window(all_slots, all_slots, n_slots=4)
-        # Result must be temporally contiguous — no gap
-        for i in range(len(result) - 1):
-            self.assertEqual(result[i].end, result[i + 1].start)
-
-
-# ===========================================================================
-# 5. Spillover
-# ===========================================================================
-
-class TestSelectSpillover(unittest.TestCase):
-
-    def _window_utc(self, start_hhmm, end_hhmm):
-        return _resolve_window_utc(start_hhmm, end_hhmm, FI_TZ,
-                                    _anchor_date=REF_DATE)
-
-    def test_no_spill_when_satisfied(self):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        selected = slots_from(base, 8)  # 2h
-        ws, we = self._window_utc("00:00", "06:00")
-        result = _select_spillover(
-            outside=[], selected=selected,
-            max_windows=None, win_end_utc=we, win_end_local="06:00",
-            required_minutes=120, remaining=0,
-            max_price_eur=None, min_slot_minutes=30, all_prices=selected,
-        )
-        self.assertEqual(result, [])
-
-    def test_noncontinuous_spill_stays_before_window_end(self):
-        ws, we = self._window_utc("00:00", "04:00")
-        # inside: 2h; need 4h total → 2h spill from outside (before window)
-        before_base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
-        outside = slots_from(before_base, 8, price_cents=2.0)
-        inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 8)
-        result = _select_spillover(
-            outside=outside, selected=inside,
-            max_windows=None, win_end_utc=we, win_end_local="04:00",
-            required_minutes=240, remaining=120,
-            max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
-        )
-        for s in result:
-            self.assertLessEqual(s.end, we)
-
-    def test_continuous_spill_extends_leftward(self):
-        ws, we = self._window_utc("02:00", "05:00")
-        # 3h window, need 5h — must extend 2h leftward
-        inside_base  = datetime(2026, 3, 15, 0, 0, tzinfo=UTC)  # 02:00 Helsinki
-        outside_base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)  # before window
-        inside  = slots_from(inside_base,  12)
-        outside = slots_from(outside_base, 8)
-        result = _select_spillover(
-            outside=outside, selected=inside,
-            max_windows=1, win_end_utc=we, win_end_local="05:00",
-            required_minutes=300, remaining=120,
-            max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
-        )
-        # Spill slots must be adjacent to the selected block (extend leftward)
-        all_selected = sorted(inside + result, key=lambda s: s.start)
-        for i in range(len(all_selected) - 1):
-            self.assertEqual(all_selected[i].end, all_selected[i + 1].start)
-
-    def test_spill_remaining_less_than_min_slot(self):
-        # Regression: remaining=15 with min_slot_minutes=30 previously returned
-        # nothing because _select_with_min_block couldn't form a valid 30-min block
-        # from a single 15-min spillover slot. Spillover should ignore min_slot_minutes.
-        ws, we = self._window_utc("00:00", "04:00")
-        before_base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
-        outside = slots_from(before_base, 4, price_cents=2.0)  # 4 × 15-min slots before window
-        inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 7)  # 7 slots = 105 min
-        result = _select_spillover(
-            outside=outside, selected=inside,
-            max_windows=None, win_end_utc=we, win_end_local="04:00",
-            required_minutes=120, remaining=15,
-            max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
-        )
-        self.assertEqual(len(result), 1, "Should fill the 15-min deficit with one spillover slot")
-        total = sum(s.duration_minutes for s in result)
-        self.assertEqual(total, 15)
-
-    def test_no_spill_after_window_end(self):
-        ws, we = self._window_utc("00:00", "04:00")
-        after_base = datetime(2026, 3, 15, 2, 30, tzinfo=UTC)  # 04:30 Helsinki — past window end
-        outside = slots_from(after_base, 8)
-        inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 4)
-        result = _select_spillover(
-            outside=outside, selected=inside,
-            max_windows=None, win_end_utc=we, win_end_local="04:00",
-            required_minutes=120, remaining=60,
-            max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
-        )
-        for s in result:
-            self.assertLessEqual(s.end, we)
-
-
-# ===========================================================================
-# 7. Plan building
-# ===========================================================================
-
-class TestBuildPlan(unittest.TestCase):
-
-    def _make(self, n_slots=8, price_cents=3.0, **overrides):
-        base     = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        slots    = slots_from(base, n_slots, price_cents=price_cents)
-        selected = slots[:4]
-        windows  = merge_continuous_slots(selected)
-        p        = make_plan_params(slots, selected, windows, **overrides)
-        return build_plan(p)
-
-    def test_plan_has_required_keys(self):
-        plan = self._make()
-        for key in ("version", "date", "area", "windows",
-                    "window_starts_utc", "window_ends_utc",
-                    "required_minutes", "total_minutes",
-                    "max_windows", "ocpp_charging_profile"):
-            self.assertIn(key, plan)
-
-    def test_max_windows_null_by_default(self):
-        plan = self._make()
-        self.assertIsNone(plan["max_windows"])
-
-    def test_max_windows_reflects_config(self):
-        plan = self._make(max_windows=1)
-        self.assertEqual(plan["max_windows"], 1)
-        plan = self._make(max_windows=3)
-        self.assertEqual(plan["max_windows"], 3)
-
-    def test_total_minutes_correct(self):
-        plan = self._make(n_slots=8)
-        self.assertEqual(plan["total_minutes"], 60)  # 4 × 15min
-
-    def test_window_utc_times_are_iso_strings(self):
-        plan = self._make()
-        for ts in plan["window_starts_utc"] + plan["window_ends_utc"]:
-            datetime.fromisoformat(ts)  # should not raise
-
-    def test_price_stats_present(self):
-        plan = self._make()
-        ps = plan["price_stats"]
-        self.assertIn("min_cents_kwh", ps)
-        self.assertIn("avg_cents_kwh", ps)
-        self.assertIn("max_cents_kwh", ps)
-
-    def test_generated_at_reflects_param(self):
-        gen = datetime(2026, 3, 14, 12, 27, 41, tzinfo=UTC)
-        plan = self._make(generated_at=gen)
-        self.assertEqual(datetime.fromisoformat(plan["generated_at"]), gen)
-
-    def test_generated_at_null_when_not_provided(self):
-        plan = self._make()
-        self.assertIsNone(plan["generated_at"])
-
-    def test_configured_window_start_utc_reflects_param(self):
-        ws = datetime(2026, 3, 14, 19, 0, tzinfo=UTC)
-        plan = self._make(window_start_utc=ws)
-        self.assertEqual(datetime.fromisoformat(plan["configured_window_start_utc"]), ws)
-
-    def test_configured_window_start_utc_null_when_not_provided(self):
-        plan = self._make()
-        self.assertIsNone(plan["configured_window_start_utc"])
-
-    def test_schedule_uses_forecast_false_for_real_prices(self):
-        plan = self._make()
-        self.assertFalse(plan["schedule_uses_forecast"])
-
-    def test_schedule_uses_forecast_true_when_a_scheduled_slot_is_forecasted(self):
-        base     = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        slots    = slots_from(base, 8, price_cents=3.0)
-        selected = slots[:4]
-        windows  = merge_continuous_slots(selected)
-        # Mark one of the SELECTED slots as having come from the forecast
-        # supplement (supplement_starts is how build_plan learns this).
-        p = make_plan_params(slots, selected, windows,
-                             supplement_starts={selected[0].start})
-        plan = build_plan(p)
-        self.assertTrue(plan["schedule_uses_forecast"])
-
-    def test_schedule_uses_forecast_false_when_only_unscheduled_slots_are_forecasted(self):
-        # A forecast slot exists in the display data but wasn't selected for
-        # charging — the schedule itself doesn't rely on it.
-        base     = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        slots    = slots_from(base, 8, price_cents=3.0)
-        selected = slots[:4]
-        windows  = merge_continuous_slots(selected)
-        p = make_plan_params(slots, selected, windows,
-                             supplement_starts={slots[6].start})  # not in selected
-        plan = build_plan(p)
-        self.assertFalse(plan["schedule_uses_forecast"])
-
-
-# ===========================================================================
-# 8. OCPP profile
-# ===========================================================================
-
-SCHEMA_16_PATH  = "test/ocpp16/OCPP_1.6_documentation/schemas/json/SetChargingProfile.json"
-SCHEMA_201_PATH = "test/ocpp201/OCPP-2.0.1_all_files/OCPP-2.0.1_part3_JSON_schemas.zip"
-SCHEMA_21_PATH  = "test/ocpp21/OCPP-2.1_all_files/OCPP-2.1_part3_JSON_schemas.zip"
-
-
-def _load_schema_201():
-    zf = zipfile.ZipFile(SCHEMA_201_PATH)
-    return json.loads(zf.read(
-        "OCPP-2.0.1_part3_JSON_schemas/SetChargingProfileRequest.json"))
-
-
-def _load_schema_21():
-    zf = zipfile.ZipFile(SCHEMA_21_PATH)
-    return json.loads(zf.read(
-        "OCPP-2.1_part3_JSON_schemas/SetChargingProfileRequest.json"))
-
-
-def _load_schema_16():
-    return json.load(open(SCHEMA_16_PATH))
-
-
-class TestOcppChargingProfile(unittest.TestCase):
-
-    PLAN_SINGLE = {
-        "window_starts_utc": ["2026-03-14T22:00:00+00:00"],
-        "window_ends_utc":   ["2026-03-15T04:00:00+00:00"],
-    }
-    PLAN_TWO_WINDOWS = {
-        "window_starts_utc": [
-            "2026-03-14T22:00:00+00:00",
-            "2026-03-15T02:00:00+00:00",
-        ],
-        "window_ends_utc": [
-            "2026-03-15T00:00:00+00:00",
-            "2026-03-15T04:00:00+00:00",
-        ],
-    }
-
-    def _validate_against(self, profile, schema_props, required_fields,
-                          allowed_fields):
-        missing = [f for f in required_fields if f not in profile]
-        extra   = [f for f in profile if f not in allowed_fields]
-        self.assertEqual(missing, [], f"Missing fields: {missing}")
-        self.assertEqual(extra,   [], f"Extra fields not in schema: {extra}")
-
-    def test_empty_plan_returns_empty_dict(self):
-        self.assertEqual(build_ocpp_charging_profile({}), {})
-
-    def test_single_window_schedule(self):
-        profile = build_ocpp_charging_profile(self.PLAN_SINGLE)
-        periods = profile["chargingSchedule"]["chargingSchedulePeriod"]
-        self.assertEqual(len(periods), 1)
-        self.assertEqual(periods[0]["startPeriod"], 0)
-        self.assertEqual(periods[0]["limit"], 11000.0)
-
-    def test_two_windows_gap_is_zero(self):
-        profile = build_ocpp_charging_profile(self.PLAN_TWO_WINDOWS)
-        periods = profile["chargingSchedule"]["chargingSchedulePeriod"]
-        # Should be: charge, gap=0, charge
-        limits = [p["limit"] for p in periods]
-        self.assertEqual(limits[0], 11000.0)
-        self.assertEqual(limits[1], 0.0)
-        self.assertEqual(limits[2], 11000.0)
-
-    def test_periods_ordered_by_start_period(self):
-        profile = build_ocpp_charging_profile(self.PLAN_TWO_WINDOWS)
-        periods = profile["chargingSchedule"]["chargingSchedulePeriod"]
-        starts = [p["startPeriod"] for p in periods]
-        self.assertEqual(starts, sorted(starts))
-
-    def test_duration_matches_window_span(self):
-        profile = build_ocpp_charging_profile(self.PLAN_SINGLE)
-        # 22:00 to 04:00 = 6 hours = 21600 seconds
-        self.assertEqual(profile["chargingSchedule"]["duration"], 21600)
-
-    def test_valid_from_to_match_window_bounds(self):
-        profile = build_ocpp_charging_profile(self.PLAN_SINGLE)
-        self.assertEqual(profile["validFrom"],
-                         "2026-03-14T22:00:00+00:00")
-        self.assertEqual(profile["validTo"],
-                         "2026-03-15T04:00:00+00:00")
-
-    def test_custom_max_rate(self):
-        profile = build_ocpp_charging_profile(self.PLAN_SINGLE,
-                                               max_charging_rate=7400.0)
-        periods = profile["chargingSchedule"]["chargingSchedulePeriod"]
-        self.assertEqual(periods[0]["limit"], 7400.0)
-
-    # ── Schema validation against real OCPP specs ────────────────────────────
-
-    def test_ocpp16_schema_valid(self):
-        try:
-            schema = _load_schema_16()
-        except FileNotFoundError:
-            self.skipTest("OCPP 1.6 schema not available")
-        profile  = build_ocpp_charging_profile(self.PLAN_SINGLE,
-                                                ocpp_version="1.6")
-        cp_props = schema["properties"]["csChargingProfiles"]
-        required = cp_props["required"]
-        allowed  = set(cp_props["properties"].keys())
-        self._validate_against(profile, cp_props, required, allowed)
-
-    def test_ocpp201_schema_valid(self):
-        try:
-            schema = _load_schema_201()
-        except FileNotFoundError:
-            self.skipTest("OCPP 2.0.1 schema not available")
-        profile  = build_ocpp_charging_profile(self.PLAN_SINGLE,
-                                                ocpp_version="2.0.1")
-        cp_props = schema["definitions"]["ChargingProfileType"]
-        required = cp_props.get("required", [])
-        allowed  = set(cp_props["properties"].keys())
-        self._validate_against(profile, cp_props, required, allowed)
-
-    def test_ocpp21_schema_valid(self):
-        try:
-            schema = _load_schema_21()
-        except FileNotFoundError:
-            self.skipTest("OCPP 2.1 schema not available")
-        profile  = build_ocpp_charging_profile(self.PLAN_SINGLE,
-                                                ocpp_version="2.1")
-        cp_props = schema["definitions"]["ChargingProfileType"]
-        required = cp_props.get("required", [])
-        allowed  = set(cp_props["properties"].keys())
-        self._validate_against(profile, cp_props, required, allowed)
-
-    def test_16_uses_charging_profile_id(self):
-        profile = build_ocpp_charging_profile(self.PLAN_SINGLE,
-                                               ocpp_version="1.6")
-        self.assertIn("chargingProfileId", profile)
-        self.assertNotIn("id", profile)
-
-    def test_201_uses_id(self):
-        profile = build_ocpp_charging_profile(self.PLAN_SINGLE,
-                                               ocpp_version="2.0.1")
-        self.assertIn("id", profile)
-        self.assertNotIn("chargingProfileId", profile)
-
-    def test_21_uses_id(self):
-        profile = build_ocpp_charging_profile(self.PLAN_SINGLE,
-                                               ocpp_version="2.1")
-        self.assertIn("id", profile)
-        self.assertNotIn("chargingProfileId", profile)
-
-
-# ===========================================================================
-# 9. XML parsing
-# ===========================================================================
-
-MINIMAL_XML = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">
-  <TimeSeries>
-    <Period>
-      <timeInterval>
-        <start>2026-03-14T23:00Z</start>
-        <end>2026-03-15T23:00Z</end>
-      </timeInterval>
-      <resolution>PT15M</resolution>
-      <Point><position>1</position><price.amount>3.00</price.amount></Point>
-      <Point><position>5</position><price.amount>1.50</price.amount></Point>
-      <Point><position>9</position><price.amount>3.50</price.amount></Point>
-    </Period>
-  </TimeSeries>
-</Publication_MarketDocument>
-"""
-
-DUAL_SERIES_XML = """\
-<?xml version="1.0" encoding="UTF-8"?>
-<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">
-  <TimeSeries>
-    <Period>
-      <timeInterval>
-        <start>2026-03-13T23:00Z</start>
-        <end>2026-03-14T23:00Z</end>
-      </timeInterval>
-      <resolution>PT15M</resolution>
-      <Point><position>1</position><price.amount>2.00</price.amount></Point>
-    </Period>
-  </TimeSeries>
-  <TimeSeries>
-    <Period>
-      <timeInterval>
-        <start>2026-03-14T23:00Z</start>
-        <end>2026-03-15T23:00Z</end>
-      </timeInterval>
-      <resolution>PT15M</resolution>
-      <Point><position>1</position><price.amount>4.00</price.amount></Point>
-    </Period>
-  </TimeSeries>
-</Publication_MarketDocument>
-"""
-
-ERROR_XML = """\
-<Acknowledgement_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:acknowledgementdocument:7:1">
-  <Reason><code>999</code><text>Invalid security token</text></Reason>
-</Acknowledgement_MarketDocument>
-"""
-
 
 class TestXmlParsing(unittest.TestCase):
 
@@ -1774,1095 +1052,119 @@ class TestXmlParsing(unittest.TestCase):
             self.assertEqual(s.slot, i)
 
 
+class TestRealEntsoEData(unittest.TestCase):
 
-class TestSelectWithMinBlock(unittest.TestCase):
-    """Direct tests for _select_with_min_block and its pick_next helper."""
+    def _slots(self, ref=date(2026, 3, 14)):
+        return _parse_entsoe_xml(REAL_ENTSOE_XML, ref, "FI")
 
-    def _slots(self, count=16, price_cents=3.0):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        return slots_from(base, count, price_cents=price_cents)
+    # ── Parsing correctness ──────────────────────────────────────────────────
 
-    def test_no_blocks_shorter_than_min(self):
-        slots = self._slots(16)
-        selected = select_charging_windows(slots, required_minutes=120,
-                                           min_slot_minutes=30)
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        for group in groups:
-            self.assertGreaterEqual(len(group) * 15, 30)
+    def test_parses_two_time_series(self):
+        slots = self._slots()
+        # Two 24h days × 96 slots/day = 192 slots; some may overlap at boundaries
+        self.assertGreaterEqual(len(slots), 96)
 
-    def test_insufficient_candidates_returns_partial_not_empty(self):
-        # Regression: the DP used to require reaching the exact n_slots
-        # requested, returning [] entirely when that was infeasible — even
-        # when a smaller, genuinely optimal partial selection was trivially
-        # available. Only 4 slots (1h) exist; 24 (6h) are required. Must use
-        # all 4, not none — mirrors _best_continuous_window's own
-        # "return the longest available" fallback, which this function
-        # previously lacked.
-        slots = self._slots(4, price_cents=1.0)
-        selected = select_charging_windows(slots, required_minutes=360,
-                                           min_slot_minutes=30, min_gap_minutes=15)
-        self.assertEqual(len(selected), 4)
-        self.assertEqual(sum(s.duration_minutes for s in selected), 60)
+    def test_no_duplicate_start_times(self):
+        slots = self._slots()
+        starts = [s.start for s in slots]
+        self.assertEqual(len(starts), len(set(starts)))
 
-    def test_partial_selection_still_respects_min_slot_minutes(self):
-        # The partial fallback must still be a *valid* selection — it can't
-        # satisfy the full requirement, but whatever it does return must
-        # still respect min_slot_minutes on each block, not just grab
-        # whatever's cheapest regardless of block-length constraints.
-        slots = self._slots(4, price_cents=1.0)
-        selected = select_charging_windows(slots, required_minutes=360,
-                                           min_slot_minutes=30, min_gap_minutes=15)
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        for group in groups:
-            self.assertGreaterEqual(len(group) * 15, 30)
+    def test_all_slots_15_minutes(self):
+        slots = self._slots()
+        for s in slots:
+            self.assertEqual(s.duration_minutes, 15)
 
-    def test_cheap_isolated_slot_replaced(self):
-        # Make slot 4 very cheap but isolated — the slot before and after are expensive.
-        # With min_slot_minutes=30 (2 slots), a single isolated cheap slot should be
-        # disqualified and replaced with an adjacent pair.
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        slots = slots_from(base, 16, price_cents=5.0)
-        slots[4] = replace(slots[4], price_eur_kwh=0.001)  # very cheap, isolated
-        # Require 2 slots (30 min) with min_slot_minutes=30
-        selected = select_charging_windows(slots, required_minutes=30,
-                                           min_slot_minutes=30)
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        self.assertEqual(len(groups), 1)
-        self.assertGreaterEqual(len(groups[0]), 2)
+    def test_slots_sorted_ascending(self):
+        slots = self._slots()
+        starts = [s.start for s in slots]
+        self.assertEqual(starts, sorted(starts))
 
-    def test_total_minutes_correct_despite_disqualification(self):
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        slots = slots_from(base, 16, price_cents=5.0)
-        # Make slots 0 and 8 cheap but each isolated
-        slots[0] = replace(slots[0], price_eur_kwh=0.001)
-        slots[8] = replace(slots[8], price_eur_kwh=0.001)
-        selected = select_charging_windows(slots, required_minutes=60,
-                                           min_slot_minutes=30)
-        total = sum(s.duration_minutes for s in selected)
-        self.assertEqual(total, 60)
+    def test_ordinals_sequential(self):
+        slots = self._slots()
+        for i, s in enumerate(slots):
+            self.assertEqual(s.slot, i)
 
-    def test_all_same_price_latest_preferred(self):
-        # All slots same price — latest slots should be selected (tiebreaker)
-        slots = self._slots(16)
-        selected = select_charging_windows(slots, required_minutes=30,
-                                           min_slot_minutes=30)
-        # Should pick the last 2 slots
-        srt = sorted(selected, key=lambda s: s.start)
-        self.assertEqual(srt[0].start, slots[-2].start)
+    def test_prices_are_positive(self):
+        slots = self._slots()
+        for s in slots:
+            self.assertGreater(s.price_eur_kwh, 0)
 
-    def test_min_slot_larger_than_required_still_works(self):
-        # min_slot_minutes=60 but required=60 — should still find a 4-slot block
-        slots = self._slots(16)
-        selected = select_charging_windows(slots, required_minutes=60,
-                                           min_slot_minutes=60)
-        total = sum(s.duration_minutes for s in selected)
-        self.assertEqual(total, 60)
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        self.assertEqual(len(groups), 1)
+    def test_prices_in_plausible_range(self):
+        # Finnish day-ahead prices on 2026-03-13/14 should be between 0 and 1 €/kWh
+        slots = self._slots()
+        for s in slots:
+            self.assertLess(s.price_eur_kwh, 1.0,
+                            f"Price {s.price_eur_kwh:.4f} €/kWh seems implausibly high")
 
-    def test_real_prices_min_slot_respected(self):
-        # Use real ENTSO-E data to exercise the path with realistic price variation
-        slots = _parse_entsoe_xml(REAL_ENTSOE_XML, date(2026, 3, 14), "FI")
+    def test_forward_fill_applied(self):
+        # TS2 position 1 = 4.99 EUR/MWh; positions 2–4 not listed → should carry forward
+        slots = self._slots()
+        # TS2 starts at 2026-03-13T23:00Z
+        ts2_start = datetime(2026, 3, 13, 23, 0, tzinfo=UTC)
+        ts2_slots = [s for s in slots if s.start >= ts2_start][:4]
+        self.assertEqual(len(ts2_slots), 4)
+        # All four should have the same price (4.99 EUR/MWh = 0.00499 EUR/kWh)
+        for s in ts2_slots:
+            self.assertAlmostEqual(s.price_eur_kwh, 0.00499, places=4)
+
+    def test_known_peak_price(self):
+        # TS2 position 40 = 22.1 EUR/MWh at 2026-03-13T23:00Z + 39×15min = 2026-03-14T08:45Z
+        # = 10:45 Helsinki EET
+        slots = self._slots()
+        peak_time = datetime(2026, 3, 14, 8, 45, tzinfo=UTC)
+        peak_slot = next((s for s in slots if s.start == peak_time), None)
+        self.assertIsNotNone(peak_slot, "Expected slot at 08:45 UTC not found")
+        self.assertAlmostEqual(peak_slot.price_eur_kwh, 0.0221, places=4)
+
+    # ── Selection with real prices ───────────────────────────────────────────
+
+    def test_topup_selects_cheapest_window(self):
+        """2h topup in 00:00–06:30 Helsinki should pick the cheapest morning slots."""
+        slots = self._slots()
+        # Filter to the 00:00–06:30 Helsinki window on 2026-03-14
         anchor = date(2026, 3, 14)
         ws, we = _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=anchor)
         inside, _ = filter_preferred_window(slots, ws, we, "00:00", "06:30")
         selected = select_charging_windows(inside, required_minutes=120,
                                            min_slot_minutes=30)
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        for group in groups:
-            duration = sum(s.duration_minutes for s in group)
-            self.assertGreaterEqual(duration, 30,
-                f"Block of {duration} min is shorter than min_slot_minutes=30")
-
-    def test_gap_between_blocks_respects_min_slot(self):
-        # Two cheap clusters separated by a 15-min gap — with min_slot_minutes=30
-        # the algorithm must not select both clusters since the gap would be < 30 min.
-        # It should instead pick the cheaper cluster only (or extend one of them).
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        # cheap block A: 30 min
-        block_a = slots_from(base, 2, price_cents=1.0)
-        # 15-min gap (expensive)
-        gap     = slots_from(base + timedelta(minutes=30), 1, price_cents=9.0)
-        # cheap block B: 30 min
-        block_b = slots_from(base + timedelta(minutes=45), 2, price_cents=1.0)
-        # padding
-        rest    = slots_from(base + timedelta(minutes=75), 8, price_cents=5.0)
-        all_slots = block_a + gap + block_b + rest
-
-        selected = select_charging_windows(
-            all_slots, required_minutes=60, min_slot_minutes=30, min_gap_minutes=30
-        )
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        # Check every gap between groups is >= 30 min (explicit min_gap_minutes=30)
-        for i in range(len(groups) - 1):
-            gap_min = int(
-                (groups[i+1][0].start - groups[i][-1].end).total_seconds() / 60
-            )
-            self.assertGreaterEqual(
-                gap_min, 30,
-                f"Gap of {gap_min} min between blocks violates min_gap_minutes=30"
-            )
-
-    def test_isolated_cheap_slot_with_price_ceiling(self):
-        # Regression: when a price ceiling excludes slots on both sides of a cheap
-        # slot, the candidate array has an index-adjacent entry that is NOT
-        # time-adjacent.  The DP must not form a block across this time gap,
-        # producing a 1-slot (15 min) block that violates min_slot_minutes=30.
-        #
-        # Reproduces the 2026-04-13 production bug:
-        #   20:45 UTC (5.4 c/kWh) — isolated, neighbors above ceiling
-        #   21:00 UTC (10.5 c/kWh) — ABOVE ceiling, excluded
-        #   21:15 UTC (10.3 c/kWh) — ABOVE ceiling, excluded
-        #   21:30 UTC (8.5 c/kWh) — below ceiling
-        #   21:45 UTC (6.1 c/kWh) — below ceiling
-        base = datetime(2026, 4, 13, 20, 45, tzinfo=UTC)
-        cheap_isolated = slots_from(base,                         1, price_cents=5.4)
-        above_ceiling  = slots_from(base + timedelta(minutes=15), 2, price_cents=10.5)
-        after_gap      = slots_from(base + timedelta(minutes=45), 6, price_cents=7.0)
-        all_slots = cheap_isolated + above_ceiling + after_gap
-
-        ceiling = 9.8  # c/kWh — excludes the two above-ceiling slots
-        selected = select_charging_windows(
-            all_slots, required_minutes=30, min_slot_minutes=30,
-            max_price=ceiling / 100,
-        )
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        for group in groups:
-            duration = sum(s.duration_minutes for s in group)
-            self.assertGreaterEqual(
-                duration, 30,
-                f"Block of {duration} min violates min_slot_minutes=30 "
-                f"(isolated cheap slot leaked through price-ceiling gap)"
-            )
-        # The isolated 20:45 slot must not appear — it cannot form a valid block
-        selected_starts = {s.start for s in selected}
-        self.assertNotIn(
-            base, selected_starts,
-            "Isolated cheap slot at 20:45 must not be selected when it cannot form a 30-min block"
-        )
-
-
-
-    """_check_window_coverage exits cleanly when prices are not yet published."""
-
-    def _window(self):
-        return _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=REF_DATE)
-
-    def test_full_coverage_does_not_exit(self):
-        ws, we = self._window()
-        # Build slots covering the full window
-        slots = slots_from(ws, int((we - ws).total_seconds() // 900))
-        from charging_planner import _check_window_coverage
-        # Should not raise SystemExit
-        _check_window_coverage(slots, ws, we, "test")
-
-    def test_empty_slots_returns_false(self):
-        ws, we = self._window()
-        from charging_planner import _check_window_coverage
-        self.assertFalse(_check_window_coverage([], ws, we, "test"))
-
-    def test_partial_coverage_below_threshold_returns_false(self):
-        ws, we = self._window()
-        # Only cover 50% of the window
-        window_min = int((we - ws).total_seconds() // 60)
-        slots = slots_from(ws, window_min // 30)  # half the slots
-        from charging_planner import _check_window_coverage
-        self.assertFalse(_check_window_coverage(slots, ws, we, "test"))
-
-    def test_coverage_above_threshold_does_not_exit(self):
-        ws, we = self._window()
-        # Cover 95% of window
-        window_min = int((we - ws).total_seconds() // 60)
-        slots = slots_from(ws, int(window_min * 0.95 // 15))
-        from charging_planner import _check_window_coverage
-        _check_window_coverage(slots, ws, we, "test")  # must not raise
-
-    def test_now_utc_clamps_denominator_to_still_useful_portion(self):
-        # A live window (now inside it, per _resolve_planning_horizon) has
-        # its already-elapsed portion correctly absent from `inside` — that
-        # must NOT register as "missing" coverage. Window is 6.5h; "now" is
-        # 2h in, leaving 4.5h still useful; slots cover only that remainder.
-        ws, we = self._window()
-        now = ws + timedelta(hours=2)
-        remaining_min = int((we - now).total_seconds() // 60)
-        slots = slots_from(now, remaining_min // 15)  # covers now..we fully
-        from charging_planner import _check_window_coverage
-        self.assertTrue(
-            _check_window_coverage(slots, ws, we, "test", now_utc=now),
-            "elapsed portion of a live window must not count against coverage",
-        )
-
-    def test_without_now_utc_same_slots_read_as_undercovered(self):
-        # Same data as above, but without now_utc the elapsed 2h reads as
-        # "missing" against the full window — confirms the fix is actually
-        # doing something, not just always returning True.
-        ws, we = self._window()
-        now = ws + timedelta(hours=2)
-        remaining_min = int((we - now).total_seconds() // 60)
-        slots = slots_from(now, remaining_min // 15)
-        from charging_planner import _check_window_coverage
-        self.assertFalse(_check_window_coverage(slots, ws, we, "test"))
-
-    def test_forecast_supplement_never_backfills_elapsed_time(self):
-        # Even when a forecast supplement is genuinely needed (no real prices
-        # at all here), it must not be used to fill the already-elapsed
-        # portion of a live window — that time is gone regardless of what
-        # the forecast says about it.
-        from charging_planner import _select_slots
-        ws, we = self._window()          # 00:00-06:30 local -> UTC
-        now = ws + timedelta(hours=2)    # 2h into the window
-        # Forecast covers the WHOLE window, including the elapsed part,
-        # deliberately cheap so the DP would want the elapsed slots if the
-        # clamp weren't applied.
-        forecast = slots_from(ws, int((we - ws).total_seconds() // 900), price_cents=0.5)
-        cfg = make_config(preferred_window_start="00:00", preferred_window_end="06:30",
-                          required_minutes=60, min_slot_minutes=30)
-        selected, used_forecast = _select_slots(
-            cfg, candidate_prices=[], win_start_utc=ws, win_end_utc=we,
-            win_start_str="00:00", win_end_str="06:30", now_utc=now,
-            forecast_slots=forecast,
-        )
-        self.assertTrue(used_forecast)
-        self.assertTrue(selected)
+        self.assertEqual(sum(s.duration_minutes for s in selected), 120)
+        # All selected slots must be within the window
         for s in selected:
-            self.assertGreaterEqual(s.start, now,
-                                    "forecast backfilled already-elapsed time")
+            self.assertGreaterEqual(s.start, ws)
+            self.assertLessEqual(s.end, we)
+        # Avg price should be well below the day's avg (morning is cheap)
+        avg = sum(s.price_eur_kwh for s in selected) / len(selected)
+        self.assertLess(avg * 100, 6.0)  # below 6 c€/kWh
 
-    def test_cmd_plan_exits_when_prices_missing(self):
-        """cmd_plan exits cleanly if fetched prices don't cover any profile's
-        window and no forecast fallback is available either.
-
-        Both forecast sources must be mocked out: this test predates forecast
-        supplementation, and without these patches the planner correctly falls
-        through to the live nordpool-predict-fi source over the network, gets
-        real data, builds a valid plan and never exits — a failure that looked
-        date-dependent but was actually network-dependent.
-        """
-        from charging_planner import cmd_plan
-        import tempfile
-        import unittest.mock as mock
-
-        # Only 1h of prices — far below 90% of any window
-        one_hour = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 4)
-        with tempfile.TemporaryDirectory() as tmpdir, \
-             mock.patch("charging_planner.fetch_entsoe_prices", return_value=one_hour), \
-             mock.patch("charging_planner.fetch_forecast_prices",
-                        side_effect=PricesNotYetAvailable("forecast unavailable")), \
-             mock.patch("charging_planner.fetch_forecast_display_slots", return_value=[]):
-            with self.assertRaises(SystemExit) as ctx:
-                cmd_plan({
-                    "entsoe": {"api_key": "x", "area": "FI", "timezone": "Europe/Helsinki"},
-                    "charging": [{
-                        "name": "topup",
-                        "required_hours": 2,
-                        "preferred_window_start": "00:00",
-                        "preferred_window_end": "06:30",
-                    }],
-                }, output_dir=tmpdir)
-        self.assertEqual(ctx.exception.code, 1)
-
-
-# ===========================================================================
-# 9b. Bounded window-count selection (max_windows >= 2)
-# ===========================================================================
-
-class TestSelectWithMaxWindows(unittest.TestCase):
-    """Direct tests for _select_with_max_windows (max_windows >= 2) and its
-    dispatch from select_charging_windows / _select_with_max_windows equivalence
-    to the max_windows=1 and max_windows=None paths at their boundaries."""
-
-    def _slots(self, count=32, price_cents=5.0):
-        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
-        return slots_from(base, count, price_cents=price_cents)
-
-    def test_uses_at_most_max_windows_blocks(self):
-        # Four separated cheap clusters, but max_windows=2 — only 2 may be used.
-        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
-        cluster = lambda offset_min, price: slots_from(
-            base + timedelta(minutes=offset_min), 2, price_cents=price)
-        filler = lambda offset_min, count: slots_from(
-            base + timedelta(minutes=offset_min), count, price_cents=9.0)
-        slots = (
-            cluster(0,   1.0) + filler(30,  1) +
-            cluster(45,  1.1) + filler(75,  1) +
-            cluster(90,  1.2) + filler(120, 1) +
-            cluster(135, 1.3) + filler(165, 1)
-        )
-        selected = select_charging_windows(
-            slots, required_minutes=120, max_windows=2, min_slot_minutes=30,
-        )
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        self.assertLessEqual(len(groups), 2)
-        total = sum(s.duration_minutes for s in selected)
-        self.assertEqual(total, 120)
-
-    def test_picks_cheapest_two_of_four_clusters(self):
-        # Same four clusters as above, ranked by price — with max_windows=2 the
-        # two CHEAPEST clusters (1.0 and 1.1 c/kWh) should be chosen over the
-        # two more expensive ones (1.2 and 1.3 c/kWh).
-        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
-        cluster = lambda offset_min, price: slots_from(
-            base + timedelta(minutes=offset_min), 2, price_cents=price)
-        filler = lambda offset_min, count: slots_from(
-            base + timedelta(minutes=offset_min), count, price_cents=9.0)
-        c1 = cluster(0,   1.0)
-        c2 = cluster(45,  1.1)
-        c3 = cluster(90,  1.2)
-        c4 = cluster(135, 1.3)
-        slots = c1 + filler(30, 1) + c2 + filler(75, 1) + c3 + filler(120, 1) + c4
-
-        selected = select_charging_windows(
-            slots, required_minutes=60, max_windows=2, min_slot_minutes=30,
-        )
-        selected_starts = {s.start for s in selected}
-        expected_starts = {s.start for s in c1 + c2}
-        self.assertEqual(selected_starts, expected_starts)
-
-    def test_max_windows_1_matches_best_continuous_window(self):
-        slots = self._slots(32, price_cents=5.0)
-        for i in [10, 11, 12, 13]:
-            slots[i] = replace(slots[i], price_eur_kwh=0.01)
-        via_dispatch = select_charging_windows(
-            slots, required_minutes=60, max_windows=1,
-        )
-        direct = _best_continuous_window(slots, slots, n_slots=4)
-        self.assertEqual(
-            [s.start for s in via_dispatch], [s.start for s in direct]
-        )
-
-    def test_max_windows_none_matches_unbounded(self):
-        slots = self._slots(32, price_cents=5.0)
-        for i in [4, 5, 20, 21]:
-            slots[i] = replace(slots[i], price_eur_kwh=0.01)
-        via_none = select_charging_windows(
-            slots, required_minutes=60, max_windows=None, min_slot_minutes=30,
-        )
-        via_unbounded_call = select_charging_windows(
-            slots, required_minutes=60, min_slot_minutes=30,
-        )
-        self.assertEqual(
-            [s.start for s in via_none], [s.start for s in via_unbounded_call]
-        )
-
-    def test_generous_max_windows_matches_unbounded_result(self):
-        # max_windows set far higher than could ever be used should give the
-        # same result as the unbounded (max_windows=None) path.
-        slots = self._slots(32, price_cents=5.0)
-        for i in [4, 5, 20, 21]:
-            slots[i] = replace(slots[i], price_eur_kwh=0.01)
-        via_generous = select_charging_windows(
-            slots, required_minutes=60, max_windows=50, min_slot_minutes=30,
-        )
-        via_unbounded = select_charging_windows(
-            slots, required_minutes=60, max_windows=None, min_slot_minutes=30,
-        )
-        self.assertEqual(
-            [s.start for s in via_generous], [s.start for s in via_unbounded]
-        )
-
-    def test_min_gap_minutes_respected_across_windows(self):
-        # Two cheap clusters separated by a gap shorter than min_gap_minutes —
-        # with max_windows=2 the algorithm must still respect the gap floor
-        # (same rule as the unbounded DP).
-        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-        block_a = slots_from(base, 2, price_cents=1.0)
-        gap     = slots_from(base + timedelta(minutes=30), 1, price_cents=9.0)
-        block_b = slots_from(base + timedelta(minutes=45), 2, price_cents=1.0)
-        rest    = slots_from(base + timedelta(minutes=75), 8, price_cents=5.0)
-        all_slots = block_a + gap + block_b + rest
-
-        selected = select_charging_windows(
-            all_slots, required_minutes=60, max_windows=2,
-            min_slot_minutes=30, min_gap_minutes=30,
-        )
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        for i in range(len(groups) - 1):
-            gap_min = int(
-                (groups[i + 1][0].start - groups[i][-1].end).total_seconds() / 60
-            )
-            self.assertGreaterEqual(
-                gap_min, 30,
-                f"Gap of {gap_min} min between blocks violates min_gap_minutes=30"
-            )
-
-    def test_min_slot_minutes_respected_per_block(self):
-        slots = self._slots(32, price_cents=5.0)
-        selected = select_charging_windows(
-            slots, required_minutes=120, max_windows=3, min_slot_minutes=30,
-        )
-        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
-        for group in groups:
-            self.assertGreaterEqual(len(group) * 15, 30)
-
-    def test_infeasible_window_budget_returns_empty(self):
-        # 8 isolated single 15-min cheap slots (none adjacent), min_slot_minutes=30
-        # means every block needs 2 slots — with max_windows=1 that's impossible
-        # since no two candidates are contiguous. Should return [] cleanly, not raise.
-        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
-        slots = []
-        for i in range(8):
-            cheap = slots_from(base + timedelta(minutes=i * 30), 1, price_cents=1.0)
-            slots += cheap
-        selected = _select_with_max_windows(
-            slots, n_slots=2, min_slots_per_block=2, min_slots_per_gap=0, max_windows=1,
-        )
-        self.assertEqual(selected, [])
-
-    def test_insufficient_candidates_returns_partial_not_empty(self):
-        # Same regression as TestSelectWithMinBlock's version, for the
-        # bounded (max_windows >= 2) DP path specifically. Only 4 slots
-        # (1h) exist; 24 (6h) required with max_windows=3 — must use all 4
-        # rather than returning nothing.
-        slots = self._slots(4, price_cents=1.0)
-        selected = select_charging_windows(
-            slots, required_minutes=360, max_windows=3,
-            min_slot_minutes=30, min_gap_minutes=15,
-        )
-        self.assertEqual(len(selected), 4)
-        self.assertEqual(sum(s.duration_minutes for s in selected), 60)
-
-    def test_all_same_price_latest_preferred(self):
-        # Mirrors TestSelectWithMinBlock's tiebreak test — with all slots at the
-        # same price, later slots should be preferred.
-        slots = self._slots(16, price_cents=3.0)
-        selected = select_charging_windows(
-            slots, required_minutes=30, max_windows=2, min_slot_minutes=30,
-        )
+    def test_continuous_block_stays_within_window(self):
+        """6h continuous block in 00:00–06:30 window should fit entirely inside."""
+        slots = self._slots()
+        anchor = date(2026, 3, 14)
+        ws, we = _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=anchor)
+        inside, _ = filter_preferred_window(slots, ws, we, "00:00", "06:30")
+        selected = select_charging_windows(inside, required_minutes=360,
+                                           max_windows=1,
+                                           min_slot_minutes=30)
+        self.assertEqual(sum(s.duration_minutes for s in selected), 360)
+        for s in selected:
+            self.assertGreaterEqual(s.start, ws)
+            self.assertLessEqual(s.end, we)
+        # Must be one continuous block
         srt = sorted(selected, key=lambda s: s.start)
-        self.assertEqual(srt[0].start, slots[-2].start)
-
-    def test_empty_candidates_returns_empty(self):
-        self.assertEqual(
-            _select_with_max_windows([], n_slots=4, min_slots_per_block=2,
-                                     min_slots_per_gap=0, max_windows=2),
-            [],
-        )
-
-
-# ===========================================================================
-# 10. End-to-end pipeline
-# ===========================================================================
-
-class TestEndToEnd(unittest.TestCase):
-    """Smoke tests for cmd_plan with a mocked ENTSO-E fetch.
-
-    The synthetic prices are anchored to 2026-03-14. datetime.now is pinned to
-    2026-03-14 14:30 UTC so window resolution always targets that same night,
-    regardless of when the tests are run.
-    """
-
-    # Pin the clock to 14:30 UTC on the day the synthetic prices are built around.
-    # This is before any overnight window starts (22:00 Helsinki = 20:00 UTC).
-    _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
-
-    def _run_cmd_plan(self, prices):
-        """Run cmd_plan with frozen clock and mocked price fetch."""
-        import charging_planner as cp
-        import tempfile
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return TestEndToEnd._FROZEN_NOW if tz is None \
-                    else TestEndToEnd._FROZEN_NOW.astimezone(tz)
-
-        with tempfile.TemporaryDirectory() as tmpdir, \
-             mock.patch("charging_planner.datetime", _FrozenDatetime), \
-             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
-            return cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
-
-    RAW_CONFIG = {
-        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
-        "charging": [
-            {
-                "name": "topup",
-                "required_hours": 2,
-                "max_windows": None,
-                "min_slot_minutes": 30,
-                "preferred_window_start": "00:00",
-                "preferred_window_end": "06:30",
-            },
-            {
-                "name": "overnight",
-                "required_hours": 6,
-                "max_windows": 1,
-                "min_slot_minutes": 30,
-                "preferred_window_start": "22:00",
-                "preferred_window_end": "06:30",
-            },
-        ],
-    }
-
-    def _make_prices(self):
-        """192 slots covering 48h, cheap 22:00–07:00 Helsinki.
-
-        Wide enough to cover both same-day windows (00:00–06:30 tomorrow)
-        and overnight windows (22:00 tonight – 06:30 tomorrow morning).
-        """
-        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)  # 22:00 Helsinki
-        slots = []
-        for i in range(192):
-            t = base + timedelta(minutes=15 * i)
-            local_h = t.astimezone(FI_TZ).hour
-            price = 1.5 if (local_h < 7 or local_h >= 22) else 8.0
-            slots.append(Slot(
-                start=t, end=t + timedelta(minutes=15),
-                duration_minutes=15, price_eur_kwh=price / 100, slot=i,
-            ))
-        return slots
-
-    def test_produces_one_plan_per_profile(self):
-        plans = self._run_cmd_plan(self._make_prices())
-        self.assertEqual(len(plans), 2)
-        self.assertEqual(plans[0]["profile"], "topup")
-        self.assertEqual(plans[1]["profile"], "overnight")
-
-    def test_topup_schedules_required_minutes(self):
-        plans = self._run_cmd_plan(self._make_prices())
-        self.assertGreaterEqual(plans[0]["total_minutes"], 120)
-
-    def test_overnight_schedules_required_minutes(self):
-        plans = self._run_cmd_plan(self._make_prices())
-        self.assertGreaterEqual(plans[1]["total_minutes"], 360)
-
-    def test_overnight_windows_within_preferred_window(self):
-        plans = self._run_cmd_plan(self._make_prices())
-        win_end_utc = datetime.fromisoformat(plans[1]["window_ends_utc"][-1])
-        # 06:30 Helsinki EET = 04:30 UTC
-        self.assertLessEqual(win_end_utc, datetime(2026, 3, 16, 4, 30, tzinfo=UTC))
-
-    def test_plans_contain_ocpp_profile(self):
-        plans = self._run_cmd_plan(self._make_prices())
-        for plan in plans:
-            self.assertIn("ocpp_charging_profile", plan)
-            self.assertIn("chargingSchedule", plan["ocpp_charging_profile"])
-
-    def test_delayed_run_mid_window_still_targets_tonight(self):
-        # The actual bug this whole matrix was built for: a cron run firing
-        # late, after the overnight window has already started. "now" =
-        # 22:00Z (00:00 Helsinki) — 2h after the 20:00Z/22:00 Helsinki start,
-        # 6.5h still remain before the 04:30Z/06:30 Helsinki end, comfortably
-        # enough for the 6h required. Must NOT skip to the following night.
-        import charging_planner as cp
-        import tempfile
-
-        delayed_now = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return delayed_now if tz is None else delayed_now.astimezone(tz)
-
-        with tempfile.TemporaryDirectory() as tmpdir, \
-             mock.patch("charging_planner.datetime", _FrozenDatetime), \
-             mock.patch("charging_planner.fetch_entsoe_prices", return_value=self._make_prices()):
-            plans = cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
-
-        overnight = plans[1]
-        self.assertEqual(overnight["profile"], "overnight")
-        self.assertGreaterEqual(overnight["total_minutes"], 360,
-                                "6h should still fit in the 6.5h remaining tonight")
-        starts = [datetime.fromisoformat(s) for s in overnight["window_starts_utc"]]
-        self.assertTrue(starts, "must have scheduled something tonight, not skipped to next night")
-        # Every scheduled slot must fall on 2026-03-14's overnight instance
-        # (before 2026-03-15 04:30Z), not the following night.
-        for s in starts:
-            self.assertLess(s, datetime(2026, 3, 15, 4, 30, tzinfo=UTC),
-                            "slot belongs to the following night — the bug this test guards against")
-
-    def test_delayed_run_never_selects_an_elapsed_slot(self):
-        # Same delayed scenario, but the already-elapsed portion of tonight's
-        # window (20:00Z-22:00Z, before "now") is made artificially the
-        # CHEAPEST price in the whole dataset — if the candidate floor isn't
-        # working, the DP would be drawn to it since it's optimal by price.
-        import charging_planner as cp
-        import tempfile
-
-        delayed_now = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return delayed_now if tz is None else delayed_now.astimezone(tz)
-
-        prices = self._make_prices()
-        prices = [
-            replace(s, price_eur_kwh=0.001)
-            if datetime(2026, 3, 14, 20, 0, tzinfo=UTC) <= s.start < delayed_now
-            else s
-            for s in prices
-        ]
-
-        with tempfile.TemporaryDirectory() as tmpdir, \
-             mock.patch("charging_planner.datetime", _FrozenDatetime), \
-             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
-            plans = cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
-
-        overnight = plans[1]
-        starts = [datetime.fromisoformat(s) for s in overnight["window_starts_utc"]]
-        for s in starts:
-            self.assertGreaterEqual(s, delayed_now,
-                                    "an already-elapsed slot was selected — the candidate floor failed")
-
-    def test_delayed_run_with_insufficient_remaining_time_produces_partial_plan(self):
-        # A live window is still correctly targeted even when too little of
-        # it remains to fit required_hours — it must NOT roll to the next
-        # occurrence (that would silently lose tonight's charging entirely).
-        # Instead: use 100% of what's left, and report the shortfall
-        # honestly via plan_warning, exactly like a naturally too-short
-        # configured window already does.
-        import charging_planner as cp
-        import tempfile
-
-        raw_config = {
-            "entsoe": {"api_key": "test-key", "area": "FI", "timezone": "Europe/Helsinki"},
-            "charging": [{
-                "name": "overnight", "required_hours": 6.0, "max_windows": 1,
-                "min_slot_minutes": 30, "min_gap_minutes": 15,
-                "preferred_window_start": "21:00", "preferred_window_end": "06:30",
-            }],
-        }
-        prices = slots_from(datetime(2026, 3, 14, 19, 0, tzinfo=UTC), 192, price_cents=1.0)
-
-        # 03:30 UTC (05:30 EET) — only ~1h remains before the 06:30 EET close.
-        delayed_now = datetime(2026, 3, 15, 3, 30, tzinfo=UTC)
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return delayed_now if tz is None else delayed_now.astimezone(tz)
-
-        with tempfile.TemporaryDirectory() as tmpdir, \
-             mock.patch("charging_planner.datetime", _FrozenDatetime), \
-             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
-            plans = cp.cmd_plan(raw_config, output_dir=tmpdir)
-
-        p = plans[0]
-        self.assertEqual(p["configured_window_start_utc"], "2026-03-14T19:00:00+00:00",
-                         "must still target tonight's window, not roll to the next occurrence")
-        self.assertEqual(p["required_minutes"], 360)
-        self.assertEqual(p["total_minutes"], 60, "must use the full remaining hour, nothing less")
-        self.assertIsNotNone(p["plan_warning"])
-        self.assertIn("required hours exceed boundaries", p["plan_warning"])
-        self.assertEqual(p["window_starts_utc"], ["2026-03-15T03:30:00+00:00"])
-        self.assertEqual(p["window_ends_utc"], ["2026-03-15T04:30:00+00:00"])
-
-    def test_delayed_run_with_time_to_spare_produces_complete_plan(self):
-        # Companion to the above: when the remaining live window comfortably
-        # exceeds required_hours (here by 1h), the plan is complete with no
-        # warning — the shortfall handling above is specific to genuinely
-        # insufficient remaining time, not triggered just by running late.
-        import charging_planner as cp
-        import tempfile
-
-        raw_config = {
-            "entsoe": {"api_key": "test-key", "area": "FI", "timezone": "Europe/Helsinki"},
-            "charging": [{
-                "name": "overnight", "required_hours": 2.0, "max_windows": 1,
-                "min_slot_minutes": 30, "min_gap_minutes": 15,
-                "preferred_window_start": "21:00", "preferred_window_end": "06:30",
-            }],
-        }
-        prices = slots_from(datetime(2026, 3, 14, 19, 0, tzinfo=UTC), 192, price_cents=1.0)
-
-        # 01:30 UTC (03:30 EET) — ~3h remains before the 06:30 EET close:
-        # 2h required plus a 1h buffer.
-        delayed_now = datetime(2026, 3, 15, 1, 30, tzinfo=UTC)
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return delayed_now if tz is None else delayed_now.astimezone(tz)
-
-        with tempfile.TemporaryDirectory() as tmpdir, \
-             mock.patch("charging_planner.datetime", _FrozenDatetime), \
-             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
-            plans = cp.cmd_plan(raw_config, output_dir=tmpdir)
-
-        p = plans[0]
-        self.assertEqual(p["configured_window_start_utc"], "2026-03-14T19:00:00+00:00")
-        self.assertEqual(p["required_minutes"], 120)
-        self.assertEqual(p["total_minutes"], 120, "the full requirement must be met — plenty of time left")
-        self.assertIsNone(p["plan_warning"])
-
-    def test_delayed_run_with_insufficient_time_uses_partial_slots_regardless_of_max_windows(self):
-        # Regression: the exact scenario from
-        # test_delayed_run_with_insufficient_remaining_time_produces_partial_plan
-        # above, but with max_windows=None (the actual default) instead of 1.
-        # The DP behind max_windows=None/N used to require reaching the full
-        # requested slot count exactly, returning a completely empty plan —
-        # 0 minutes scheduled — when that was infeasible, even though 1h of
-        # perfectly usable time was available. Must behave identically to
-        # the max_windows=1 case: use what's available, warn about the rest.
-        import charging_planner as cp
-        import tempfile
-
-        raw_config = {
-            "entsoe": {"api_key": "test-key", "area": "FI", "timezone": "Europe/Helsinki"},
-            "charging": [{
-                "name": "overnight", "required_hours": 6.0, "max_windows": None,
-                "min_slot_minutes": 30, "min_gap_minutes": 15,
-                "preferred_window_start": "21:00", "preferred_window_end": "06:30",
-            }],
-        }
-        prices = slots_from(datetime(2026, 3, 14, 19, 0, tzinfo=UTC), 192, price_cents=1.0)
-        delayed_now = datetime(2026, 3, 15, 3, 30, tzinfo=UTC)   # ~1h left before 06:30 EET close
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return delayed_now if tz is None else delayed_now.astimezone(tz)
-
-        with tempfile.TemporaryDirectory() as tmpdir, \
-             mock.patch("charging_planner.datetime", _FrozenDatetime), \
-             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
-            plans = cp.cmd_plan(raw_config, output_dir=tmpdir)
-
-        p = plans[0]
-        self.assertEqual(p["required_minutes"], 360)
-        self.assertEqual(p["total_minutes"], 60,
-                         "must use the full remaining hour — previously returned 0")
-        self.assertIsNotNone(p["plan_warning"])
-        self.assertEqual(p["window_starts_utc"], ["2026-03-15T03:30:00+00:00"])
-
-    def test_plan_json_written_to_output_dir(self):
-        import tempfile, os
-        prices = self._make_prices()
-        with tempfile.TemporaryDirectory() as tmpdir:
-            import charging_planner as cp
-
-            class _FrozenDatetime(datetime):
-                @classmethod
-                def now(cls, tz=None):
-                    return TestEndToEnd._FROZEN_NOW if tz is None \
-                        else TestEndToEnd._FROZEN_NOW.astimezone(tz)
-
-            with mock.patch("charging_planner.datetime", _FrozenDatetime), \
-                 mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
-                cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
-            files = os.listdir(tmpdir)
-        self.assertIn("plan-topup.json", files)
-        self.assertIn("plan-overnight.json", files)
-
-
-class TestLogVerbosity(unittest.TestCase):
-    """A normal run's log used to repeat the same handful of facts (the
-    target window, in UTC and again in local time; the candidate slot
-    count; the scheduled total, average price, and window count) across
-    four separate INFO lines, all before print_plan_summary printed the
-    same numbers again in the pretty console block immediately after.
-    Demoted to DEBUG — still available for real troubleshooting via
-    --debug, just not cluttering a normal run. One exception: spillover
-    (minutes scheduled outside the preferred window) is not shown anywhere
-    else, including print_plan_summary, so it stays at INFO — split into
-    its own line rather than demoted along with the rest."""
-
-    _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
-
-    RAW_CONFIG = {
-        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
-        "charging": [{
-            "name": "topup", "required_hours": 2, "max_windows": None,
-            "min_slot_minutes": 30,
-            "preferred_window_start": "00:00", "preferred_window_end": "06:30",
-        }],
-    }
-
-    def _make_prices(self):
-        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
-        slots = []
-        for i in range(192):
-            t = base + timedelta(minutes=15 * i)
-            local_h = t.astimezone(FI_TZ).hour
-            price = 1.5 if (local_h < 7 or local_h >= 22) else 8.0
-            slots.append(Slot(
-                start=t, end=t + timedelta(minutes=15),
-                duration_minutes=15, price_eur_kwh=price / 100, slot=i,
-            ))
-        return slots
-
-    def _run(self, config=None):
-        import charging_planner as cp
-        import tempfile
-
-        class _FrozenDatetime(datetime):
-            @classmethod
-            def now(cls, tz=None):
-                return self._FROZEN_NOW if tz is None else self._FROZEN_NOW.astimezone(tz)
-
-        with tempfile.TemporaryDirectory() as tmpdir, \
-             mock.patch("charging_planner.datetime", _FrozenDatetime), \
-             mock.patch("charging_planner.fetch_entsoe_prices", return_value=self._make_prices()):
-            cp.cmd_plan(config or self.RAW_CONFIG, output_dir=tmpdir)
-
-    def test_demoted_lines_absent_at_info_level(self):
-        with self.assertLogs("charging_planner", level="INFO") as cm:
-            self._run()
-        combined = "\n".join(cm.output)
-        self.assertNotIn("Window UTC:", combined)
-        self.assertNotIn("slots inside", combined)
-        self.assertNotIn("Selecting", combined)
-        self.assertNotIn("min scheduled, avg", combined)
-
-    def test_demoted_lines_present_at_debug_level(self):
-        with self.assertLogs("charging_planner", level="DEBUG") as cm:
-            self._run()
-        combined = "\n".join(cm.output)
-        self.assertIn("Window UTC:", combined)
-        self.assertIn("slots inside", combined)
-        self.assertIn("Selecting", combined)
-        self.assertIn("min scheduled, avg", combined)
-
-    def test_spillover_reported_at_info_level_when_it_happens(self):
-        # A tiny window with plenty of candidate time available before it —
-        # unlike the demoted totals, "N min outside window" is unique to
-        # this line and shown nowhere else.
-        tight_config = {
-            "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
-            "charging": [{
-                "name": "topup", "required_hours": 2, "max_windows": None,
-                "min_slot_minutes": 30,
-                "preferred_window_start": "05:00", "preferred_window_end": "05:30",
-            }],
-        }
-        with self.assertLogs("charging_planner", level="INFO") as cm:
-            self._run(tight_config)
-        combined = "\n".join(cm.output)
-        self.assertIn("scheduled outside the preferred window (spillover)", combined)
-
-    def test_no_spillover_line_when_window_is_sufficient(self):
-        with self.assertLogs("charging_planner", level="INFO") as cm:
-            self._run()
-        combined = "\n".join(cm.output)
-        self.assertNotIn("spillover", combined)
-
-
-
-# ===========================================================================
-# 11. Real ENTSO-E data
-# ===========================================================================
-
-# Real ENTSO-E API response captured on 2026-03-14 at 15:10 UTC.
-# Two TimeSeries:
-#   TS1: 2026-03-12T23:00Z – 2026-03-13T23:00Z  (2026-03-13 Helsinki)
-#   TS2: 2026-03-13T23:00Z – 2026-03-14T23:00Z  (2026-03-14 Helsinki)
-# 15-minute resolution, sparse (forward-fill encoding).
-# Known: TS2 morning ~4.99 c€/kWh, peak 22–35 c€/kWh, night 26–30 c€/kWh
-REAL_ENTSOE_XML = """<?xml version="1.0" encoding="UTF-8"?>
-<Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">
-<mRID>67ae7c1eb55f4a02b089a2fa84863e19</mRID>
-<revisionNumber>1</revisionNumber>
-<type>A44</type>
-<createdDateTime>2026-03-14T15:10:13Z</createdDateTime>
-<period.timeInterval>
-  <start>2026-03-12T23:00Z</start>
-  <end>2026-03-14T23:00Z</end>
-</period.timeInterval>
-<TimeSeries>
-  <mRID>1</mRID>
-  <businessType>A62</businessType>
-  <in_Domain.mRID codingScheme="A01">10YFI-1--------U</in_Domain.mRID>
-  <out_Domain.mRID codingScheme="A01">10YFI-1--------U</out_Domain.mRID>
-  <currency_Unit.name>EUR</currency_Unit.name>
-  <price_Measure_Unit.name>MWH</price_Measure_Unit.name>
-  <curveType>A03</curveType>
-  <Period>
-    <timeInterval>
-      <start>2026-03-12T23:00Z</start>
-      <end>2026-03-13T23:00Z</end>
-    </timeInterval>
-    <resolution>PT15M</resolution>
-    <Point><position>1</position><price.amount>2.07</price.amount></Point>
-    <Point><position>2</position><price.amount>2</price.amount></Point>
-    <Point><position>5</position><price.amount>1.99</price.amount></Point>
-    <Point><position>7</position><price.amount>1.98</price.amount></Point>
-    <Point><position>8</position><price.amount>1.97</price.amount></Point>
-    <Point><position>9</position><price.amount>1.5</price.amount></Point>
-    <Point><position>10</position><price.amount>1.48</price.amount></Point>
-    <Point><position>11</position><price.amount>1.32</price.amount></Point>
-    <Point><position>13</position><price.amount>1.95</price.amount></Point>
-    <Point><position>17</position><price.amount>1.82</price.amount></Point>
-    <Point><position>18</position><price.amount>1.96</price.amount></Point>
-    <Point><position>19</position><price.amount>1.99</price.amount></Point>
-    <Point><position>21</position><price.amount>2.04</price.amount></Point>
-    <Point><position>22</position><price.amount>2.41</price.amount></Point>
-    <Point><position>23</position><price.amount>2.63</price.amount></Point>
-    <Point><position>24</position><price.amount>2.62</price.amount></Point>
-    <Point><position>25</position><price.amount>3</price.amount></Point>
-    <Point><position>26</position><price.amount>3.99</price.amount></Point>
-    <Point><position>27</position><price.amount>4</price.amount></Point>
-    <Point><position>28</position><price.amount>4.19</price.amount></Point>
-    <Point><position>29</position><price.amount>5</price.amount></Point>
-    <Point><position>30</position><price.amount>4.96</price.amount></Point>
-    <Point><position>31</position><price.amount>4.99</price.amount></Point>
-    <Point><position>32</position><price.amount>4.98</price.amount></Point>
-    <Point><position>33</position><price.amount>4.99</price.amount></Point>
-    <Point><position>34</position><price.amount>4.79</price.amount></Point>
-    <Point><position>35</position><price.amount>3.38</price.amount></Point>
-    <Point><position>36</position><price.amount>2.69</price.amount></Point>
-    <Point><position>37</position><price.amount>2.68</price.amount></Point>
-    <Point><position>38</position><price.amount>2.63</price.amount></Point>
-    <Point><position>39</position><price.amount>2.56</price.amount></Point>
-    <Point><position>40</position><price.amount>2.3</price.amount></Point>
-    <Point><position>41</position><price.amount>2.54</price.amount></Point>
-    <Point><position>42</position><price.amount>2.12</price.amount></Point>
-    <Point><position>43</position><price.amount>2.1</price.amount></Point>
-    <Point><position>44</position><price.amount>2</price.amount></Point>
-    <Point><position>46</position><price.amount>2.02</price.amount></Point>
-    <Point><position>47</position><price.amount>1.99</price.amount></Point>
-    <Point><position>49</position><price.amount>2</price.amount></Point>
-    <Point><position>53</position><price.amount>1.99</price.amount></Point>
-    <Point><position>54</position><price.amount>2</price.amount></Point>
-    <Point><position>55</position><price.amount>2.1</price.amount></Point>
-    <Point><position>56</position><price.amount>2.15</price.amount></Point>
-    <Point><position>57</position><price.amount>1.97</price.amount></Point>
-    <Point><position>58</position><price.amount>2.07</price.amount></Point>
-    <Point><position>59</position><price.amount>2.14</price.amount></Point>
-    <Point><position>60</position><price.amount>2.85</price.amount></Point>
-    <Point><position>61</position><price.amount>2.33</price.amount></Point>
-    <Point><position>62</position><price.amount>3.06</price.amount></Point>
-    <Point><position>63</position><price.amount>3.39</price.amount></Point>
-    <Point><position>64</position><price.amount>4.99</price.amount></Point>
-    <Point><position>65</position><price.amount>5.29</price.amount></Point>
-    <Point><position>66</position><price.amount>6.3</price.amount></Point>
-    <Point><position>67</position><price.amount>6.83</price.amount></Point>
-    <Point><position>68</position><price.amount>8.25</price.amount></Point>
-    <Point><position>69</position><price.amount>7.06</price.amount></Point>
-    <Point><position>70</position><price.amount>7.94</price.amount></Point>
-    <Point><position>71</position><price.amount>8</price.amount></Point>
-    <Point><position>72</position><price.amount>8.56</price.amount></Point>
-    <Point><position>73</position><price.amount>8.17</price.amount></Point>
-    <Point><position>74</position><price.amount>8.2</price.amount></Point>
-    <Point><position>75</position><price.amount>8.35</price.amount></Point>
-    <Point><position>76</position><price.amount>8.5</price.amount></Point>
-    <Point><position>77</position><price.amount>8.46</price.amount></Point>
-    <Point><position>78</position><price.amount>8.12</price.amount></Point>
-    <Point><position>79</position><price.amount>7.92</price.amount></Point>
-    <Point><position>80</position><price.amount>7.56</price.amount></Point>
-    <Point><position>82</position><price.amount>7.47</price.amount></Point>
-    <Point><position>83</position><price.amount>7.22</price.amount></Point>
-    <Point><position>84</position><price.amount>6.47</price.amount></Point>
-    <Point><position>85</position><price.amount>7.02</price.amount></Point>
-    <Point><position>86</position><price.amount>6.98</price.amount></Point>
-    <Point><position>87</position><price.amount>6.88</price.amount></Point>
-    <Point><position>88</position><price.amount>6.37</price.amount></Point>
-    <Point><position>89</position><price.amount>6.46</price.amount></Point>
-    <Point><position>90</position><price.amount>6.18</price.amount></Point>
-    <Point><position>91</position><price.amount>6.04</price.amount></Point>
-    <Point><position>92</position><price.amount>5.37</price.amount></Point>
-    <Point><position>93</position><price.amount>5.57</price.amount></Point>
-    <Point><position>94</position><price.amount>5.47</price.amount></Point>
-    <Point><position>95</position><price.amount>5.28</price.amount></Point>
-    <Point><position>96</position><price.amount>5.08</price.amount></Point>
-  </Period>
-</TimeSeries>
-<TimeSeries>
-  <mRID>2</mRID>
-  <businessType>A62</businessType>
-  <in_Domain.mRID codingScheme="A01">10YFI-1--------U</in_Domain.mRID>
-  <out_Domain.mRID codingScheme="A01">10YFI-1--------U</out_Domain.mRID>
-  <currency_Unit.name>EUR</currency_Unit.name>
-  <price_Measure_Unit.name>MWH</price_Measure_Unit.name>
-  <curveType>A03</curveType>
-  <Period>
-    <timeInterval>
-      <start>2026-03-13T23:00Z</start>
-      <end>2026-03-14T23:00Z</end>
-    </timeInterval>
-    <resolution>PT15M</resolution>
-    <Point><position>1</position><price.amount>4.99</price.amount></Point>
-    <Point><position>5</position><price.amount>4.84</price.amount></Point>
-    <Point><position>6</position><price.amount>4.95</price.amount></Point>
-    <Point><position>7</position><price.amount>4.99</price.amount></Point>
-    <Point><position>9</position><price.amount>4.93</price.amount></Point>
-    <Point><position>10</position><price.amount>4.96</price.amount></Point>
-    <Point><position>11</position><price.amount>4.99</price.amount></Point>
-    <Point><position>12</position><price.amount>5</price.amount></Point>
-    <Point><position>14</position><price.amount>5.08</price.amount></Point>
-    <Point><position>15</position><price.amount>5.48</price.amount></Point>
-    <Point><position>16</position><price.amount>5.89</price.amount></Point>
-    <Point><position>17</position><price.amount>7.78</price.amount></Point>
-    <Point><position>18</position><price.amount>8.03</price.amount></Point>
-    <Point><position>19</position><price.amount>8.36</price.amount></Point>
-    <Point><position>20</position><price.amount>9.05</price.amount></Point>
-    <Point><position>21</position><price.amount>8.52</price.amount></Point>
-    <Point><position>22</position><price.amount>9.35</price.amount></Point>
-    <Point><position>23</position><price.amount>10.47</price.amount></Point>
-    <Point><position>24</position><price.amount>11.48</price.amount></Point>
-    <Point><position>25</position><price.amount>9.48</price.amount></Point>
-    <Point><position>26</position><price.amount>10.57</price.amount></Point>
-    <Point><position>27</position><price.amount>11.36</price.amount></Point>
-    <Point><position>28</position><price.amount>11.52</price.amount></Point>
-    <Point><position>29</position><price.amount>12.45</price.amount></Point>
-    <Point><position>30</position><price.amount>12.51</price.amount></Point>
-    <Point><position>31</position><price.amount>12.79</price.amount></Point>
-    <Point><position>32</position><price.amount>13.2</price.amount></Point>
-    <Point><position>33</position><price.amount>13.24</price.amount></Point>
-    <Point><position>34</position><price.amount>13.64</price.amount></Point>
-    <Point><position>35</position><price.amount>14.24</price.amount></Point>
-    <Point><position>36</position><price.amount>17.88</price.amount></Point>
-    <Point><position>37</position><price.amount>13.37</price.amount></Point>
-    <Point><position>38</position><price.amount>14.16</price.amount></Point>
-    <Point><position>39</position><price.amount>18.36</price.amount></Point>
-    <Point><position>40</position><price.amount>22.1</price.amount></Point>
-    <Point><position>41</position><price.amount>14.99</price.amount></Point>
-    <Point><position>42</position><price.amount>16.7</price.amount></Point>
-    <Point><position>43</position><price.amount>19.94</price.amount></Point>
-    <Point><position>44</position><price.amount>22.19</price.amount></Point>
-    <Point><position>45</position><price.amount>17.94</price.amount></Point>
-    <Point><position>46</position><price.amount>19.99</price.amount></Point>
-    <Point><position>47</position><price.amount>19.92</price.amount></Point>
-    <Point><position>48</position><price.amount>21.47</price.amount></Point>
-    <Point><position>49</position><price.amount>17.89</price.amount></Point>
-    <Point><position>50</position><price.amount>19.41</price.amount></Point>
-    <Point><position>51</position><price.amount>20.84</price.amount></Point>
-    <Point><position>52</position><price.amount>21.87</price.amount></Point>
-    <Point><position>53</position><price.amount>15.86</price.amount></Point>
-    <Point><position>54</position><price.amount>18.3</price.amount></Point>
-    <Point><position>55</position><price.amount>21.97</price.amount></Point>
-    <Point><position>56</position><price.amount>25.07</price.amount></Point>
-    <Point><position>57</position><price.amount>18.17</price.amount></Point>
-    <Point><position>58</position><price.amount>21.73</price.amount></Point>
-    <Point><position>59</position><price.amount>24.53</price.amount></Point>
-    <Point><position>60</position><price.amount>27.99</price.amount></Point>
-    <Point><position>61</position><price.amount>22.92</price.amount></Point>
-    <Point><position>62</position><price.amount>28.33</price.amount></Point>
-    <Point><position>63</position><price.amount>30</price.amount></Point>
-    <Point><position>64</position><price.amount>32.79</price.amount></Point>
-    <Point><position>65</position><price.amount>27.51</price.amount></Point>
-    <Point><position>66</position><price.amount>29.99</price.amount></Point>
-    <Point><position>67</position><price.amount>32.8</price.amount></Point>
-    <Point><position>68</position><price.amount>35.31</price.amount></Point>
-    <Point><position>69</position><price.amount>30.31</price.amount></Point>
-    <Point><position>70</position><price.amount>30.82</price.amount></Point>
-    <Point><position>71</position><price.amount>31.96</price.amount></Point>
-    <Point><position>72</position><price.amount>31.32</price.amount></Point>
-    <Point><position>73</position><price.amount>31.92</price.amount></Point>
-    <Point><position>74</position><price.amount>30.62</price.amount></Point>
-    <Point><position>75</position><price.amount>35</price.amount></Point>
-    <Point><position>76</position><price.amount>32</price.amount></Point>
-    <Point><position>77</position><price.amount>31.99</price.amount></Point>
-    <Point><position>78</position><price.amount>30</price.amount></Point>
-    <Point><position>79</position><price.amount>28</price.amount></Point>
-    <Point><position>80</position><price.amount>26.08</price.amount></Point>
-    <Point><position>81</position><price.amount>31.11</price.amount></Point>
-    <Point><position>82</position><price.amount>29.64</price.amount></Point>
-    <Point><position>83</position><price.amount>27.94</price.amount></Point>
-    <Point><position>84</position><price.amount>26.99</price.amount></Point>
-    <Point><position>85</position><price.amount>29.81</price.amount></Point>
-    <Point><position>86</position><price.amount>30</price.amount></Point>
-    <Point><position>89</position><price.amount>34.97</price.amount></Point>
-    <Point><position>90</position><price.amount>32</price.amount></Point>
-    <Point><position>91</position><price.amount>30.26</price.amount></Point>
-    <Point><position>92</position><price.amount>30</price.amount></Point>
-    <Point><position>93</position><price.amount>30.88</price.amount></Point>
-    <Point><position>94</position><price.amount>29.99</price.amount></Point>
-    <Point><position>95</position><price.amount>27.93</price.amount></Point>
-    <Point><position>96</position><price.amount>26.26</price.amount></Point>
-  </Period>
-</TimeSeries>
-</Publication_MarketDocument>
-"""
+        for i in range(len(srt) - 1):
+            self.assertEqual(srt[i].end, srt[i + 1].start)
+
+    def test_selected_slots_cheaper_than_peak(self):
+        """Scheduled slots should be significantly cheaper than the day's peak."""
+        slots = self._slots()
+        anchor = date(2026, 3, 14)
+        ws, we = _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=anchor)
+        inside, _ = filter_preferred_window(slots, ws, we, "00:00", "06:30")
+        selected = select_charging_windows(inside, required_minutes=120,
+                                           min_slot_minutes=30)
+        avg_selected = sum(s.price_eur_kwh for s in selected) / len(selected)
+        # TS2 peak is ~35 c€/kWh (0.35 EUR/kWh); selected morning should be < 10%
+        self.assertLess(avg_selected, 0.10)
 
 
 class TestPriceSourceRules(unittest.TestCase):
@@ -3056,126 +1358,6 @@ class TestPriceSourceRules(unittest.TestCase):
                 self.assertLessEqual(slot_start, tomorrow_23_utc,
                     f"Charging slot {s['start_utc']} exceeds planning horizon")
 
-
-
-class TestRealEntsoEData(unittest.TestCase):
-
-    def _slots(self, ref=date(2026, 3, 14)):
-        return _parse_entsoe_xml(REAL_ENTSOE_XML, ref, "FI")
-
-    # ── Parsing correctness ──────────────────────────────────────────────────
-
-    def test_parses_two_time_series(self):
-        slots = self._slots()
-        # Two 24h days × 96 slots/day = 192 slots; some may overlap at boundaries
-        self.assertGreaterEqual(len(slots), 96)
-
-    def test_no_duplicate_start_times(self):
-        slots = self._slots()
-        starts = [s.start for s in slots]
-        self.assertEqual(len(starts), len(set(starts)))
-
-    def test_all_slots_15_minutes(self):
-        slots = self._slots()
-        for s in slots:
-            self.assertEqual(s.duration_minutes, 15)
-
-    def test_slots_sorted_ascending(self):
-        slots = self._slots()
-        starts = [s.start for s in slots]
-        self.assertEqual(starts, sorted(starts))
-
-    def test_ordinals_sequential(self):
-        slots = self._slots()
-        for i, s in enumerate(slots):
-            self.assertEqual(s.slot, i)
-
-    def test_prices_are_positive(self):
-        slots = self._slots()
-        for s in slots:
-            self.assertGreater(s.price_eur_kwh, 0)
-
-    def test_prices_in_plausible_range(self):
-        # Finnish day-ahead prices on 2026-03-13/14 should be between 0 and 1 €/kWh
-        slots = self._slots()
-        for s in slots:
-            self.assertLess(s.price_eur_kwh, 1.0,
-                            f"Price {s.price_eur_kwh:.4f} €/kWh seems implausibly high")
-
-    def test_forward_fill_applied(self):
-        # TS2 position 1 = 4.99 EUR/MWh; positions 2–4 not listed → should carry forward
-        slots = self._slots()
-        # TS2 starts at 2026-03-13T23:00Z
-        ts2_start = datetime(2026, 3, 13, 23, 0, tzinfo=UTC)
-        ts2_slots = [s for s in slots if s.start >= ts2_start][:4]
-        self.assertEqual(len(ts2_slots), 4)
-        # All four should have the same price (4.99 EUR/MWh = 0.00499 EUR/kWh)
-        for s in ts2_slots:
-            self.assertAlmostEqual(s.price_eur_kwh, 0.00499, places=4)
-
-    def test_known_peak_price(self):
-        # TS2 position 40 = 22.1 EUR/MWh at 2026-03-13T23:00Z + 39×15min = 2026-03-14T08:45Z
-        # = 10:45 Helsinki EET
-        slots = self._slots()
-        peak_time = datetime(2026, 3, 14, 8, 45, tzinfo=UTC)
-        peak_slot = next((s for s in slots if s.start == peak_time), None)
-        self.assertIsNotNone(peak_slot, "Expected slot at 08:45 UTC not found")
-        self.assertAlmostEqual(peak_slot.price_eur_kwh, 0.0221, places=4)
-
-    # ── Selection with real prices ───────────────────────────────────────────
-
-    def test_topup_selects_cheapest_window(self):
-        """2h topup in 00:00–06:30 Helsinki should pick the cheapest morning slots."""
-        slots = self._slots()
-        # Filter to the 00:00–06:30 Helsinki window on 2026-03-14
-        anchor = date(2026, 3, 14)
-        ws, we = _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=anchor)
-        inside, _ = filter_preferred_window(slots, ws, we, "00:00", "06:30")
-        selected = select_charging_windows(inside, required_minutes=120,
-                                           min_slot_minutes=30)
-        self.assertEqual(sum(s.duration_minutes for s in selected), 120)
-        # All selected slots must be within the window
-        for s in selected:
-            self.assertGreaterEqual(s.start, ws)
-            self.assertLessEqual(s.end, we)
-        # Avg price should be well below the day's avg (morning is cheap)
-        avg = sum(s.price_eur_kwh for s in selected) / len(selected)
-        self.assertLess(avg * 100, 6.0)  # below 6 c€/kWh
-
-    def test_continuous_block_stays_within_window(self):
-        """6h continuous block in 00:00–06:30 window should fit entirely inside."""
-        slots = self._slots()
-        anchor = date(2026, 3, 14)
-        ws, we = _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=anchor)
-        inside, _ = filter_preferred_window(slots, ws, we, "00:00", "06:30")
-        selected = select_charging_windows(inside, required_minutes=360,
-                                           max_windows=1,
-                                           min_slot_minutes=30)
-        self.assertEqual(sum(s.duration_minutes for s in selected), 360)
-        for s in selected:
-            self.assertGreaterEqual(s.start, ws)
-            self.assertLessEqual(s.end, we)
-        # Must be one continuous block
-        srt = sorted(selected, key=lambda s: s.start)
-        for i in range(len(srt) - 1):
-            self.assertEqual(srt[i].end, srt[i + 1].start)
-
-    def test_selected_slots_cheaper_than_peak(self):
-        """Scheduled slots should be significantly cheaper than the day's peak."""
-        slots = self._slots()
-        anchor = date(2026, 3, 14)
-        ws, we = _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=anchor)
-        inside, _ = filter_preferred_window(slots, ws, we, "00:00", "06:30")
-        selected = select_charging_windows(inside, required_minutes=120,
-                                           min_slot_minutes=30)
-        avg_selected = sum(s.price_eur_kwh for s in selected) / len(selected)
-        # TS2 peak is ~35 c€/kWh (0.35 EUR/kWh); selected morning should be < 10%
-        self.assertLess(avg_selected, 0.10)
-
-
-# ===========================================================================
-# 12. Area-based fallback chain
-# ===========================================================================
 
 class TestBuildFallbackChain(unittest.TestCase):
     """Unit tests for _build_fallback_chain.
@@ -3628,6 +1810,1444 @@ def _capture_stdout(fn, *args, **kwargs) -> str:
     return buf.getvalue()
 
 
+# ===========================================================================
+# Window resolution
+# ===========================================================================
+
+class TestResolveScheduleWindow(unittest.TestCase):
+
+    def _make_cfg(self, schedule):
+        from dataclasses import replace
+        import copy
+        raw = {
+            "entsoe": {"api_key": "abc", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "test",
+                "required_hours": 2,
+                "preferred_window_start": "22:00",
+                "preferred_window_end": "06:30",
+                "schedule": schedule,
+            }],
+        }
+        return parse_configs(raw)[0]
+
+    def test_weekday_matches_schedule_entry(self):
+        cfg = self._make_cfg([
+            {"days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+             "preferred_window_start": "22:00", "preferred_window_end": "06:30"},
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
+        ])
+        # 2026-03-21 is a Saturday
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        self.assertEqual(start, "00:00")
+        self.assertEqual(end, "23:45")
+
+    def test_weekday_falls_back_to_default(self):
+        cfg = self._make_cfg([
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
+        ])
+        # 2026-03-16 is a Monday — no matching entry
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 16))
+        self.assertEqual(start, "22:00")
+        self.assertEqual(end, "06:30")
+
+    def test_empty_schedule_returns_defaults(self):
+        cfg = self._make_cfg([])
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        self.assertEqual(start, "22:00")
+        self.assertEqual(end, "06:30")
+
+    def test_first_matching_entry_wins(self):
+        cfg = self._make_cfg([
+            {"days": ["saturday"],
+             "preferred_window_start": "08:00", "preferred_window_end": "20:00"},
+            {"days": ["sunday"],
+             "preferred_window_start": "00:00", "preferred_window_end": "23:45"},
+        ])
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        self.assertEqual(start, "08:00")
+
+    def test_any_window_returns_sentinel(self):
+        cfg = self._make_cfg([
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "any", "preferred_window_end": "any"},
+        ])
+        start, end, _ = _resolve_schedule_window(cfg, date(2026, 3, 21))
+        self.assertEqual(start, "any")
+        self.assertEqual(end, "any")
+
+
+class TestHhmmToUtc(unittest.TestCase):
+
+    def test_utc_timezone(self):
+        result = _hhmm_to_utc("12:00", REF_DATE, UTC)
+        self.assertEqual(result, datetime(2026, 3, 15, 12, 0, tzinfo=UTC))
+
+    def test_positive_offset(self):
+        # Helsinki EET = UTC+2; 00:00 local = 22:00 UTC prev day
+        result = _hhmm_to_utc("00:00", REF_DATE, FI_TZ)
+        self.assertEqual(result, datetime(2026, 3, 14, 22, 0, tzinfo=UTC))
+
+    def test_with_minutes(self):
+        result = _hhmm_to_utc("06:30", REF_DATE, FI_TZ)
+        self.assertEqual(result, datetime(2026, 3, 15, 4, 30, tzinfo=UTC))
+
+    def test_dst_transition(self):
+        # 2026-03-29: Helsinki clocks forward at 03:00 EET → 04:00 EEST
+        # Before transition: 01:00 Helsinki = 23:00 UTC
+        # After transition: 04:00 Helsinki = 01:00 UTC
+        dst_date = date(2026, 3, 29)
+        result = _hhmm_to_utc("04:00", dst_date, FI_TZ)
+        self.assertEqual(result, datetime(2026, 3, 29, 1, 0, tzinfo=UTC))
+
+
+class TestIsOvernight(unittest.TestCase):
+
+    def test_same_day_not_overnight(self):
+        self.assertFalse(_is_overnight("00:00", "06:30"))
+        self.assertFalse(_is_overnight("08:00", "22:00"))
+
+    def test_overnight_detected(self):
+        self.assertTrue(_is_overnight("22:00", "06:30"))
+        self.assertTrue(_is_overnight("23:00", "01:00"))
+
+
+class TestResolveWindowUtc(unittest.TestCase):
+
+    def test_same_day_window_end_after_start(self):
+        start, end = _resolve_window_utc("00:00", "06:00", FI_TZ,
+                                          _anchor_date=REF_DATE)
+        self.assertGreater(end, start)
+
+    def test_same_day_values(self):
+        # REF_DATE 2026-03-15, EET = UTC+2
+        # 00:00 local = 2026-03-14T22:00Z, 06:00 local = 2026-03-15T04:00Z
+        start, end = _resolve_window_utc("00:00", "06:00", FI_TZ,
+                                          _anchor_date=REF_DATE)
+        self.assertEqual(start, datetime(2026, 3, 14, 22, 0, tzinfo=UTC))
+        self.assertEqual(end,   datetime(2026, 3, 15, 4,  0, tzinfo=UTC))
+
+    def test_overnight_end_on_next_day(self):
+        # 22:00–06:30 overnight: end must be after start in UTC
+        start, end = _resolve_window_utc("22:00", "06:30", FI_TZ,
+                                          _anchor_date=REF_DATE)
+        self.assertGreater(end, start)
+
+    def test_overnight_end_utc_values(self):
+        # REF_DATE 2026-03-15 is EET (UTC+2)
+        # 22:00 Helsinki = 20:00 UTC; 06:30 next day Helsinki = 04:30 UTC
+        start, end = _resolve_window_utc("22:00", "06:30", FI_TZ,
+                                          _anchor_date=REF_DATE)
+        self.assertEqual(start, datetime(2026, 3, 15, 20, 0,  tzinfo=UTC))
+        self.assertEqual(end,   datetime(2026, 3, 16, 4,  30, tzinfo=UTC))
+
+
+class TestResolvePlanningHorizon(unittest.TestCase):
+    """Covers the scenario matrix worked out for the 'delayed run' fix: which
+    window instance (yesterday's still-open tail, today's, or tomorrow's)
+    _resolve_planning_horizon targets, for every window shape and every
+    before/live/elapsed timing relative to now.
+
+    All dates below are in EET (UTC+2, before the 2026-03-29 DST transition)
+    unless noted. now_utc is passed explicitly — no datetime mocking needed.
+    """
+
+    DAY1 = date(2026, 3, 17)   # Tuesday
+    DAY2 = date(2026, 3, 18)   # Wednesday
+
+    def _far_future_prices(self):
+        # Reaches well past any plan_horizon_utc used in these tests, so
+        # any_end_cap is governed by plan_horizon, not by data availability.
+        return [make_slot(datetime(2026, 3, 21, 0, 0, tzinfo=UTC))]
+
+    # --- Overnight, fixed (21:00-06:30 EET = 19:00-04:30 UTC) ---
+
+    def test_overnight_before_start_targets_today(self):
+        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
+        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)   # 12:00 EET, well before 19:00Z
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1)
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+
+    def test_overnight_live_evening_half_still_targets_today(self):
+        # The bug this whole fix is for: a delayed run firing after start.
+        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
+        now = datetime(2026, 3, 17, 21, 0, tzinfo=UTC)   # 23:00 EET — after 19:00Z start
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1, "must NOT skip to tomorrow")
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+
+    def test_overnight_live_early_morning_tail_targets_yesterday(self):
+        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
+        now = datetime(2026, 3, 18, 2, 0, tzinfo=UTC)    # 04:00 EET — inside 3/17's tail
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1, "must catch yesterday's still-open window")
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+
+    def test_overnight_after_both_closed_targets_tonight(self):
+        cfg = make_config(preferred_window_start="21:00", preferred_window_end="06:30")
+        now = datetime(2026, 3, 18, 6, 0, tzinfo=UTC)    # 08:00 EET — well past 04:30Z end
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY2)
+        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 19, 4, 30, tzinfo=UTC))
+
+    # --- Same-day, fixed (09:00-17:00 EET = 07:00-15:00 UTC) ---
+
+    def test_same_day_before_start_targets_today(self):
+        cfg = make_config(preferred_window_start="09:00", preferred_window_end="17:00")
+        now = datetime(2026, 3, 17, 5, 0, tzinfo=UTC)    # 07:00 EET, before 07:00Z start
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1)
+        self.assertEqual(ws, datetime(2026, 3, 17, 7, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 17, 15, 0, tzinfo=UTC))
+
+    def test_same_day_live_still_targets_today(self):
+        cfg = make_config(preferred_window_start="09:00", preferred_window_end="17:00")
+        now = datetime(2026, 3, 17, 8, 0, tzinfo=UTC)    # 10:00 EET — inside 07:00-15:00Z
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY1, "must NOT skip to tomorrow")
+        self.assertEqual(ws, datetime(2026, 3, 17, 7, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 17, 15, 0, tzinfo=UTC))
+
+    def test_same_day_after_end_targets_tomorrow(self):
+        cfg = make_config(preferred_window_start="09:00", preferred_window_end="17:00")
+        now = datetime(2026, 3, 17, 16, 0, tzinfo=UTC)   # 18:00 EET — after 15:00Z end
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+        self.assertEqual(plan_date, self.DAY2)
+        self.assertEqual(ws, datetime(2026, 3, 18, 7, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 15, 0, tzinfo=UTC))
+
+    # --- any / any ---
+
+    def test_any_any_always_live_from_now(self):
+        cfg = make_config(preferred_window_any=True,
+                          preferred_window_start="any", preferred_window_end="any")
+        now = datetime(2026, 3, 17, 8, 0, tzinfo=UTC)
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(ws, now)
+        self.assertEqual(ss, "any")
+        self.assertEqual(es, "any")
+
+    # --- any start, fixed end ---
+    #
+    # window_start_any / window_end_any count as "schedule or any" (matching
+    # the original code's own trigger condition), so these go through the
+    # day-ahead (tomorrow-indexed) branch just like a real schedule would —
+    # the fixed end is always tomorrow's occurrence, regardless of whether
+    # today's own occurrence has already passed. There's no "is today's
+    # occurrence still valid" nuance for this shape in that branch, matching
+    # the original code's own behavior for it exactly (see the docstring's
+    # "Schedule (or top-level any) present" case).
+
+    def test_any_start_fixed_end_always_targets_tomorrows_occurrence(self):
+        cfg = make_config(window_start_any=True, preferred_window_end="06:30")
+        for label, now in [
+            ("before today's end", datetime(2026, 3, 17, 2, 0, tzinfo=UTC)),
+            ("after today's end",  datetime(2026, 3, 17, 5, 0, tzinfo=UTC)),
+        ]:
+            with self.subTest(label):
+                ws, we, ss, es, plan_date, req = _resolve_planning_horizon(cfg, now, FI_TZ, [])
+                self.assertEqual(ws, now)
+                self.assertEqual(we, datetime(2026, 3, 18, 4, 30, tzinfo=UTC))
+                self.assertEqual(plan_date, self.DAY1, "ws falls on today's date since start=now")
+
+    # --- fixed start, any end ---
+    #
+    # Same day-ahead indexing as above: candidate 1 (today's own entry) only
+    # ever applies to overnight shapes, so a "fixed start, any end" entry is
+    # always reached via candidate 2, anchored to tomorrow.
+
+    def test_fixed_start_any_end_before_start(self):
+        cfg = make_config(preferred_window_start="21:00", window_end_any=True)
+        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(plan_date, self.DAY2)
+        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
+        self.assertEqual(es, "any")
+
+    def test_fixed_start_any_end_required_hours_still_bounds_the_cap(self):
+        # any_end_cap is min(last available price, plan_horizon) regardless
+        # of which candidate is used — a required_minutes that can't fit
+        # before that cap is still meaningful, even though this shape is
+        # always tomorrow-anchored (no live/elapsed check on this branch).
+        cfg = make_config(preferred_window_start="21:00", window_end_any=True,
+                          required_minutes=60)
+        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(ws, datetime(2026, 3, 18, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, datetime(2026, 3, 18, 23, 0, tzinfo=UTC))
+        self.assertEqual(es, "any")
+
+    def test_any_end_bound_by_realistic_price_data_not_plan_horizon(self):
+        # Regression: every other test in this class uses
+        # _far_future_prices() specifically so plan_horizon is always the
+        # binding constraint on any_end_cap — none of them verify the
+        # actually-common case, where realistic (near-term) price data is
+        # the *more* restrictive bound. Real day-ahead prices only ever
+        # cover roughly today + tomorrow (published once daily) — an
+        # any/any window must never be planned as if cheap prices existed
+        # further out than they actually do.
+        #
+        # Friday run: real prices exist for Friday (published Thursday) and
+        # Saturday (published Friday, "day-ahead" for tomorrow) — nothing
+        # for Sunday yet, since that only publishes on Saturday itself.
+        cfg = make_config(schedule=[
+            {"days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+             "preferred_window_start": "21:00", "preferred_window_end": "06:30",
+             "required_hours": 3.5},
+            {"days": ["saturday", "sunday"],
+             "preferred_window_start": "any", "preferred_window_end": "any",
+             "required_hours": 4.5},
+        ])
+        realistic_prices = [
+            make_slot(datetime(2026, 9, 24, 21, 0, tzinfo=UTC)   # Friday 00:00 EEST
+                     + timedelta(minutes=15 * i))
+            for i in range(191)   # Fri 00:00 EEST -> Sat 23:45 EEST, nothing beyond
+        ]
+        last_real_price_end = max(s.end for s in realistic_prices)
+
+        now = datetime(2026, 9, 25, 13, 0, tzinfo=UTC)   # Friday 16:00 EEST
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, realistic_prices,
+        )
+        self.assertEqual(ss, "any")
+        self.assertEqual(we, last_real_price_end,
+                         "any-any window end must be bound by the actual last "
+                         "real price slot, not extended into Sunday just "
+                         "because a generic plan_horizon ceiling allows it")
+        self.assertEqual(we.astimezone(FI_TZ).date(), date(2026, 9, 26),
+                         "must stop at Saturday night local — never reach Sunday, "
+                         "which has no real published prices yet from Friday's run")
+
+    # --- schedule spanning a weekday/weekend-shape boundary ---
+    #
+    # A schedule entry is indexed by the day the charging is *for*: the
+    # "monday" entry describes the session that gets the car ready for
+    # Monday, which for an overnight shape actually starts Sunday evening.
+    # This is the exact regression caught in production: on a Sunday with a
+    # weekday-overnight/weekend-any schedule, targeting Sunday's own any/any
+    # entry meant Monday's fixed window was never even considered.
+
+    def test_schedule_regression_weekend_any_does_not_mask_weekday_overnight(self):
+        # The precise scenario from the production bug report: Saturday and
+        # Sunday are any/any, Monday-Friday are a fixed overnight window.
+        # A normal Sunday-afternoon run must still target Monday's fixed
+        # window (starting Sunday evening), not Sunday's own any/any.
+        cfg = make_config(schedule=[
+            {"days": ["saturday", "sunday"], "preferred_window_start": "any", "preferred_window_end": "any"},
+            {"days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+             "preferred_window_start": "21:00", "preferred_window_end": "06:30"},
+        ])
+        now = datetime(2026, 3, 15, 14, 0, tzinfo=UTC)   # 2026-03-15 is REF_DATE, a Sunday; 16:00 EET
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(ss, "21:00", "must use Monday's fixed window, not Sunday's any/any")
+        self.assertEqual(es, "06:30")
+        self.assertEqual(ws, datetime(2026, 3, 15, 19, 0, tzinfo=UTC), "starts Sunday evening")
+        self.assertEqual(we, datetime(2026, 3, 16, 4, 30, tzinfo=UTC))
+        self.assertEqual(plan_date, REF_DATE)   # Sunday — the date the window starts on
+
+    def test_schedule_yesterday_tail_uses_todays_own_schedule_entry(self):
+        # Wednesday's own entry (21:00-06:30, describing the session that
+        # gets the car ready for Wednesday) actually starts Tuesday evening.
+        # Checked early Wednesday morning, its tail must still be caught —
+        # via WEDNESDAY's (today's) own entry, not Tuesday's (which could be
+        # any shape at all and is never even queried for this check).
+        cfg = make_config(schedule=[
+            {"days": ["wednesday"], "preferred_window_start": "21:00", "preferred_window_end": "06:30"},
+            {"days": ["thursday"],  "preferred_window_start": "any",   "preferred_window_end": "any"},
+        ])
+        now = datetime(2026, 3, 18, 2, 0, tzinfo=UTC)    # 04:00 EET Wednesday
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(ss, "21:00")
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC), "starts Tuesday evening")
+        self.assertEqual(plan_date, self.DAY1)   # Tuesday — the date the window starts on
+
+    def test_schedule_elapsed_today_rolls_to_tomorrows_own_shape(self):
+        # Tuesday: same-day 09:00-17:00, already elapsed. Wednesday: any/any.
+        # Must resolve via WEDNESDAY's entry for the rollover (candidate 1
+        # only ever applies to overnight shapes, so same-day never blocks
+        # this transition).
+        cfg = make_config(schedule=[
+            {"days": ["tuesday"],   "preferred_window_start": "09:00", "preferred_window_end": "17:00"},
+            {"days": ["wednesday"], "preferred_window_start": "any",   "preferred_window_end": "any"},
+        ])
+        now = datetime(2026, 3, 17, 16, 0, tzinfo=UTC)   # 18:00 EET Tuesday — after 15:00Z end
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(ss, "any")
+        self.assertEqual(es, "any")
+        self.assertEqual(ws, now)
+        self.assertEqual(plan_date, self.DAY1, "ws falls on today's date since any/any starts now")
+
+    def test_schedule_required_hours_override_follows_target_date(self):
+        # Monday run targets Tuesday's entry (day-ahead) — its override must
+        # be the one that comes back, not any other date's.
+        cfg = make_config(schedule=[
+            {"days": ["tuesday"], "preferred_window_start": "21:00",
+             "preferred_window_end": "06:30", "required_hours": 3.5},
+        ])
+        now = datetime(2026, 3, 16, 10, 0, tzinfo=UTC)   # Monday, well before the target window
+        ws, we, ss, es, plan_date, req = _resolve_planning_horizon(
+            cfg, now, FI_TZ, self._far_future_prices(),
+        )
+        self.assertEqual(req, 210)   # 3.5h
+        self.assertEqual(ws, datetime(2026, 3, 16, 19, 0, tzinfo=UTC))
+
+
+class TestClassifyWindowInstance(unittest.TestCase):
+    """Direct tests of _classify_window_instance's "fixed start, any end"
+    elapsed behavior (required_minutes no longer fits before any_end_cap) —
+    not reachable via _resolve_planning_horizon for this shape combination,
+    since window_end_any always routes through the tomorrow-anchored branch
+    there (matching the original code's own behavior for it), but the
+    behavior itself is real and worth covering directly."""
+
+    def _far_future_prices(self):
+        return [make_slot(datetime(2026, 3, 21, 0, 0, tzinfo=UTC))]
+
+    def test_live_when_required_still_fits(self):
+        cfg = make_config(required_minutes=60)
+        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)
+        any_end_cap = datetime(2026, 3, 18, 23, 0, tzinfo=UTC)   # ~27h out
+        result = _classify_window_instance(
+            "21:00", "any", None, date(2026, 3, 17), now, any_end_cap, cfg, FI_TZ,
+        )
+        self.assertIsNotNone(result)
+        ws, we, ss, es, req = result
+        self.assertEqual(ws, datetime(2026, 3, 17, 19, 0, tzinfo=UTC))
+        self.assertEqual(we, any_end_cap)
+
+    def test_elapsed_when_required_no_longer_fits(self):
+        cfg = make_config(required_minutes=40 * 60)   # 40h — more than the ~27h available
+        now = datetime(2026, 3, 17, 20, 0, tzinfo=UTC)
+        any_end_cap = datetime(2026, 3, 18, 23, 0, tzinfo=UTC)
+        result = _classify_window_instance(
+            "21:00", "any", None, date(2026, 3, 17), now, any_end_cap, cfg, FI_TZ,
+        )
+        self.assertIsNone(result, "40h no longer fits before the cap — must classify as elapsed")
+
+    def test_before_start_always_upcoming_regardless_of_required(self):
+        cfg = make_config(required_minutes=40 * 60)
+        now = datetime(2026, 3, 17, 10, 0, tzinfo=UTC)   # before 19:00Z start
+        any_end_cap = datetime(2026, 3, 18, 23, 0, tzinfo=UTC)
+        result = _classify_window_instance(
+            "21:00", "any", None, date(2026, 3, 17), now, any_end_cap, cfg, FI_TZ,
+        )
+        self.assertIsNotNone(result, "not started yet — required-fits check shouldn't even apply")
+
+
+# ===========================================================================
+# Slot selection
+# ===========================================================================
+
+class TestFilterPreferredWindow(unittest.TestCase):
+
+    def _run(self, slots, start_hhmm, end_hhmm, anchor=REF_DATE):
+        ws, we = _resolve_window_utc(start_hhmm, end_hhmm, FI_TZ,
+                                      _anchor_date=anchor)
+        return filter_preferred_window(slots, ws, we, start_hhmm, end_hhmm)
+
+    def test_slots_inside_same_day_window(self):
+        # 00:00–06:00 Helsinki; slots at 01:00, 03:00, 08:00 local
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)  # 00:00 Helsinki
+        slots = [
+            make_slot(base + timedelta(hours=1)),   # 01:00 — inside
+            make_slot(base + timedelta(hours=3)),   # 03:00 — inside
+            make_slot(base + timedelta(hours=8)),   # 08:00 — outside
+        ]
+        inside, outside = self._run(slots, "00:00", "06:00")
+        self.assertEqual(len(inside),  2)
+        self.assertEqual(len(outside), 1)
+
+    def test_overnight_evening_slots_inside(self):
+        # 22:00–06:30 window; slot at 22:30 Helsinki (tonight) should be inside
+        base = datetime(2026, 3, 15, 20, 30, tzinfo=UTC)  # 22:30 Helsinki
+        slots = [make_slot(base)]
+        inside, _ = self._run(slots, "22:00", "06:30")
+        self.assertEqual(len(inside), 1)
+
+    def test_overnight_morning_slots_inside(self):
+        # 06:00 Helsinki next morning = 03:00 UTC — inside 22:00–06:30 window
+        base = datetime(2026, 3, 16, 3, 0, tzinfo=UTC)  # 06:00 Helsinki
+        slots = [make_slot(base)]
+        inside, _ = self._run(slots, "22:00", "06:30")
+        self.assertEqual(len(inside), 1)
+
+    def test_overnight_midday_slots_outside(self):
+        # 14:00 Helsinki = 12:00 UTC — outside 22:00–06:30 window
+        base = datetime(2026, 3, 15, 12, 0, tzinfo=UTC)
+        slots = [make_slot(base)]
+        _, outside = self._run(slots, "22:00", "06:30")
+        self.assertEqual(len(outside), 1)
+
+    def test_empty_input(self):
+        inside, outside = self._run([], "00:00", "06:00")
+        self.assertEqual(inside, [])
+        self.assertEqual(outside, [])
+
+
+class TestSelectChargingWindows(unittest.TestCase):
+
+    def _slots(self, count=24, price_cents=3.0):
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        return slots_from(base, count, price_cents=price_cents)
+
+    def test_selects_required_minutes(self):
+        selected = select_charging_windows(self._slots(), required_minutes=60)
+        total = sum(s.duration_minutes for s in selected)
+        self.assertEqual(total, 60)
+
+    def test_selects_cheapest_slots(self):
+        slots = self._slots(24, price_cents=5.0)
+        # Make slots 4–7 cheaper
+        for i in [4, 5, 6, 7]:
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        selected = select_charging_windows(slots, required_minutes=60)
+        cheap_starts = {slots[i].start for i in [4, 5, 6, 7]}
+        self.assertTrue(all(s.start in cheap_starts for s in selected))
+
+    def test_max_windows_1_returns_one_block(self):
+        slots = self._slots(24)
+        selected = select_charging_windows(slots, required_minutes=60,
+                                           max_windows=1)
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        self.assertEqual(len(groups), 1)
+
+    def test_min_slot_minutes_enforced(self):
+        slots = self._slots(24)
+        selected = select_charging_windows(slots, required_minutes=120,
+                                           min_slot_minutes=30)
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for group in groups:
+            duration = sum(s.duration_minutes for s in group)
+            self.assertGreaterEqual(duration, 30)
+
+    def test_max_price_ceiling_respected(self):
+        slots = self._slots(24, price_cents=5.0)
+        # Only 4 slots are cheap enough
+        for i in range(4):
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        selected = select_charging_windows(slots, required_minutes=60,
+                                           max_price=0.02)
+        self.assertLessEqual(len(selected), 4)
+        for s in selected:
+            self.assertLessEqual(s.price_eur_kwh, 0.02)
+
+    def test_empty_prices_returns_empty(self):
+        self.assertEqual(select_charging_windows([], required_minutes=60), [])
+
+    def test_latest_slot_preferred_on_equal_price(self):
+        # All slots same price — should prefer the latest ones
+        slots = self._slots(8)
+        selected = select_charging_windows(slots, required_minutes=15)
+        self.assertEqual(selected[0].start, slots[-1].start)
+
+
+class TestBestContinuousWindow(unittest.TestCase):
+
+    def _slots(self, count=8):
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        return slots_from(base, count)
+
+    def test_returns_cheapest_continuous_window(self):
+        slots = self._slots(8)
+        # Make slots 2–5 cheaper
+        for i in [2, 3, 4, 5]:
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        result = _best_continuous_window(slots, slots, n_slots=4)
+        self.assertEqual(len(result), 4)
+        self.assertEqual(result[0].start, slots[2].start)
+
+    def test_fallback_stays_within_candidates(self):
+        slots = self._slots(8)
+        # Only slots 0–1 and 6–7 are candidates — no 4-slot window fits
+        candidates = [s for i, s in enumerate(slots) if i in (0, 1, 6, 7)]
+        result = _best_continuous_window(candidates, slots, n_slots=4)
+        # Returns longest contiguous block within candidates, not outside
+        candidate_starts = {s.start for s in candidates}
+        for s in result:
+            self.assertIn(s.start, candidate_starts)
+
+    def test_respects_temporal_continuity(self):
+        # Build slots with a time gap in the middle
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        evening = slots_from(base, 4)
+        morning = slots_from(base + timedelta(hours=6), 4)  # gap of 5h
+        all_slots = evening + morning
+        result = _best_continuous_window(all_slots, all_slots, n_slots=4)
+        # Result must be temporally contiguous — no gap
+        for i in range(len(result) - 1):
+            self.assertEqual(result[i].end, result[i + 1].start)
+
+
+class TestSelectSpillover(unittest.TestCase):
+
+    def _window_utc(self, start_hhmm, end_hhmm):
+        return _resolve_window_utc(start_hhmm, end_hhmm, FI_TZ,
+                                    _anchor_date=REF_DATE)
+
+    def test_no_spill_when_satisfied(self):
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        selected = slots_from(base, 8)  # 2h
+        ws, we = self._window_utc("00:00", "06:00")
+        result = _select_spillover(
+            outside=[], selected=selected,
+            max_windows=None, win_end_utc=we, win_end_local="06:00",
+            required_minutes=120, remaining=0,
+            max_price_eur=None, min_slot_minutes=30, all_prices=selected,
+        )
+        self.assertEqual(result, [])
+
+    def test_noncontinuous_spill_stays_before_window_end(self):
+        ws, we = self._window_utc("00:00", "04:00")
+        # inside: 2h; need 4h total → 2h spill from outside (before window)
+        before_base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        outside = slots_from(before_base, 8, price_cents=2.0)
+        inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 8)
+        result = _select_spillover(
+            outside=outside, selected=inside,
+            max_windows=None, win_end_utc=we, win_end_local="04:00",
+            required_minutes=240, remaining=120,
+            max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
+        )
+        for s in result:
+            self.assertLessEqual(s.end, we)
+
+    def test_continuous_spill_extends_leftward(self):
+        ws, we = self._window_utc("02:00", "05:00")
+        # 3h window, need 5h — must extend 2h leftward
+        inside_base  = datetime(2026, 3, 15, 0, 0, tzinfo=UTC)  # 02:00 Helsinki
+        outside_base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)  # before window
+        inside  = slots_from(inside_base,  12)
+        outside = slots_from(outside_base, 8)
+        result = _select_spillover(
+            outside=outside, selected=inside,
+            max_windows=1, win_end_utc=we, win_end_local="05:00",
+            required_minutes=300, remaining=120,
+            max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
+        )
+        # Spill slots must be adjacent to the selected block (extend leftward)
+        all_selected = sorted(inside + result, key=lambda s: s.start)
+        for i in range(len(all_selected) - 1):
+            self.assertEqual(all_selected[i].end, all_selected[i + 1].start)
+
+    def test_spill_remaining_less_than_min_slot(self):
+        # Regression: remaining=15 with min_slot_minutes=30 previously returned
+        # nothing because _select_with_min_block couldn't form a valid 30-min block
+        # from a single 15-min spillover slot. Spillover should ignore min_slot_minutes.
+        ws, we = self._window_utc("00:00", "04:00")
+        before_base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        outside = slots_from(before_base, 4, price_cents=2.0)  # 4 × 15-min slots before window
+        inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 7)  # 7 slots = 105 min
+        result = _select_spillover(
+            outside=outside, selected=inside,
+            max_windows=None, win_end_utc=we, win_end_local="04:00",
+            required_minutes=120, remaining=15,
+            max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
+        )
+        self.assertEqual(len(result), 1, "Should fill the 15-min deficit with one spillover slot")
+        total = sum(s.duration_minutes for s in result)
+        self.assertEqual(total, 15)
+
+    def test_no_spill_after_window_end(self):
+        ws, we = self._window_utc("00:00", "04:00")
+        after_base = datetime(2026, 3, 15, 2, 30, tzinfo=UTC)  # 04:30 Helsinki — past window end
+        outside = slots_from(after_base, 8)
+        inside  = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 4)
+        result = _select_spillover(
+            outside=outside, selected=inside,
+            max_windows=None, win_end_utc=we, win_end_local="04:00",
+            required_minutes=120, remaining=60,
+            max_price_eur=None, min_slot_minutes=30, all_prices=outside + inside,
+        )
+        for s in result:
+            self.assertLessEqual(s.end, we)
+
+
+class TestSelectWithMinBlock(unittest.TestCase):
+    """Direct tests for _select_with_min_block and its pick_next helper."""
+
+    def _slots(self, count=16, price_cents=3.0):
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        return slots_from(base, count, price_cents=price_cents)
+
+    def test_no_blocks_shorter_than_min(self):
+        slots = self._slots(16)
+        selected = select_charging_windows(slots, required_minutes=120,
+                                           min_slot_minutes=30)
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for group in groups:
+            self.assertGreaterEqual(len(group) * 15, 30)
+
+    def test_insufficient_candidates_returns_partial_not_empty(self):
+        # Regression: the DP used to require reaching the exact n_slots
+        # requested, returning [] entirely when that was infeasible — even
+        # when a smaller, genuinely optimal partial selection was trivially
+        # available. Only 4 slots (1h) exist; 24 (6h) are required. Must use
+        # all 4, not none — mirrors _best_continuous_window's own
+        # "return the longest available" fallback, which this function
+        # previously lacked.
+        slots = self._slots(4, price_cents=1.0)
+        selected = select_charging_windows(slots, required_minutes=360,
+                                           min_slot_minutes=30, min_gap_minutes=15)
+        self.assertEqual(len(selected), 4)
+        self.assertEqual(sum(s.duration_minutes for s in selected), 60)
+
+    def test_partial_selection_still_respects_min_slot_minutes(self):
+        # The partial fallback must still be a *valid* selection — it can't
+        # satisfy the full requirement, but whatever it does return must
+        # still respect min_slot_minutes on each block, not just grab
+        # whatever's cheapest regardless of block-length constraints.
+        slots = self._slots(4, price_cents=1.0)
+        selected = select_charging_windows(slots, required_minutes=360,
+                                           min_slot_minutes=30, min_gap_minutes=15)
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for group in groups:
+            self.assertGreaterEqual(len(group) * 15, 30)
+
+    def test_cheap_isolated_slot_replaced(self):
+        # Make slot 4 very cheap but isolated — the slot before and after are expensive.
+        # With min_slot_minutes=30 (2 slots), a single isolated cheap slot should be
+        # disqualified and replaced with an adjacent pair.
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        slots = slots_from(base, 16, price_cents=5.0)
+        slots[4] = replace(slots[4], price_eur_kwh=0.001)  # very cheap, isolated
+        # Require 2 slots (30 min) with min_slot_minutes=30
+        selected = select_charging_windows(slots, required_minutes=30,
+                                           min_slot_minutes=30)
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        self.assertEqual(len(groups), 1)
+        self.assertGreaterEqual(len(groups[0]), 2)
+
+    def test_total_minutes_correct_despite_disqualification(self):
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        slots = slots_from(base, 16, price_cents=5.0)
+        # Make slots 0 and 8 cheap but each isolated
+        slots[0] = replace(slots[0], price_eur_kwh=0.001)
+        slots[8] = replace(slots[8], price_eur_kwh=0.001)
+        selected = select_charging_windows(slots, required_minutes=60,
+                                           min_slot_minutes=30)
+        total = sum(s.duration_minutes for s in selected)
+        self.assertEqual(total, 60)
+
+    def test_all_same_price_latest_preferred(self):
+        # All slots same price — latest slots should be selected (tiebreaker)
+        slots = self._slots(16)
+        selected = select_charging_windows(slots, required_minutes=30,
+                                           min_slot_minutes=30)
+        # Should pick the last 2 slots
+        srt = sorted(selected, key=lambda s: s.start)
+        self.assertEqual(srt[0].start, slots[-2].start)
+
+    def test_min_slot_larger_than_required_still_works(self):
+        # min_slot_minutes=60 but required=60 — should still find a 4-slot block
+        slots = self._slots(16)
+        selected = select_charging_windows(slots, required_minutes=60,
+                                           min_slot_minutes=60)
+        total = sum(s.duration_minutes for s in selected)
+        self.assertEqual(total, 60)
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        self.assertEqual(len(groups), 1)
+
+    def test_real_prices_min_slot_respected(self):
+        # Use real ENTSO-E data to exercise the path with realistic price variation
+        slots = _parse_entsoe_xml(REAL_ENTSOE_XML, date(2026, 3, 14), "FI")
+        anchor = date(2026, 3, 14)
+        ws, we = _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=anchor)
+        inside, _ = filter_preferred_window(slots, ws, we, "00:00", "06:30")
+        selected = select_charging_windows(inside, required_minutes=120,
+                                           min_slot_minutes=30)
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for group in groups:
+            duration = sum(s.duration_minutes for s in group)
+            self.assertGreaterEqual(duration, 30,
+                f"Block of {duration} min is shorter than min_slot_minutes=30")
+
+    def test_gap_between_blocks_respects_min_slot(self):
+        # Two cheap clusters separated by a 15-min gap — with min_slot_minutes=30
+        # the algorithm must not select both clusters since the gap would be < 30 min.
+        # It should instead pick the cheaper cluster only (or extend one of them).
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        # cheap block A: 30 min
+        block_a = slots_from(base, 2, price_cents=1.0)
+        # 15-min gap (expensive)
+        gap     = slots_from(base + timedelta(minutes=30), 1, price_cents=9.0)
+        # cheap block B: 30 min
+        block_b = slots_from(base + timedelta(minutes=45), 2, price_cents=1.0)
+        # padding
+        rest    = slots_from(base + timedelta(minutes=75), 8, price_cents=5.0)
+        all_slots = block_a + gap + block_b + rest
+
+        selected = select_charging_windows(
+            all_slots, required_minutes=60, min_slot_minutes=30, min_gap_minutes=30
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        # Check every gap between groups is >= 30 min (explicit min_gap_minutes=30)
+        for i in range(len(groups) - 1):
+            gap_min = int(
+                (groups[i+1][0].start - groups[i][-1].end).total_seconds() / 60
+            )
+            self.assertGreaterEqual(
+                gap_min, 30,
+                f"Gap of {gap_min} min between blocks violates min_gap_minutes=30"
+            )
+
+    def test_isolated_cheap_slot_with_price_ceiling(self):
+        # Regression: when a price ceiling excludes slots on both sides of a cheap
+        # slot, the candidate array has an index-adjacent entry that is NOT
+        # time-adjacent.  The DP must not form a block across this time gap,
+        # producing a 1-slot (15 min) block that violates min_slot_minutes=30.
+        #
+        # Reproduces the 2026-04-13 production bug:
+        #   20:45 UTC (5.4 c/kWh) — isolated, neighbors above ceiling
+        #   21:00 UTC (10.5 c/kWh) — ABOVE ceiling, excluded
+        #   21:15 UTC (10.3 c/kWh) — ABOVE ceiling, excluded
+        #   21:30 UTC (8.5 c/kWh) — below ceiling
+        #   21:45 UTC (6.1 c/kWh) — below ceiling
+        base = datetime(2026, 4, 13, 20, 45, tzinfo=UTC)
+        cheap_isolated = slots_from(base,                         1, price_cents=5.4)
+        above_ceiling  = slots_from(base + timedelta(minutes=15), 2, price_cents=10.5)
+        after_gap      = slots_from(base + timedelta(minutes=45), 6, price_cents=7.0)
+        all_slots = cheap_isolated + above_ceiling + after_gap
+
+        ceiling = 9.8  # c/kWh — excludes the two above-ceiling slots
+        selected = select_charging_windows(
+            all_slots, required_minutes=30, min_slot_minutes=30,
+            max_price=ceiling / 100,
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for group in groups:
+            duration = sum(s.duration_minutes for s in group)
+            self.assertGreaterEqual(
+                duration, 30,
+                f"Block of {duration} min violates min_slot_minutes=30 "
+                f"(isolated cheap slot leaked through price-ceiling gap)"
+            )
+        # The isolated 20:45 slot must not appear — it cannot form a valid block
+        selected_starts = {s.start for s in selected}
+        self.assertNotIn(
+            base, selected_starts,
+            "Isolated cheap slot at 20:45 must not be selected when it cannot form a 30-min block"
+        )
+
+
+
+    """_check_window_coverage exits cleanly when prices are not yet published."""
+
+    def _window(self):
+        return _resolve_window_utc("00:00", "06:30", FI_TZ, _anchor_date=REF_DATE)
+
+    def test_full_coverage_does_not_exit(self):
+        ws, we = self._window()
+        # Build slots covering the full window
+        slots = slots_from(ws, int((we - ws).total_seconds() // 900))
+        from charging_planner import _check_window_coverage
+        # Should not raise SystemExit
+        _check_window_coverage(slots, ws, we, "test")
+
+    def test_empty_slots_returns_false(self):
+        ws, we = self._window()
+        from charging_planner import _check_window_coverage
+        self.assertFalse(_check_window_coverage([], ws, we, "test"))
+
+    def test_partial_coverage_below_threshold_returns_false(self):
+        ws, we = self._window()
+        # Only cover 50% of the window
+        window_min = int((we - ws).total_seconds() // 60)
+        slots = slots_from(ws, window_min // 30)  # half the slots
+        from charging_planner import _check_window_coverage
+        self.assertFalse(_check_window_coverage(slots, ws, we, "test"))
+
+    def test_coverage_above_threshold_does_not_exit(self):
+        ws, we = self._window()
+        # Cover 95% of window
+        window_min = int((we - ws).total_seconds() // 60)
+        slots = slots_from(ws, int(window_min * 0.95 // 15))
+        from charging_planner import _check_window_coverage
+        _check_window_coverage(slots, ws, we, "test")  # must not raise
+
+    def test_now_utc_clamps_denominator_to_still_useful_portion(self):
+        # A live window (now inside it, per _resolve_planning_horizon) has
+        # its already-elapsed portion correctly absent from `inside` — that
+        # must NOT register as "missing" coverage. Window is 6.5h; "now" is
+        # 2h in, leaving 4.5h still useful; slots cover only that remainder.
+        ws, we = self._window()
+        now = ws + timedelta(hours=2)
+        remaining_min = int((we - now).total_seconds() // 60)
+        slots = slots_from(now, remaining_min // 15)  # covers now..we fully
+        from charging_planner import _check_window_coverage
+        self.assertTrue(
+            _check_window_coverage(slots, ws, we, "test", now_utc=now),
+            "elapsed portion of a live window must not count against coverage",
+        )
+
+    def test_without_now_utc_same_slots_read_as_undercovered(self):
+        # Same data as above, but without now_utc the elapsed 2h reads as
+        # "missing" against the full window — confirms the fix is actually
+        # doing something, not just always returning True.
+        ws, we = self._window()
+        now = ws + timedelta(hours=2)
+        remaining_min = int((we - now).total_seconds() // 60)
+        slots = slots_from(now, remaining_min // 15)
+        from charging_planner import _check_window_coverage
+        self.assertFalse(_check_window_coverage(slots, ws, we, "test"))
+
+    def test_forecast_supplement_never_backfills_elapsed_time(self):
+        # Even when a forecast supplement is genuinely needed (no real prices
+        # at all here), it must not be used to fill the already-elapsed
+        # portion of a live window — that time is gone regardless of what
+        # the forecast says about it.
+        from charging_planner import _select_slots
+        ws, we = self._window()          # 00:00-06:30 local -> UTC
+        now = ws + timedelta(hours=2)    # 2h into the window
+        # Forecast covers the WHOLE window, including the elapsed part,
+        # deliberately cheap so the DP would want the elapsed slots if the
+        # clamp weren't applied.
+        forecast = slots_from(ws, int((we - ws).total_seconds() // 900), price_cents=0.5)
+        cfg = make_config(preferred_window_start="00:00", preferred_window_end="06:30",
+                          required_minutes=60, min_slot_minutes=30)
+        selected, used_forecast = _select_slots(
+            cfg, candidate_prices=[], win_start_utc=ws, win_end_utc=we,
+            win_start_str="00:00", win_end_str="06:30", now_utc=now,
+            forecast_slots=forecast,
+        )
+        self.assertTrue(used_forecast)
+        self.assertTrue(selected)
+        for s in selected:
+            self.assertGreaterEqual(s.start, now,
+                                    "forecast backfilled already-elapsed time")
+
+    def test_cmd_plan_exits_when_prices_missing(self):
+        """cmd_plan exits cleanly if fetched prices don't cover any profile's
+        window and no forecast fallback is available either.
+
+        Both forecast sources must be mocked out: this test predates forecast
+        supplementation, and without these patches the planner correctly falls
+        through to the live nordpool-predict-fi source over the network, gets
+        real data, builds a valid plan and never exits — a failure that looked
+        date-dependent but was actually network-dependent.
+        """
+        from charging_planner import cmd_plan
+        import tempfile
+        import unittest.mock as mock
+
+        # Only 1h of prices — far below 90% of any window
+        one_hour = slots_from(datetime(2026, 3, 14, 22, 0, tzinfo=UTC), 4)
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=one_hour), \
+             mock.patch("charging_planner.fetch_forecast_prices",
+                        side_effect=PricesNotYetAvailable("forecast unavailable")), \
+             mock.patch("charging_planner.fetch_forecast_display_slots", return_value=[]):
+            with self.assertRaises(SystemExit) as ctx:
+                cmd_plan({
+                    "entsoe": {"api_key": "x", "area": "FI", "timezone": "Europe/Helsinki"},
+                    "charging": [{
+                        "name": "topup",
+                        "required_hours": 2,
+                        "preferred_window_start": "00:00",
+                        "preferred_window_end": "06:30",
+                    }],
+                }, output_dir=tmpdir)
+        self.assertEqual(ctx.exception.code, 1)
+
+
+class TestSelectWithMaxWindows(unittest.TestCase):
+    """Direct tests for _select_with_max_windows (max_windows >= 2) and its
+    dispatch from select_charging_windows / _select_with_max_windows equivalence
+    to the max_windows=1 and max_windows=None paths at their boundaries."""
+
+    def _slots(self, count=32, price_cents=5.0):
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        return slots_from(base, count, price_cents=price_cents)
+
+    def test_uses_at_most_max_windows_blocks(self):
+        # Four separated cheap clusters, but max_windows=2 — only 2 may be used.
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        cluster = lambda offset_min, price: slots_from(
+            base + timedelta(minutes=offset_min), 2, price_cents=price)
+        filler = lambda offset_min, count: slots_from(
+            base + timedelta(minutes=offset_min), count, price_cents=9.0)
+        slots = (
+            cluster(0,   1.0) + filler(30,  1) +
+            cluster(45,  1.1) + filler(75,  1) +
+            cluster(90,  1.2) + filler(120, 1) +
+            cluster(135, 1.3) + filler(165, 1)
+        )
+        selected = select_charging_windows(
+            slots, required_minutes=120, max_windows=2, min_slot_minutes=30,
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        self.assertLessEqual(len(groups), 2)
+        total = sum(s.duration_minutes for s in selected)
+        self.assertEqual(total, 120)
+
+    def test_picks_cheapest_two_of_four_clusters(self):
+        # Same four clusters as above, ranked by price — with max_windows=2 the
+        # two CHEAPEST clusters (1.0 and 1.1 c/kWh) should be chosen over the
+        # two more expensive ones (1.2 and 1.3 c/kWh).
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        cluster = lambda offset_min, price: slots_from(
+            base + timedelta(minutes=offset_min), 2, price_cents=price)
+        filler = lambda offset_min, count: slots_from(
+            base + timedelta(minutes=offset_min), count, price_cents=9.0)
+        c1 = cluster(0,   1.0)
+        c2 = cluster(45,  1.1)
+        c3 = cluster(90,  1.2)
+        c4 = cluster(135, 1.3)
+        slots = c1 + filler(30, 1) + c2 + filler(75, 1) + c3 + filler(120, 1) + c4
+
+        selected = select_charging_windows(
+            slots, required_minutes=60, max_windows=2, min_slot_minutes=30,
+        )
+        selected_starts = {s.start for s in selected}
+        expected_starts = {s.start for s in c1 + c2}
+        self.assertEqual(selected_starts, expected_starts)
+
+    def test_max_windows_1_matches_best_continuous_window(self):
+        slots = self._slots(32, price_cents=5.0)
+        for i in [10, 11, 12, 13]:
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        via_dispatch = select_charging_windows(
+            slots, required_minutes=60, max_windows=1,
+        )
+        direct = _best_continuous_window(slots, slots, n_slots=4)
+        self.assertEqual(
+            [s.start for s in via_dispatch], [s.start for s in direct]
+        )
+
+    def test_max_windows_none_matches_unbounded(self):
+        slots = self._slots(32, price_cents=5.0)
+        for i in [4, 5, 20, 21]:
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        via_none = select_charging_windows(
+            slots, required_minutes=60, max_windows=None, min_slot_minutes=30,
+        )
+        via_unbounded_call = select_charging_windows(
+            slots, required_minutes=60, min_slot_minutes=30,
+        )
+        self.assertEqual(
+            [s.start for s in via_none], [s.start for s in via_unbounded_call]
+        )
+
+    def test_generous_max_windows_matches_unbounded_result(self):
+        # max_windows set far higher than could ever be used should give the
+        # same result as the unbounded (max_windows=None) path.
+        slots = self._slots(32, price_cents=5.0)
+        for i in [4, 5, 20, 21]:
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        via_generous = select_charging_windows(
+            slots, required_minutes=60, max_windows=50, min_slot_minutes=30,
+        )
+        via_unbounded = select_charging_windows(
+            slots, required_minutes=60, max_windows=None, min_slot_minutes=30,
+        )
+        self.assertEqual(
+            [s.start for s in via_generous], [s.start for s in via_unbounded]
+        )
+
+    def test_min_gap_minutes_respected_across_windows(self):
+        # Two cheap clusters separated by a gap shorter than min_gap_minutes —
+        # with max_windows=2 the algorithm must still respect the gap floor
+        # (same rule as the unbounded DP).
+        base = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        block_a = slots_from(base, 2, price_cents=1.0)
+        gap     = slots_from(base + timedelta(minutes=30), 1, price_cents=9.0)
+        block_b = slots_from(base + timedelta(minutes=45), 2, price_cents=1.0)
+        rest    = slots_from(base + timedelta(minutes=75), 8, price_cents=5.0)
+        all_slots = block_a + gap + block_b + rest
+
+        selected = select_charging_windows(
+            all_slots, required_minutes=60, max_windows=2,
+            min_slot_minutes=30, min_gap_minutes=30,
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for i in range(len(groups) - 1):
+            gap_min = int(
+                (groups[i + 1][0].start - groups[i][-1].end).total_seconds() / 60
+            )
+            self.assertGreaterEqual(
+                gap_min, 30,
+                f"Gap of {gap_min} min between blocks violates min_gap_minutes=30"
+            )
+
+    def test_min_slot_minutes_respected_per_block(self):
+        slots = self._slots(32, price_cents=5.0)
+        selected = select_charging_windows(
+            slots, required_minutes=120, max_windows=3, min_slot_minutes=30,
+        )
+        groups = _group_continuous(sorted(selected, key=lambda s: s.start))
+        for group in groups:
+            self.assertGreaterEqual(len(group) * 15, 30)
+
+    def test_infeasible_window_budget_returns_empty(self):
+        # 8 isolated single 15-min cheap slots (none adjacent), min_slot_minutes=30
+        # means every block needs 2 slots — with max_windows=1 that's impossible
+        # since no two candidates are contiguous. Should return [] cleanly, not raise.
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        slots = []
+        for i in range(8):
+            cheap = slots_from(base + timedelta(minutes=i * 30), 1, price_cents=1.0)
+            slots += cheap
+        selected = _select_with_max_windows(
+            slots, n_slots=2, min_slots_per_block=2, min_slots_per_gap=0, max_windows=1,
+        )
+        self.assertEqual(selected, [])
+
+    def test_insufficient_candidates_returns_partial_not_empty(self):
+        # Same regression as TestSelectWithMinBlock's version, for the
+        # bounded (max_windows >= 2) DP path specifically. Only 4 slots
+        # (1h) exist; 24 (6h) required with max_windows=3 — must use all 4
+        # rather than returning nothing.
+        slots = self._slots(4, price_cents=1.0)
+        selected = select_charging_windows(
+            slots, required_minutes=360, max_windows=3,
+            min_slot_minutes=30, min_gap_minutes=15,
+        )
+        self.assertEqual(len(selected), 4)
+        self.assertEqual(sum(s.duration_minutes for s in selected), 60)
+
+    def test_all_same_price_latest_preferred(self):
+        # Mirrors TestSelectWithMinBlock's tiebreak test — with all slots at the
+        # same price, later slots should be preferred.
+        slots = self._slots(16, price_cents=3.0)
+        selected = select_charging_windows(
+            slots, required_minutes=30, max_windows=2, min_slot_minutes=30,
+        )
+        srt = sorted(selected, key=lambda s: s.start)
+        self.assertEqual(srt[0].start, slots[-2].start)
+
+    def test_empty_candidates_returns_empty(self):
+        self.assertEqual(
+            _select_with_max_windows([], n_slots=4, min_slots_per_block=2,
+                                     min_slots_per_gap=0, max_windows=2),
+            [],
+        )
+
+
+# ===========================================================================
+# Plan output
+# ===========================================================================
+
+class TestBuildPlan(unittest.TestCase):
+
+    def _make(self, n_slots=8, price_cents=3.0, **overrides):
+        base     = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        slots    = slots_from(base, n_slots, price_cents=price_cents)
+        selected = slots[:4]
+        windows  = merge_continuous_slots(selected)
+        p        = make_plan_params(slots, selected, windows, **overrides)
+        return build_plan(p)
+
+    def test_plan_has_required_keys(self):
+        plan = self._make()
+        for key in ("version", "date", "area", "windows",
+                    "window_starts_utc", "window_ends_utc",
+                    "required_minutes", "total_minutes",
+                    "max_windows", "ocpp_charging_profile"):
+            self.assertIn(key, plan)
+
+    def test_max_windows_null_by_default(self):
+        plan = self._make()
+        self.assertIsNone(plan["max_windows"])
+
+    def test_max_windows_reflects_config(self):
+        plan = self._make(max_windows=1)
+        self.assertEqual(plan["max_windows"], 1)
+        plan = self._make(max_windows=3)
+        self.assertEqual(plan["max_windows"], 3)
+
+    def test_total_minutes_correct(self):
+        plan = self._make(n_slots=8)
+        self.assertEqual(plan["total_minutes"], 60)  # 4 × 15min
+
+    def test_window_utc_times_are_iso_strings(self):
+        plan = self._make()
+        for ts in plan["window_starts_utc"] + plan["window_ends_utc"]:
+            datetime.fromisoformat(ts)  # should not raise
+
+    def test_price_stats_present(self):
+        plan = self._make()
+        ps = plan["price_stats"]
+        self.assertIn("min_cents_kwh", ps)
+        self.assertIn("avg_cents_kwh", ps)
+        self.assertIn("max_cents_kwh", ps)
+
+    def test_generated_at_reflects_param(self):
+        gen = datetime(2026, 3, 14, 12, 27, 41, tzinfo=UTC)
+        plan = self._make(generated_at=gen)
+        self.assertEqual(datetime.fromisoformat(plan["generated_at"]), gen)
+
+    def test_generated_at_null_when_not_provided(self):
+        plan = self._make()
+        self.assertIsNone(plan["generated_at"])
+
+    def test_configured_window_start_utc_reflects_param(self):
+        ws = datetime(2026, 3, 14, 19, 0, tzinfo=UTC)
+        plan = self._make(window_start_utc=ws)
+        self.assertEqual(datetime.fromisoformat(plan["configured_window_start_utc"]), ws)
+
+    def test_configured_window_start_utc_null_when_not_provided(self):
+        plan = self._make()
+        self.assertIsNone(plan["configured_window_start_utc"])
+
+    def test_schedule_uses_forecast_false_for_real_prices(self):
+        plan = self._make()
+        self.assertFalse(plan["schedule_uses_forecast"])
+
+    def test_schedule_uses_forecast_true_when_a_scheduled_slot_is_forecasted(self):
+        base     = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        slots    = slots_from(base, 8, price_cents=3.0)
+        selected = slots[:4]
+        windows  = merge_continuous_slots(selected)
+        # Mark one of the SELECTED slots as having come from the forecast
+        # supplement (supplement_starts is how build_plan learns this).
+        p = make_plan_params(slots, selected, windows,
+                             supplement_starts={selected[0].start})
+        plan = build_plan(p)
+        self.assertTrue(plan["schedule_uses_forecast"])
+
+    def test_schedule_uses_forecast_false_when_only_unscheduled_slots_are_forecasted(self):
+        # A forecast slot exists in the display data but wasn't selected for
+        # charging — the schedule itself doesn't rely on it.
+        base     = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+        slots    = slots_from(base, 8, price_cents=3.0)
+        selected = slots[:4]
+        windows  = merge_continuous_slots(selected)
+        p = make_plan_params(slots, selected, windows,
+                             supplement_starts={slots[6].start})  # not in selected
+        plan = build_plan(p)
+        self.assertFalse(plan["schedule_uses_forecast"])
+
+
+# ===========================================================================
+# 8. OCPP profile
+# ===========================================================================
+
+SCHEMA_16_PATH  = "test/ocpp16/OCPP_1.6_documentation/schemas/json/SetChargingProfile.json"
+SCHEMA_201_PATH = "test/ocpp201/OCPP-2.0.1_all_files/OCPP-2.0.1_part3_JSON_schemas.zip"
+SCHEMA_21_PATH  = "test/ocpp21/OCPP-2.1_all_files/OCPP-2.1_part3_JSON_schemas.zip"
+
+
+def _load_schema_201():
+    zf = zipfile.ZipFile(SCHEMA_201_PATH)
+    return json.loads(zf.read(
+        "OCPP-2.0.1_part3_JSON_schemas/SetChargingProfileRequest.json"))
+
+
+def _load_schema_21():
+    zf = zipfile.ZipFile(SCHEMA_21_PATH)
+    return json.loads(zf.read(
+        "OCPP-2.1_part3_JSON_schemas/SetChargingProfileRequest.json"))
+
+
+def _load_schema_16():
+    return json.load(open(SCHEMA_16_PATH))
+
+
+class TestOcppChargingProfile(unittest.TestCase):
+
+    PLAN_SINGLE = {
+        "window_starts_utc": ["2026-03-14T22:00:00+00:00"],
+        "window_ends_utc":   ["2026-03-15T04:00:00+00:00"],
+    }
+    PLAN_TWO_WINDOWS = {
+        "window_starts_utc": [
+            "2026-03-14T22:00:00+00:00",
+            "2026-03-15T02:00:00+00:00",
+        ],
+        "window_ends_utc": [
+            "2026-03-15T00:00:00+00:00",
+            "2026-03-15T04:00:00+00:00",
+        ],
+    }
+
+    def _validate_against(self, profile, schema_props, required_fields,
+                          allowed_fields):
+        missing = [f for f in required_fields if f not in profile]
+        extra   = [f for f in profile if f not in allowed_fields]
+        self.assertEqual(missing, [], f"Missing fields: {missing}")
+        self.assertEqual(extra,   [], f"Extra fields not in schema: {extra}")
+
+    def test_empty_plan_returns_empty_dict(self):
+        self.assertEqual(build_ocpp_charging_profile({}), {})
+
+    def test_single_window_schedule(self):
+        profile = build_ocpp_charging_profile(self.PLAN_SINGLE)
+        periods = profile["chargingSchedule"]["chargingSchedulePeriod"]
+        self.assertEqual(len(periods), 1)
+        self.assertEqual(periods[0]["startPeriod"], 0)
+        self.assertEqual(periods[0]["limit"], 11000.0)
+
+    def test_two_windows_gap_is_zero(self):
+        profile = build_ocpp_charging_profile(self.PLAN_TWO_WINDOWS)
+        periods = profile["chargingSchedule"]["chargingSchedulePeriod"]
+        # Should be: charge, gap=0, charge
+        limits = [p["limit"] for p in periods]
+        self.assertEqual(limits[0], 11000.0)
+        self.assertEqual(limits[1], 0.0)
+        self.assertEqual(limits[2], 11000.0)
+
+    def test_periods_ordered_by_start_period(self):
+        profile = build_ocpp_charging_profile(self.PLAN_TWO_WINDOWS)
+        periods = profile["chargingSchedule"]["chargingSchedulePeriod"]
+        starts = [p["startPeriod"] for p in periods]
+        self.assertEqual(starts, sorted(starts))
+
+    def test_duration_matches_window_span(self):
+        profile = build_ocpp_charging_profile(self.PLAN_SINGLE)
+        # 22:00 to 04:00 = 6 hours = 21600 seconds
+        self.assertEqual(profile["chargingSchedule"]["duration"], 21600)
+
+    def test_valid_from_to_match_window_bounds(self):
+        profile = build_ocpp_charging_profile(self.PLAN_SINGLE)
+        self.assertEqual(profile["validFrom"],
+                         "2026-03-14T22:00:00+00:00")
+        self.assertEqual(profile["validTo"],
+                         "2026-03-15T04:00:00+00:00")
+
+    def test_custom_max_rate(self):
+        profile = build_ocpp_charging_profile(self.PLAN_SINGLE,
+                                               max_charging_rate=7400.0)
+        periods = profile["chargingSchedule"]["chargingSchedulePeriod"]
+        self.assertEqual(periods[0]["limit"], 7400.0)
+
+    # ── Schema validation against real OCPP specs ────────────────────────────
+
+    def test_ocpp16_schema_valid(self):
+        try:
+            schema = _load_schema_16()
+        except FileNotFoundError:
+            self.skipTest("OCPP 1.6 schema not available")
+        profile  = build_ocpp_charging_profile(self.PLAN_SINGLE,
+                                                ocpp_version="1.6")
+        cp_props = schema["properties"]["csChargingProfiles"]
+        required = cp_props["required"]
+        allowed  = set(cp_props["properties"].keys())
+        self._validate_against(profile, cp_props, required, allowed)
+
+    def test_ocpp201_schema_valid(self):
+        try:
+            schema = _load_schema_201()
+        except FileNotFoundError:
+            self.skipTest("OCPP 2.0.1 schema not available")
+        profile  = build_ocpp_charging_profile(self.PLAN_SINGLE,
+                                                ocpp_version="2.0.1")
+        cp_props = schema["definitions"]["ChargingProfileType"]
+        required = cp_props.get("required", [])
+        allowed  = set(cp_props["properties"].keys())
+        self._validate_against(profile, cp_props, required, allowed)
+
+    def test_ocpp21_schema_valid(self):
+        try:
+            schema = _load_schema_21()
+        except FileNotFoundError:
+            self.skipTest("OCPP 2.1 schema not available")
+        profile  = build_ocpp_charging_profile(self.PLAN_SINGLE,
+                                                ocpp_version="2.1")
+        cp_props = schema["definitions"]["ChargingProfileType"]
+        required = cp_props.get("required", [])
+        allowed  = set(cp_props["properties"].keys())
+        self._validate_against(profile, cp_props, required, allowed)
+
+    def test_16_uses_charging_profile_id(self):
+        profile = build_ocpp_charging_profile(self.PLAN_SINGLE,
+                                               ocpp_version="1.6")
+        self.assertIn("chargingProfileId", profile)
+        self.assertNotIn("id", profile)
+
+    def test_201_uses_id(self):
+        profile = build_ocpp_charging_profile(self.PLAN_SINGLE,
+                                               ocpp_version="2.0.1")
+        self.assertIn("id", profile)
+        self.assertNotIn("chargingProfileId", profile)
+
+    def test_21_uses_id(self):
+        profile = build_ocpp_charging_profile(self.PLAN_SINGLE,
+                                               ocpp_version="2.1")
+        self.assertIn("id", profile)
+        self.assertNotIn("chargingProfileId", profile)
+
+
+class TestWriteConfigJson(unittest.TestCase):
+    """Regression coverage: config.json is committed to the repo by the GHA
+    workflow, so a real ENTSOE_API_KEY merged in from the environment
+    (see load_config) must never reach the written file."""
+
+    def _read(self, tmpdir):
+        with open(os.path.join(tmpdir, "config.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_real_api_key_is_redacted(self):
+        raw_config = {
+            "entsoe": {"api_key": "super-secret-real-key", "area": "FI"},
+            "charging": [{"name": "topup", "required_hours": 2}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_config_json(raw_config, tmpdir)
+            written = self._read(tmpdir)
+        self.assertNotIn("super-secret-real-key", json.dumps(written))
+        self.assertEqual(written["entsoe"]["api_key"], "***REDACTED***")
+
+    def test_empty_api_key_stays_empty(self):
+        # config.yaml as committed has an empty api_key — should stay empty,
+        # not become the redaction placeholder (nothing to hide).
+        raw_config = {
+            "entsoe": {"api_key": "", "area": "FI"},
+            "charging": [{"name": "topup", "required_hours": 2}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_config_json(raw_config, tmpdir)
+            written = self._read(tmpdir)
+        self.assertEqual(written["entsoe"]["api_key"], "")
+
+    def test_original_dict_not_mutated(self):
+        # write_config_json must not redact the caller's in-memory config —
+        # cmd_plan still needs the real key for subsequent fetches.
+        raw_config = {
+            "entsoe": {"api_key": "super-secret-real-key", "area": "FI"},
+            "charging": [{"name": "topup", "required_hours": 2}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_config_json(raw_config, tmpdir)
+        self.assertEqual(raw_config["entsoe"]["api_key"], "super-secret-real-key")
+
+    def test_other_fields_preserved(self):
+        raw_config = {
+            "entsoe": {"api_key": "secret", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{"name": "topup", "required_hours": 2, "max_windows": 1}],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_config_json(raw_config, tmpdir)
+            written = self._read(tmpdir)
+        self.assertEqual(written["entsoe"]["area"], "FI")
+        self.assertEqual(written["charging"][0]["max_windows"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+
+
+# ===========================================================================
+# Display / reporting
+# ===========================================================================
+
 class TestPrintPlanSummary(unittest.TestCase):
 
     def setUp(self):
@@ -3903,60 +3523,412 @@ class TestWriteGhaSummary(unittest.TestCase):
             write_gha_summary([_make_output_plan()])  # must not raise
 
 
-class TestWriteConfigJson(unittest.TestCase):
-    """Regression coverage: config.json is committed to the repo by the GHA
-    workflow, so a real ENTSOE_API_KEY merged in from the environment
-    (see load_config) must never reach the written file."""
+# ===========================================================================
+# Integration
+# ===========================================================================
 
-    def _read(self, tmpdir):
-        with open(os.path.join(tmpdir, "config.json"), encoding="utf-8") as f:
-            return json.load(f)
+class TestEndToEnd(unittest.TestCase):
+    """Smoke tests for cmd_plan with a mocked ENTSO-E fetch.
 
-    def test_real_api_key_is_redacted(self):
+    The synthetic prices are anchored to 2026-03-14. datetime.now is pinned to
+    2026-03-14 14:30 UTC so window resolution always targets that same night,
+    regardless of when the tests are run.
+    """
+
+    # Pin the clock to 14:30 UTC on the day the synthetic prices are built around.
+    # This is before any overnight window starts (22:00 Helsinki = 20:00 UTC).
+    _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
+
+    def _run_cmd_plan(self, prices):
+        """Run cmd_plan with frozen clock and mocked price fetch."""
+        import charging_planner as cp
+        import tempfile
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return TestEndToEnd._FROZEN_NOW if tz is None \
+                    else TestEndToEnd._FROZEN_NOW.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            return cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+
+    RAW_CONFIG = {
+        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
+        "charging": [
+            {
+                "name": "topup",
+                "required_hours": 2,
+                "max_windows": None,
+                "min_slot_minutes": 30,
+                "preferred_window_start": "00:00",
+                "preferred_window_end": "06:30",
+            },
+            {
+                "name": "overnight",
+                "required_hours": 6,
+                "max_windows": 1,
+                "min_slot_minutes": 30,
+                "preferred_window_start": "22:00",
+                "preferred_window_end": "06:30",
+            },
+        ],
+    }
+
+    def _make_prices(self):
+        """192 slots covering 48h, cheap 22:00–07:00 Helsinki.
+
+        Wide enough to cover both same-day windows (00:00–06:30 tomorrow)
+        and overnight windows (22:00 tonight – 06:30 tomorrow morning).
+        """
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)  # 22:00 Helsinki
+        slots = []
+        for i in range(192):
+            t = base + timedelta(minutes=15 * i)
+            local_h = t.astimezone(FI_TZ).hour
+            price = 1.5 if (local_h < 7 or local_h >= 22) else 8.0
+            slots.append(Slot(
+                start=t, end=t + timedelta(minutes=15),
+                duration_minutes=15, price_eur_kwh=price / 100, slot=i,
+            ))
+        return slots
+
+    def test_produces_one_plan_per_profile(self):
+        plans = self._run_cmd_plan(self._make_prices())
+        self.assertEqual(len(plans), 2)
+        self.assertEqual(plans[0]["profile"], "topup")
+        self.assertEqual(plans[1]["profile"], "overnight")
+
+    def test_topup_schedules_required_minutes(self):
+        plans = self._run_cmd_plan(self._make_prices())
+        self.assertGreaterEqual(plans[0]["total_minutes"], 120)
+
+    def test_overnight_schedules_required_minutes(self):
+        plans = self._run_cmd_plan(self._make_prices())
+        self.assertGreaterEqual(plans[1]["total_minutes"], 360)
+
+    def test_overnight_windows_within_preferred_window(self):
+        plans = self._run_cmd_plan(self._make_prices())
+        win_end_utc = datetime.fromisoformat(plans[1]["window_ends_utc"][-1])
+        # 06:30 Helsinki EET = 04:30 UTC
+        self.assertLessEqual(win_end_utc, datetime(2026, 3, 16, 4, 30, tzinfo=UTC))
+
+    def test_plans_contain_ocpp_profile(self):
+        plans = self._run_cmd_plan(self._make_prices())
+        for plan in plans:
+            self.assertIn("ocpp_charging_profile", plan)
+            self.assertIn("chargingSchedule", plan["ocpp_charging_profile"])
+
+    def test_delayed_run_mid_window_still_targets_tonight(self):
+        # The actual bug this whole matrix was built for: a cron run firing
+        # late, after the overnight window has already started. "now" =
+        # 22:00Z (00:00 Helsinki) — 2h after the 20:00Z/22:00 Helsinki start,
+        # 6.5h still remain before the 04:30Z/06:30 Helsinki end, comfortably
+        # enough for the 6h required. Must NOT skip to the following night.
+        import charging_planner as cp
+        import tempfile
+
+        delayed_now = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=self._make_prices()):
+            plans = cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+
+        overnight = plans[1]
+        self.assertEqual(overnight["profile"], "overnight")
+        self.assertGreaterEqual(overnight["total_minutes"], 360,
+                                "6h should still fit in the 6.5h remaining tonight")
+        starts = [datetime.fromisoformat(s) for s in overnight["window_starts_utc"]]
+        self.assertTrue(starts, "must have scheduled something tonight, not skipped to next night")
+        # Every scheduled slot must fall on 2026-03-14's overnight instance
+        # (before 2026-03-15 04:30Z), not the following night.
+        for s in starts:
+            self.assertLess(s, datetime(2026, 3, 15, 4, 30, tzinfo=UTC),
+                            "slot belongs to the following night — the bug this test guards against")
+
+    def test_delayed_run_never_selects_an_elapsed_slot(self):
+        # Same delayed scenario, but the already-elapsed portion of tonight's
+        # window (20:00Z-22:00Z, before "now") is made artificially the
+        # CHEAPEST price in the whole dataset — if the candidate floor isn't
+        # working, the DP would be drawn to it since it's optimal by price.
+        import charging_planner as cp
+        import tempfile
+
+        delayed_now = datetime(2026, 3, 14, 22, 0, tzinfo=UTC)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        prices = self._make_prices()
+        prices = [
+            replace(s, price_eur_kwh=0.001)
+            if datetime(2026, 3, 14, 20, 0, tzinfo=UTC) <= s.start < delayed_now
+            else s
+            for s in prices
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            plans = cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+
+        overnight = plans[1]
+        starts = [datetime.fromisoformat(s) for s in overnight["window_starts_utc"]]
+        for s in starts:
+            self.assertGreaterEqual(s, delayed_now,
+                                    "an already-elapsed slot was selected — the candidate floor failed")
+
+    def test_delayed_run_with_insufficient_remaining_time_produces_partial_plan(self):
+        # A live window is still correctly targeted even when too little of
+        # it remains to fit required_hours — it must NOT roll to the next
+        # occurrence (that would silently lose tonight's charging entirely).
+        # Instead: use 100% of what's left, and report the shortfall
+        # honestly via plan_warning, exactly like a naturally too-short
+        # configured window already does.
+        import charging_planner as cp
+        import tempfile
+
         raw_config = {
-            "entsoe": {"api_key": "super-secret-real-key", "area": "FI"},
-            "charging": [{"name": "topup", "required_hours": 2}],
+            "entsoe": {"api_key": "test-key", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "overnight", "required_hours": 6.0, "max_windows": 1,
+                "min_slot_minutes": 30, "min_gap_minutes": 15,
+                "preferred_window_start": "21:00", "preferred_window_end": "06:30",
+            }],
         }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            write_config_json(raw_config, tmpdir)
-            written = self._read(tmpdir)
-        self.assertNotIn("super-secret-real-key", json.dumps(written))
-        self.assertEqual(written["entsoe"]["api_key"], "***REDACTED***")
+        prices = slots_from(datetime(2026, 3, 14, 19, 0, tzinfo=UTC), 192, price_cents=1.0)
 
-    def test_empty_api_key_stays_empty(self):
-        # config.yaml as committed has an empty api_key — should stay empty,
-        # not become the redaction placeholder (nothing to hide).
+        # 03:30 UTC (05:30 EET) — only ~1h remains before the 06:30 EET close.
+        delayed_now = datetime(2026, 3, 15, 3, 30, tzinfo=UTC)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            plans = cp.cmd_plan(raw_config, output_dir=tmpdir)
+
+        p = plans[0]
+        self.assertEqual(p["configured_window_start_utc"], "2026-03-14T19:00:00+00:00",
+                         "must still target tonight's window, not roll to the next occurrence")
+        self.assertEqual(p["required_minutes"], 360)
+        self.assertEqual(p["total_minutes"], 60, "must use the full remaining hour, nothing less")
+        self.assertIsNotNone(p["plan_warning"])
+        self.assertIn("required hours exceed boundaries", p["plan_warning"])
+        self.assertEqual(p["window_starts_utc"], ["2026-03-15T03:30:00+00:00"])
+        self.assertEqual(p["window_ends_utc"], ["2026-03-15T04:30:00+00:00"])
+
+    def test_delayed_run_with_time_to_spare_produces_complete_plan(self):
+        # Companion to the above: when the remaining live window comfortably
+        # exceeds required_hours (here by 1h), the plan is complete with no
+        # warning — the shortfall handling above is specific to genuinely
+        # insufficient remaining time, not triggered just by running late.
+        import charging_planner as cp
+        import tempfile
+
         raw_config = {
-            "entsoe": {"api_key": "", "area": "FI"},
-            "charging": [{"name": "topup", "required_hours": 2}],
+            "entsoe": {"api_key": "test-key", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "overnight", "required_hours": 2.0, "max_windows": 1,
+                "min_slot_minutes": 30, "min_gap_minutes": 15,
+                "preferred_window_start": "21:00", "preferred_window_end": "06:30",
+            }],
         }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            write_config_json(raw_config, tmpdir)
-            written = self._read(tmpdir)
-        self.assertEqual(written["entsoe"]["api_key"], "")
+        prices = slots_from(datetime(2026, 3, 14, 19, 0, tzinfo=UTC), 192, price_cents=1.0)
 
-    def test_original_dict_not_mutated(self):
-        # write_config_json must not redact the caller's in-memory config —
-        # cmd_plan still needs the real key for subsequent fetches.
+        # 01:30 UTC (03:30 EET) — ~3h remains before the 06:30 EET close:
+        # 2h required plus a 1h buffer.
+        delayed_now = datetime(2026, 3, 15, 1, 30, tzinfo=UTC)
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            plans = cp.cmd_plan(raw_config, output_dir=tmpdir)
+
+        p = plans[0]
+        self.assertEqual(p["configured_window_start_utc"], "2026-03-14T19:00:00+00:00")
+        self.assertEqual(p["required_minutes"], 120)
+        self.assertEqual(p["total_minutes"], 120, "the full requirement must be met — plenty of time left")
+        self.assertIsNone(p["plan_warning"])
+
+    def test_delayed_run_with_insufficient_time_uses_partial_slots_regardless_of_max_windows(self):
+        # Regression: the exact scenario from
+        # test_delayed_run_with_insufficient_remaining_time_produces_partial_plan
+        # above, but with max_windows=None (the actual default) instead of 1.
+        # The DP behind max_windows=None/N used to require reaching the full
+        # requested slot count exactly, returning a completely empty plan —
+        # 0 minutes scheduled — when that was infeasible, even though 1h of
+        # perfectly usable time was available. Must behave identically to
+        # the max_windows=1 case: use what's available, warn about the rest.
+        import charging_planner as cp
+        import tempfile
+
         raw_config = {
-            "entsoe": {"api_key": "super-secret-real-key", "area": "FI"},
-            "charging": [{"name": "topup", "required_hours": 2}],
+            "entsoe": {"api_key": "test-key", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "overnight", "required_hours": 6.0, "max_windows": None,
+                "min_slot_minutes": 30, "min_gap_minutes": 15,
+                "preferred_window_start": "21:00", "preferred_window_end": "06:30",
+            }],
         }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            write_config_json(raw_config, tmpdir)
-        self.assertEqual(raw_config["entsoe"]["api_key"], "super-secret-real-key")
+        prices = slots_from(datetime(2026, 3, 14, 19, 0, tzinfo=UTC), 192, price_cents=1.0)
+        delayed_now = datetime(2026, 3, 15, 3, 30, tzinfo=UTC)   # ~1h left before 06:30 EET close
 
-    def test_other_fields_preserved(self):
-        raw_config = {
-            "entsoe": {"api_key": "secret", "area": "FI", "timezone": "Europe/Helsinki"},
-            "charging": [{"name": "topup", "required_hours": 2, "max_windows": 1}],
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return delayed_now if tz is None else delayed_now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+            plans = cp.cmd_plan(raw_config, output_dir=tmpdir)
+
+        p = plans[0]
+        self.assertEqual(p["required_minutes"], 360)
+        self.assertEqual(p["total_minutes"], 60,
+                         "must use the full remaining hour — previously returned 0")
+        self.assertIsNotNone(p["plan_warning"])
+        self.assertEqual(p["window_starts_utc"], ["2026-03-15T03:30:00+00:00"])
+
+    def test_plan_json_written_to_output_dir(self):
+        import tempfile, os
+        prices = self._make_prices()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            import charging_planner as cp
+
+            class _FrozenDatetime(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return TestEndToEnd._FROZEN_NOW if tz is None \
+                        else TestEndToEnd._FROZEN_NOW.astimezone(tz)
+
+            with mock.patch("charging_planner.datetime", _FrozenDatetime), \
+                 mock.patch("charging_planner.fetch_entsoe_prices", return_value=prices):
+                cp.cmd_plan(self.RAW_CONFIG, output_dir=tmpdir)
+            files = os.listdir(tmpdir)
+        self.assertIn("plan-topup.json", files)
+        self.assertIn("plan-overnight.json", files)
+
+
+class TestLogVerbosity(unittest.TestCase):
+    """A normal run's log used to repeat the same handful of facts (the
+    target window, in UTC and again in local time; the candidate slot
+    count; the scheduled total, average price, and window count) across
+    four separate INFO lines, all before print_plan_summary printed the
+    same numbers again in the pretty console block immediately after.
+    Demoted to DEBUG — still available for real troubleshooting via
+    --debug, just not cluttering a normal run. One exception: spillover
+    (minutes scheduled outside the preferred window) is not shown anywhere
+    else, including print_plan_summary, so it stays at INFO — split into
+    its own line rather than demoted along with the rest."""
+
+    _FROZEN_NOW = datetime(2026, 3, 14, 14, 30, tzinfo=UTC)
+
+    RAW_CONFIG = {
+        "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
+        "charging": [{
+            "name": "topup", "required_hours": 2, "max_windows": None,
+            "min_slot_minutes": 30,
+            "preferred_window_start": "00:00", "preferred_window_end": "06:30",
+        }],
+    }
+
+    def _make_prices(self):
+        base = datetime(2026, 3, 14, 20, 0, tzinfo=UTC)
+        slots = []
+        for i in range(192):
+            t = base + timedelta(minutes=15 * i)
+            local_h = t.astimezone(FI_TZ).hour
+            price = 1.5 if (local_h < 7 or local_h >= 22) else 8.0
+            slots.append(Slot(
+                start=t, end=t + timedelta(minutes=15),
+                duration_minutes=15, price_eur_kwh=price / 100, slot=i,
+            ))
+        return slots
+
+    def _run(self, config=None):
+        import charging_planner as cp
+        import tempfile
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return self._FROZEN_NOW if tz is None else self._FROZEN_NOW.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=self._make_prices()):
+            cp.cmd_plan(config or self.RAW_CONFIG, output_dir=tmpdir)
+
+    def test_demoted_lines_absent_at_info_level(self):
+        with self.assertLogs("charging_planner", level="INFO") as cm:
+            self._run()
+        combined = "\n".join(cm.output)
+        self.assertNotIn("Window UTC:", combined)
+        self.assertNotIn("slots inside", combined)
+        self.assertNotIn("Selecting", combined)
+        self.assertNotIn("min scheduled, avg", combined)
+
+    def test_demoted_lines_present_at_debug_level(self):
+        with self.assertLogs("charging_planner", level="DEBUG") as cm:
+            self._run()
+        combined = "\n".join(cm.output)
+        self.assertIn("Window UTC:", combined)
+        self.assertIn("slots inside", combined)
+        self.assertIn("Selecting", combined)
+        self.assertIn("min scheduled, avg", combined)
+
+    def test_spillover_reported_at_info_level_when_it_happens(self):
+        # A tiny window with plenty of candidate time available before it —
+        # unlike the demoted totals, "N min outside window" is unique to
+        # this line and shown nowhere else.
+        tight_config = {
+            "entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
+            "charging": [{
+                "name": "topup", "required_hours": 2, "max_windows": None,
+                "min_slot_minutes": 30,
+                "preferred_window_start": "05:00", "preferred_window_end": "05:30",
+            }],
         }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            write_config_json(raw_config, tmpdir)
-            written = self._read(tmpdir)
-        self.assertEqual(written["entsoe"]["area"], "FI")
-        self.assertEqual(written["charging"][0]["max_windows"], 1)
+        with self.assertLogs("charging_planner", level="INFO") as cm:
+            self._run(tight_config)
+        combined = "\n".join(cm.output)
+        self.assertIn("scheduled outside the preferred window (spillover)", combined)
+
+    def test_no_spillover_line_when_window_is_sufficient(self):
+        with self.assertLogs("charging_planner", level="INFO") as cm:
+            self._run()
+        combined = "\n".join(cm.output)
+        self.assertNotIn("spillover", combined)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+
+# ===========================================================================
+# 11. Real ENTSO-E data
+# ===========================================================================
+
+# Real ENTSO-E API response captured on 2026-03-14 at 15:10 UTC.
+# Two TimeSeries:
+#   TS1: 2026-03-12T23:00Z – 2026-03-13T23:00Z  (2026-03-13 Helsinki)
+#   TS2: 2026-03-13T23:00Z – 2026-03-14T23:00Z  (2026-03-14 Helsinki)
+# 15-minute resolution, sparse (forward-fill encoding).
+# Known: TS2 morning ~4.99 c€/kWh, peak 22–35 c€/kWh, night 26–30 c€/kWh

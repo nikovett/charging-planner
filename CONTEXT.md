@@ -391,9 +391,9 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 ## Test suite
 
-467 tests, 3 skipped:
-- `test/test_charging_planner.py` (327) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
-- `test/test_deliver.py` (27) — redundant-delivery protection: full decision matrix, persisted-record read/write, `dispatch()`-level integration
+479 tests, 3 skipped:
+- `test/test_charging_planner.py` (335) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
+- `test/test_deliver.py` (31) — redundant-delivery protection: full decision matrix, persisted-record read/write, `dispatch()`-level integration
 - `test/test_deliver_chargeamps.py` (46) — login/cache, connector mode, period fields, period timing
 - `test/test_deliver_easee.py` (26) — day-of-week mapping, weekly/basic plan payloads, deliver routing
 - `test/test_deliver_myskoda.py` (41) — slot mapping, `max_windows` validation, active-slot detection, all four charging-state branches
