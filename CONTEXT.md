@@ -154,6 +154,12 @@ Three explicitly named pools, kept separate to stop data leaking across calculat
 - `future_prices` — real slots from now onwards; used for `price_stats`, the optimal-comparison calculation, and the scheduler itself
 - `forecast_slots` — predicted slots; appended to `price_slots` for display, never used in cost calculations or selection directly (selection only reaches forecast data via the coverage-supplement path above, which is deliberately separate)
 
+### Forecast display padding reuses the fallback fetch when one already happened
+
+`fetch_forecast_prices` (the scheduling fallback, triggered when real prices don't reach tomorrow noon) and `fetch_forecast_display_slots` (histogram padding, `forecast_slots` above) both hit the same `nordpool-predict-fi` endpoint. The fallback fetches everything from *now*, uncapped (183 hours in a real production run); the display fetch wants a narrow 24h window starting from the last real/supplemented price slot — always a strict subset of what the fallback just retrieved.
+
+`cmd_plan` used to make the display-padding call unconditionally (`if all_prices:`, no check for whether forecast data had already been fetched this run), so on any run where the fallback genuinely triggered — the common case for a weekend `any`/`any` entry before Sunday's prices publish — it made a second, wholly redundant network call to the same endpoint for data it had already retrieved and discarded moments earlier. Fixed: the full (uncapped) fallback result is kept in scope (`forecast_fallback_full`), and the display-padding step reuses it — filtered to whatever's beyond the current price coverage — instead of fetching again. The separate fetch only happens when the fallback never ran (real prices were sufficient), which is also the only case it's actually needed. Same "never make an unnecessary API call" principle established for delivery handlers, just not originally applied to the planner's own price-fetching.
+
 ---
 
 ## Window resolution
@@ -391,8 +397,12 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 ## Test suite
 
-479 tests, 3 skipped:
-- `test/test_charging_planner.py` (335) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
+`test/test_charging_planner.py`'s classes are organized to mirror this Reference section's own structure — Config → Price acquisition → Window resolution → Slot selection → Plan output → Display/reporting → Integration — rather than the order they happened to be added in over many sessions. Fixture data used across classes (`MINIMAL_XML`, `REAL_ENTSOE_XML`, etc.) lives in one Helpers section at the top.
+
+**The first reorganization pass had three real defects, found by scrutiny after the fact, not by the verification used at the time.** Checking that the sorted set of `def test_...` method names was identical before and after (proving no test content was lost or duplicated) is necessary but not sufficient — it says nothing about *non-test* content: two module-level helper functions (`_make_output_plan`, `_capture_stdout`) got silently absorbed into an unrelated class's block and ended up ~1500 lines from the only place they're used, because the extraction only tracked class boundaries and multi-line fixture assignments, not `def _helper(...)` or single-line `UPPER_CASE = "..."` constants between classes. Worse: `if __name__ == "__main__": unittest.main()` ended up stranded mid-file — harmless under `python -m unittest` (module-based discovery finds every class regardless of where that block sits) but confirmed to silently drop the last 67 of 335 tests when the file is run directly (`python test_charging_planner.py`), exactly the kind of thing "run the suite, it passed" doesn't catch if the *invocation method itself* doesn't exercise the broken path. All three fixed; verified this time by both invocation methods, not just one.
+
+482 tests, 3 skipped:
+- `test/test_charging_planner.py` (338) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
 - `test/test_deliver.py` (31) — redundant-delivery protection: full decision matrix, persisted-record read/write, `dispatch()`-level integration
 - `test/test_deliver_chargeamps.py` (46) — login/cache, connector mode, period fields, period timing
 - `test/test_deliver_easee.py` (26) — day-of-week mapping, weekly/basic plan payloads, deliver routing

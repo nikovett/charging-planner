@@ -184,6 +184,12 @@ ERROR_XML = """\
 </Acknowledgement_MarketDocument>
 """
 
+# Real ENTSO-E API response captured on 2026-03-14 at 15:10 UTC.
+# Two TimeSeries:
+#   TS1: 2026-03-12T23:00Z – 2026-03-13T23:00Z  (2026-03-13 Helsinki)
+#   TS2: 2026-03-13T23:00Z – 2026-03-14T23:00Z  (2026-03-14 Helsinki)
+# 15-minute resolution, sparse (forward-fill encoding).
+# Known: TS2 morning ~4.99 c€/kWh, peak 22–35 c€/kWh, night 26–30 c€/kWh
 REAL_ENTSOE_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <Publication_MarketDocument xmlns="urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:3">
 <mRID>67ae7c1eb55f4a02b089a2fa84863e19</mRID>
@@ -1769,45 +1775,75 @@ class TestAreaFallbackChainIntegration(unittest.TestCase):
         mock_fc.assert_not_called()
 
 
-# ===========================================================================
-# 11. Console output — print_plan_summary, _window_bar, GHA summary
-# ===========================================================================
+class TestForecastDisplayReuse(unittest.TestCase):
+    """Regression: fetch_forecast_prices (the scheduling fallback, uncapped
+    from 'now') and fetch_forecast_display_slots (histogram padding, a
+    narrow 24h window) both hit the same nordpool-predict-fi endpoint. When
+    the fallback already ran, the display-padding data it would fetch is a
+    strict subset of what the fallback already retrieved and discarded
+    beyond the narrow scheduling supplement — cmd_plan used to make a
+    second, wholly redundant network call for it anyway. Now it reuses the
+    already-fetched data instead, and only makes the separate display call
+    when the fallback never ran in the first place (real prices sufficient).
+    """
 
-def _make_output_plan(*, windows=None, total_minutes=240, avg_price=0.62,
-                      retained=0, warning=None, avg_optimal=None) -> dict:
-    """Minimal plan dict for print_plan_summary / GHA summary tests."""
-    if windows is None:
-        windows = [
-            {"start": "03:00", "end": "07:00",
-             "duration_minutes": 240, "avg_price_cents_kwh": 0.62},
-        ]
-    return {
-        "date": "2026-03-15",
-        "area": "FI",
-        "price_source": "ENTSO-E",
-        "timezone": "Europe/Helsinki",
-        "utc_offset_hours": 2,
-        "price_stats": {
-            "min_cents_kwh": 0.47,
-            "max_cents_kwh": 4.27,
-            "avg_cents_kwh": 1.64,
-        },
-        "required_minutes": 240,
-        "total_minutes": total_minutes,
-        "avg_price_cents_kwh": avg_price,
-        "avg_optimal_price_cents_kwh": avg_optimal,
-        "windows": windows,
-        "retained_minutes": retained,
-        "plan_warning": warning,
-        "profile": "test",
-    }
+    _FROZEN_NOW = datetime(2026, 9, 25, 9, 2, tzinfo=UTC)
 
+    def _config(self, **profile_overrides):
+        profile = {
+            "name": "topup", "required_hours": 2, "max_windows": None,
+            "min_slot_minutes": 30, "min_gap_minutes": 15,
+            "preferred_window_start": "21:00", "preferred_window_end": "06:30",
+        }
+        profile.update(profile_overrides)
+        return {"entsoe": {"api_key": "test", "area": "FI", "timezone": "Europe/Helsinki"},
+               "charging": [profile]}
 
-def _capture_stdout(fn, *args, **kwargs) -> str:
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        fn(*args, **kwargs)
-    return buf.getvalue()
+    def _run(self, config, real_prices, forecast_prices=None, display_slots=None):
+        import charging_planner as cp
+        import tempfile
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return self._FROZEN_NOW if tz is None else self._FROZEN_NOW.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=real_prices), \
+             mock.patch("charging_planner.fetch_forecast_prices",
+                        return_value=forecast_prices or []) as ffp, \
+             mock.patch("charging_planner.fetch_forecast_display_slots",
+                        return_value=display_slots or []) as ffds:
+            plans = cp.cmd_plan(config, output_dir=tmpdir)
+        return plans, ffp, ffds
+
+    def test_display_fetch_skipped_when_fallback_already_ran(self):
+        # Real prices only reach ~18h out (Saturday, Sunday's not published) —
+        # forecast fallback is genuinely triggered.
+        real = slots_from(datetime(2026, 9, 25, 0, 0, tzinfo=UTC), 4 * 18, price_cents=5.0)
+        forecast = slots_from(datetime(2026, 9, 25, 0, 0, tzinfo=UTC), 4 * 183, price_cents=6.0)
+        plans, ffp, ffds = self._run(self._config(), real, forecast_prices=forecast)
+        ffp.assert_called_once()
+        ffds.assert_not_called()
+
+    def test_forecast_slots_still_appear_when_display_fetch_skipped(self):
+        # The reused data must actually reach the plan output, not just
+        # avoid the network call and leave the histogram empty.
+        real = slots_from(datetime(2026, 9, 25, 0, 0, tzinfo=UTC), 4 * 18, price_cents=5.0)
+        forecast = slots_from(datetime(2026, 9, 25, 0, 0, tzinfo=UTC), 4 * 183, price_cents=6.0)
+        plans, ffp, ffds = self._run(self._config(), real, forecast_prices=forecast)
+        forecasted = [s for s in plans[0]["price_slots"] if s.get("forecasted")]
+        self.assertGreater(len(forecasted), 0)
+
+    def test_display_fetch_still_happens_when_fallback_did_not_run(self):
+        # Real prices genuinely sufficient (well past tomorrow noon) — no
+        # fallback, so the separate display fetch is still needed and used.
+        real = slots_from(datetime(2026, 9, 24, 20, 0, tzinfo=UTC), 4 * 44, price_cents=5.0)
+        display = slots_from(datetime(2026, 9, 26, 20, 0, tzinfo=UTC), 4 * 24, price_cents=7.0)
+        plans, ffp, ffds = self._run(self._config(), real, display_slots=display)
+        ffp.assert_not_called()
+        ffds.assert_called_once()
 
 
 # ===========================================================================
@@ -3036,10 +3072,6 @@ class TestBuildPlan(unittest.TestCase):
         self.assertFalse(plan["schedule_uses_forecast"])
 
 
-# ===========================================================================
-# 8. OCPP profile
-# ===========================================================================
-
 SCHEMA_16_PATH  = "test/ocpp16/OCPP_1.6_documentation/schemas/json/SetChargingProfile.json"
 SCHEMA_201_PATH = "test/ocpp201/OCPP-2.0.1_all_files/OCPP-2.0.1_part3_JSON_schemas.zip"
 SCHEMA_21_PATH  = "test/ocpp21/OCPP-2.1_all_files/OCPP-2.1_part3_JSON_schemas.zip"
@@ -3240,13 +3272,46 @@ class TestWriteConfigJson(unittest.TestCase):
         self.assertEqual(written["charging"][0]["max_windows"], 1)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
-
 # ===========================================================================
 # Display / reporting
 # ===========================================================================
+
+def _make_output_plan(*, windows=None, total_minutes=240, avg_price=0.62,
+                      retained=0, warning=None, avg_optimal=None) -> dict:
+    """Minimal plan dict for print_plan_summary / GHA summary tests."""
+    if windows is None:
+        windows = [
+            {"start": "03:00", "end": "07:00",
+             "duration_minutes": 240, "avg_price_cents_kwh": 0.62},
+        ]
+    return {
+        "date": "2026-03-15",
+        "area": "FI",
+        "price_source": "ENTSO-E",
+        "timezone": "Europe/Helsinki",
+        "utc_offset_hours": 2,
+        "price_stats": {
+            "min_cents_kwh": 0.47,
+            "max_cents_kwh": 4.27,
+            "avg_cents_kwh": 1.64,
+        },
+        "required_minutes": 240,
+        "total_minutes": total_minutes,
+        "avg_price_cents_kwh": avg_price,
+        "avg_optimal_price_cents_kwh": avg_optimal,
+        "windows": windows,
+        "retained_minutes": retained,
+        "plan_warning": warning,
+        "profile": "test",
+    }
+
+
+def _capture_stdout(fn, *args, **kwargs) -> str:
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        fn(*args, **kwargs)
+    return buf.getvalue()
+
 
 class TestPrintPlanSummary(unittest.TestCase):
 
@@ -3921,14 +3986,6 @@ class TestLogVerbosity(unittest.TestCase):
         self.assertNotIn("spillover", combined)
 
 
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
 
-# ===========================================================================
-# 11. Real ENTSO-E data
-# ===========================================================================
-
-# Real ENTSO-E API response captured on 2026-03-14 at 15:10 UTC.
-# Two TimeSeries:
-#   TS1: 2026-03-12T23:00Z – 2026-03-13T23:00Z  (2026-03-13 Helsinki)
-#   TS2: 2026-03-13T23:00Z – 2026-03-14T23:00Z  (2026-03-14 Helsinki)
-# 15-minute resolution, sparse (forward-fill encoding).
-# Known: TS2 morning ~4.99 c€/kWh, peak 22–35 c€/kWh, night 26–30 c€/kWh

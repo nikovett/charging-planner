@@ -849,8 +849,6 @@ def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot
     if area.upper() not in ("FI", "10YFI-1--------U"):
         return []
     cap = after + timedelta(hours=24)
-    log.info("Fetching forecast display slots after %s (cap %s)",
-             after.strftime("%Y-%m-%d %H:%M UTC"), cap.strftime("%H:%M UTC"))
     req = urllib.request.Request(FORECAST_URL, headers={"Accept": "application/json"})
     try:
         raw = _http_request_with_retry(req, timeout=15, retries=2, backoff=3.0,
@@ -879,8 +877,6 @@ def fetch_forecast_display_slots(after: datetime, area: str = "FI") -> list[Slot
                 slot=len(slots),
             ))
 
-    log.info("Forecast display: %d slots fetched beyond %s",
-             len(slots), after.strftime("%Y-%m-%d %H:%M UTC"))
     return slots
 
 
@@ -3274,6 +3270,9 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
     plans = []
     skipped = []
     supplement_starts: set = set()
+    forecast_fallback_full: Optional[list] = None  # full (uncapped) fetch_forecast_prices() result,
+                                                     # kept in scope so display padding can reuse it
+                                                     # below instead of a second network call
 
     # If real prices don't reach tomorrow noon UTC, supplement with forecast.
     # Only attempted when forecast is in the area's chain (FI only).
@@ -3291,10 +3290,10 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                 last_real_end.strftime("%Y-%m-%d %H:%M UTC")
             )
             try:
-                forecast_supplement = fetch_forecast_prices(cfg0.area)
+                forecast_fallback_full = fetch_forecast_prices(cfg0.area)
                 # Supplement: append forecast slots that come after the last real slot
                 existing_starts = {s.start for s in all_prices}
-                supplement = [s for s in forecast_supplement if s.start not in existing_starts
+                supplement = [s for s in forecast_fallback_full if s.start not in existing_starts
                               and s.start > last_real_end]
                 all_prices = all_prices + supplement
                 supplement_starts = {s.start for s in supplement}
@@ -3305,11 +3304,12 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                 log.warning("%s", exc)
                 sys.exit(1)
 
-    # Always fetch 24h of forecast display slots beyond the last real price slot,
-    # for visual histogram padding. These are stored in the JSON as forecasted=True
-    # and are never used for charging slot selection. Fetched regardless of
-    # price_source so the histogram is padded even when forecast is the primary source.
-    # Use horizon-capped boundary so supplement slots don't push the fetch too far out.
+    # Forecast slots for histogram display padding beyond the last real/supplemented
+    # price slot — never used for charging slot selection (see PlanParams.forecast_slots).
+    # When the fallback above already ran, its fetch was uncapped from "now" (see
+    # fetch_forecast_prices) and so already covers whatever this needs — reuse it
+    # rather than make a second network call to the same endpoint for a strict
+    # subset of data already retrieved. Only fetch fresh when fallback didn't run.
     forecast_display_slots: list = []
     if all_prices:
         _today_utc   = datetime.now(tz=timezone.utc).date()
@@ -3317,11 +3317,19 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                                 23, 0, tzinfo=timezone.utc) + timedelta(days=1)
         _display     = [s for s in all_prices if s.start < _horizon_utc]
         last_real_slot = max(s.start for s in _display) if _display else max(s.start for s in all_prices)
-        log.info("Real prices end at %s — fetching forecast display slots for histogram padding.",
-                 last_real_slot.strftime("%Y-%m-%d %H:%M UTC"))
-        forecast_display_slots = fetch_forecast_display_slots(
-            after=last_real_slot, area=cfg0.area
-        )
+
+        if forecast_fallback_full is not None:
+            existing_starts = {s.start for s in all_prices}
+            forecast_display_slots = [s for s in forecast_fallback_full
+                                      if s.start not in existing_starts and s.start > last_real_slot]
+            log.debug("Reusing already-fetched forecast data for histogram padding: %d slots beyond %s",
+                     len(forecast_display_slots), last_real_slot.strftime("%Y-%m-%d %H:%M UTC"))
+        else:
+            forecast_display_slots = fetch_forecast_display_slots(
+                after=last_real_slot, area=cfg0.area
+            )
+            log.info("Fetched %d forecast slots beyond %s for histogram padding.",
+                     len(forecast_display_slots), last_real_slot.strftime("%Y-%m-%d %H:%M UTC"))
 
     for cfg in configs:
         try:

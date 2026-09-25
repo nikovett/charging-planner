@@ -1,6 +1,6 @@
 # Test Suite
 
-479 tests across five files. Run from the repo root:
+482 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 335 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 338 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 31 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (335 tests)
+## test_charging_planner.py (338 tests)
 
 #### Config
 
@@ -59,6 +59,9 @@ Price source selection rules (rules 1–4): real prices used when sufficient, fo
 
 ### TestAreaFallbackChainIntegration (24)
 `cmd_plan` with all fetchers patched: for each area family (FI, EE, SE1, NO1) — ENTSO-E success, each fallback tried in order when prior fails, sources that should never be called are asserted not called, plan exits when all sources fail.
+
+### TestForecastDisplayReuse (3)
+Regression: `fetch_forecast_prices` (the scheduling fallback, fetched uncapped from "now") and `fetch_forecast_display_slots` (histogram padding, a narrow 24h window) both hit the same `nordpool-predict-fi` endpoint — the display fetch's range is always a strict subset of what the fallback already retrieved. `cmd_plan` used to make both calls unconditionally, wasting a full network round-trip whenever the fallback genuinely triggered (the common case for a weekend `any`/`any` entry before next-day prices publish). Confirms the display fetch is skipped and the already-fetched data still reaches the plan JSON's forecast slots when the fallback ran; confirms the separate display fetch still happens exactly once when the fallback did not run. Mutation-checked: disabling the reuse path makes the "skipped" test fail as expected.
 
 
 #### Window resolution
