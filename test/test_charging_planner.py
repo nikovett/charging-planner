@@ -1827,6 +1827,33 @@ class TestForecastDisplayReuse(unittest.TestCase):
         ffp.assert_called_once()
         ffds.assert_not_called()
 
+    def test_supplement_call_site_actually_passes_quiet(self):
+        # The two quiet-parameter tests above only prove fetch_forecast_prices
+        # honors quiet when told to — not that cmd_plan's own supplement call
+        # site actually passes it. Goes through the real function (patching
+        # only the HTTP layer), not a mock, so a regression at the call site
+        # itself would be caught here even if both those tests still passed.
+        import charging_planner as cp
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return TestForecastDisplayReuse._FROZEN_NOW if tz is None \
+                    else TestForecastDisplayReuse._FROZEN_NOW.astimezone(tz)
+
+        real = slots_from(datetime(2026, 9, 25, 0, 0, tzinfo=UTC), 4 * 18, price_cents=5.0)
+        forecast = slots_from(datetime(2026, 9, 25, 0, 0, tzinfo=UTC), 4 * 183, price_cents=6.0)
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices", return_value=real), \
+             mock.patch("charging_planner._http_request_with_retry", return_value=json.dumps(
+                 [[int(s.start.timestamp() * 1000), 6.0] for s in forecast[::4]])):
+            with self.assertLogs("charging_planner", level="INFO") as cm:
+                cp.cmd_plan(self._config(), output_dir=tmpdir)
+        combined = "\n".join(cm.output)
+        self.assertNotIn("Fetching forecast prices", combined)
+        self.assertNotIn("usable 15-min slots", combined)
+
     def test_forecast_slots_still_appear_when_display_fetch_skipped(self):
         # The reused data must actually reach the plan output, not just
         # avoid the network call and leave the histogram empty.
@@ -1844,6 +1871,70 @@ class TestForecastDisplayReuse(unittest.TestCase):
         plans, ffp, ffds = self._run(self._config(), real, display_slots=display)
         ffp.assert_not_called()
         ffds.assert_called_once()
+
+    def test_fetch_forecast_prices_quiet_suppresses_own_logging(self):
+        # The supplement call site passes quiet=True specifically because
+        # its own caller already reports the one number that matters
+        # ("Supplemented with N forecast slots") — fetch_forecast_prices'
+        # own "fetching.../usable slots" lines would just restate that
+        # confusingly, under a different (pre-filter) count.
+        import charging_planner as cp
+        base = datetime.now(tz=UTC) + timedelta(hours=1)
+        forecast = slots_from(base, 8, price_cents=5.0)
+        with mock.patch("charging_planner._http_request_with_retry", return_value=json.dumps(
+                [[int(s.start.timestamp() * 1000), 5.0] for s in forecast[::4]])), \
+             mock.patch.object(cp.log, "info") as mock_info:
+            cp.fetch_forecast_prices("FI", quiet=True)
+        # assertLogs can't prove *zero* logging occurred (it requires at
+        # least one record to pass) — check the mock directly instead.
+        mock_info.assert_not_called()
+
+    def test_fetch_forecast_prices_default_still_logs_normally(self):
+        # Used as a fallback-chain primary source (all real sources failed),
+        # there's no separate caller-side line — must keep its own logging,
+        # consistent with how ENTSO-E/Elering/Sähkötin report themselves.
+        import charging_planner as cp
+        base = datetime.now(tz=UTC) + timedelta(hours=1)
+        forecast = slots_from(base, 8, price_cents=5.0)
+        with mock.patch("charging_planner._http_request_with_retry", return_value=json.dumps(
+                [[int(s.start.timestamp() * 1000), 5.0] for s in forecast[::4]])):
+            with self.assertLogs("charging_planner", level="INFO") as cm:
+                cp.fetch_forecast_prices("FI")
+        combined = "\n".join(cm.output)
+        self.assertIn("Fetching forecast prices", combined)
+        self.assertIn("usable 15-min slots", combined)
+
+    def test_display_fetch_skipped_when_forecast_wins_as_primary_source(self):
+        # All real sources fail entirely -- forecast becomes the primary
+        # source directly from the fallback chain, not via the supplement
+        # branch (forecast_fallback_full stays None in this case). all_prices
+        # IS already the full forecast fetch; the display-padding step must
+        # still recognise this and skip its own separate network call.
+        import charging_planner as cp
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return TestForecastDisplayReuse._FROZEN_NOW if tz is None \
+                    else TestForecastDisplayReuse._FROZEN_NOW.astimezone(tz)
+
+        forecast = slots_from(datetime(2026, 9, 25, 0, 0, tzinfo=UTC), 4 * 182, price_cents=6.0)
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch("charging_planner.datetime", _FrozenDatetime), \
+             mock.patch("charging_planner.fetch_entsoe_prices",
+                        side_effect=cp.PricesNotYetAvailable("x")), \
+             mock.patch("charging_planner.fetch_elering_prices",
+                        side_effect=cp.PricesNotYetAvailable("x")), \
+             mock.patch("charging_planner.fetch_sahkotin_prices",
+                        side_effect=cp.PricesNotYetAvailable("x")), \
+             mock.patch("charging_planner.fetch_forecast_display_slots") as ffds, \
+             mock.patch("charging_planner._http_request_with_retry", return_value=json.dumps(
+                 [[int(s.start.timestamp() * 1000), 5.0] for s in forecast[::4]])):
+            plans = cp.cmd_plan(self._config(), output_dir=tmpdir)
+        ffds.assert_not_called()
+        forecasted = [s for s in plans[0]["price_slots"] if s.get("forecasted")]
+        self.assertGreater(len(forecasted), 0,
+                           "reused data must still reach the plan, not just avoid the call")
 
 
 # ===========================================================================

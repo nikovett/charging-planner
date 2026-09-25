@@ -1167,7 +1167,7 @@ FORECAST_URL = (
 FINLAND_VAT = 1.255  # 25.5%
 
 
-def fetch_forecast_prices(area: str = "FI") -> list[Slot]:
+def fetch_forecast_prices(area: str = "FI", quiet: bool = False) -> list[Slot]:
     """Fetch hourly price forecast from nordpool-predict-fi as a fallback.
 
     Only available for the Finnish (FI) bidding zone. Raises PricesNotYetAvailable
@@ -1178,13 +1178,25 @@ def fetch_forecast_prices(area: str = "FI") -> list[Slot]:
     Slot objects at the same ex-VAT price, producing the same structure as
     fetch_entsoe_prices so the rest of the pipeline requires no changes.
 
+    quiet=True suppresses this function's own "fetching"/"usable slots" log
+    lines. Used when called as the day-ahead supplement (cmd_plan), where the
+    caller already reports the one number that actually matters — how many
+    slots were appended as supplement — immediately after, and this
+    function's own raw fetch-count (which includes slots real prices already
+    cover, before that filtering) would otherwise just look like a
+    confusingly different count for what reads as the same fact. Left at its
+    normal, ENTSO-E/Elering/Sähkötin-consistent verbosity when called as a
+    fallback-chain primary source instead (no separate caller-side line
+    exists in that case).
+
     Raises PricesNotYetAvailable if the fetch fails or returns no usable data.
     """
     if area.upper() not in ("FI", "10YFI-1--------U"):
         raise PricesNotYetAvailable(
             f"Forecast fallback is only available for area FI (got '{area}')."
         )
-    log.info("Fetching forecast prices from nordpool-predict-fi (fallback)")
+    if not quiet:
+        log.info("Fetching forecast prices from nordpool-predict-fi (fallback)")
     req = urllib.request.Request(FORECAST_URL, headers={"Accept": "application/json"})
     try:
         raw = _http_request_with_retry(req, timeout=15, retries=3, backoff=3.0,
@@ -1229,8 +1241,9 @@ def fetch_forecast_prices(area: str = "FI") -> list[Slot]:
     result = [Slot(start=s.start, end=s.end, duration_minutes=s.duration_minutes,
                    price_eur_kwh=s.price_eur_kwh, slot=i)
               for i, s in enumerate(usable)]
-    log.info("Forecast fallback: %d usable 15-min slots (from %d hours, ex-VAT)",
-             len(result), len(result) // 4)
+    if not quiet:
+        log.info("Forecast fallback: %d usable 15-min slots (from %d hours, ex-VAT)",
+                 len(result), len(result) // 4)
     return result
 
 
@@ -3290,7 +3303,7 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
                 last_real_end.strftime("%Y-%m-%d %H:%M UTC")
             )
             try:
-                forecast_fallback_full = fetch_forecast_prices(cfg0.area)
+                forecast_fallback_full = fetch_forecast_prices(cfg0.area, quiet=True)
                 # Supplement: append forecast slots that come after the last real slot
                 existing_starts = {s.start for s in all_prices}
                 supplement = [s for s in forecast_fallback_full if s.start not in existing_starts
@@ -3306,10 +3319,13 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
 
     # Forecast slots for histogram display padding beyond the last real/supplemented
     # price slot — never used for charging slot selection (see PlanParams.forecast_slots).
-    # When the fallback above already ran, its fetch was uncapped from "now" (see
-    # fetch_forecast_prices) and so already covers whatever this needs — reuse it
-    # rather than make a second network call to the same endpoint for a strict
-    # subset of data already retrieved. Only fetch fresh when fallback didn't run.
+    # Two cases where forecast data was already fetched uncapped from "now" and so
+    # already covers whatever this needs — reuse it rather than make a second network
+    # call to the same endpoint for a strict subset of data already retrieved:
+    #   1. The supplement branch above ran (forecast_fallback_full holds its result).
+    #   2. Forecast won the fallback chain directly as the primary source (all real
+    #      sources failed) — all_prices IS that same uncapped fetch already.
+    # Only fetch fresh when neither happened.
     forecast_display_slots: list = []
     if all_prices:
         _today_utc   = datetime.now(tz=timezone.utc).date()
@@ -3318,10 +3334,17 @@ def cmd_plan(raw_config: dict, output_dir: str = ".") -> list[dict]:
         _display     = [s for s in all_prices if s.start < _horizon_utc]
         last_real_slot = max(s.start for s in _display) if _display else max(s.start for s in all_prices)
 
-        if forecast_fallback_full is not None:
-            existing_starts = {s.start for s in all_prices}
-            forecast_display_slots = [s for s in forecast_fallback_full
-                                      if s.start not in existing_starts and s.start > last_real_slot]
+        _already_fetched = forecast_fallback_full if forecast_fallback_full is not None \
+            else (all_prices if price_source == "forecast" else None)
+
+        if _already_fetched is not None:
+            # start > last_real_slot alone is sufficient to exclude anything
+            # already covered — last_real_slot is by definition the latest
+            # start among all_prices' horizon-bounded portion, so nothing
+            # already in it can have a later start. (A separate "already in
+            # all_prices" check would incorrectly exclude everything in the
+            # primary-source case, where _already_fetched IS all_prices.)
+            forecast_display_slots = [s for s in _already_fetched if s.start > last_real_slot]
             log.debug("Reusing already-fetched forecast data for histogram padding: %d slots beyond %s",
                      len(forecast_display_slots), last_real_slot.strftime("%Y-%m-%d %H:%M UTC"))
         else:
