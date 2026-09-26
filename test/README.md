@@ -1,6 +1,6 @@
 # Test Suite
 
-490 tests across five files. Run from the repo root:
+491 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 346 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 347 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 31 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (346 tests)
+## test_charging_planner.py (347 tests)
 
 #### Config
 
@@ -51,8 +51,8 @@ ENTSO-E XML parsing: slot count, 15-min duration, sort order, ordinal sequencing
 ### TestRealEntsoEData (12)
 Integration tests against a bundled ENTSO-E XML fixture: prices in plausible range, known peak price, `min_slot_minutes` respected, overnight windows stay within window, real-world slot selection.
 
-### TestFetchEntsoePricesCoverage (3)
-Regression: `fetch_entsoe_prices` used to raise `PriceDataUnavailable` whenever its own data didn't reach tomorrow, specifically to trigger the Elering/Sähkötin fallback — but those sources republish the same underlying Nord Pool day-ahead auction, so if ENTSO-E is reachable and parses fine but tomorrow's auction hasn't cleared yet, no other real source has it either (confirmed against a real production log: Elering "succeeded" with data stopping at the exact same timestamp ENTSO-E's own check had already rejected). Confirms partial-but-real coverage now returns normally rather than raising; confirms a genuine absence of usable future data still raises (a different, real failure signal); confirms full coverage reaching tomorrow still works exactly as before. Mutation-checked: reintroducing the old "must reach tomorrow" check makes the first test fail as expected.
+### TestFetchEntsoePricesCoverage (4)
+Regression: `fetch_entsoe_prices` used to raise `PriceDataUnavailable` whenever its own data didn't reach tomorrow, specifically to trigger the Elering/Sähkötin fallback — but those sources republish the same underlying Nord Pool day-ahead auction, so if ENTSO-E is reachable and parses fine but tomorrow's auction hasn't cleared yet, no other real source has it either (confirmed against a real production log: Elering "succeeded" with data stopping at the exact same timestamp ENTSO-E's own check had already rejected). Confirms partial-but-real coverage now returns normally rather than raising; confirms a genuine absence of usable future data still raises (a different, real failure signal); confirms full coverage reaching tomorrow still works exactly as before. Mutation-checked: reintroducing the old "must reach tomorrow" check makes the first test fail as expected. Also covers a related log-verbosity fix: `_parse_entsoe_xml`'s own count-log used to also fire at INFO, restating the exact same total `fetch_entsoe_prices`' own summary line already reports right after — confirms it's demoted to `--debug` and the caller's own line is what a normal run actually shows.
 
 ### TestPriceSourceRules (9)
 Price source selection rules (rules 1–4): real prices used when sufficient, forecast display appended, forecast supplement used when window not covered, `price_source` field set correctly, supplement slots tagged `forecasted: true`.

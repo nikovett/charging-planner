@@ -1414,8 +1414,8 @@ def _parse_entsoe_xml(xml_text: str, target_date: date, area: str) -> list[Slot]
             f"No price slots found for area={area} date={target_date}."
         )
 
-    log.info("Fetched %d price slots for %s (resolution: %d-minute)",
-             len(unique), target_date, unique[0].duration_minutes)
+    log.debug("Parsed %d price slots (resolution: %d-minute, requested around %s)",
+              len(unique), unique[0].duration_minutes, target_date)
     return unique
 
 

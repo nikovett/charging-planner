@@ -1285,6 +1285,31 @@ class TestFetchEntsoePricesCoverage(unittest.TestCase):
             result = fetch_entsoe_prices("fake-key", "FI")
         self.assertTrue(any(s.start.date() >= tomorrow for s in result))
 
+    def test_parse_level_count_demoted_to_debug(self):
+        # _parse_entsoe_xml's own "Parsed N slots" line used to also fire at
+        # INFO, restating the exact same count fetch_entsoe_prices' own
+        # "Fetched N total slots (M future, last: ...)" line already reports
+        # right after — the same number twice, worded just differently
+        # enough to look like it might mean something different. Its only
+        # production call site is fetch_entsoe_prices, so demoting it loses
+        # nothing a normal run needs; --debug still shows it.
+        today = date(2026, 9, 25)
+        now = datetime(2026, 9, 25, 10, 0, tzinfo=UTC)
+        xml = self._single_day_xml(today)
+
+        class F(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now if tz is None else now.astimezone(tz)
+
+        with mock.patch("charging_planner.datetime", F), \
+             mock.patch("charging_planner._http_request_with_retry", return_value=xml):
+            with self.assertLogs("charging_planner", level="INFO") as cm:
+                fetch_entsoe_prices("fake-key", "FI")
+        combined = "\n".join(cm.output)
+        self.assertNotIn("Parsed", combined)
+        self.assertIn("Fetched", combined)
+
 
 class TestPriceSourceRules(unittest.TestCase):
     """Tests for the four price source rules:
