@@ -388,6 +388,8 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 3. **Charging in `PREFERRED_CHARGING_TIMES`** → active-slot detection above; route around the protected slot, don't touch the charge mode.
 4. **Charging in an unrecognized mode** → skip entirely. A mode not seen before might use `preferredChargingTimes` in some way not yet understood; guessing is worse than doing nothing for one run.
 
+**Production-verified:** branch 2 with `MANUAL` (2026-09-28) — the vehicle was mid-session when delivery ran; slots 1-3 were updated, the unused slot disabled, the charge-mode update skipped, and the owner confirmed on the real car that the running session was not interrupted. Not yet recorded here for the other branches.
+
 **Why `max_windows: null` is rejected rather than merely risky** — this mirrors the redundant-delivery-protection design principle of failing predictably: an unbounded profile might work fine for weeks (the DP happens to produce ≤4 windows most days) and then fail unpredictably the one day it doesn't, with an error that gives no hint the *configuration* was the actual problem. Rejecting it at delivery time, every time, with a message naming the actual constraint, converts an intermittent silent failure into a loud, immediate, one-time configuration error.
 
 ---

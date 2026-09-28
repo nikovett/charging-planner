@@ -2387,7 +2387,7 @@ def build_ocpp_charging_profile(
 def save_plan(plan: dict, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(plan, f, indent=2)
-    log.info("Plan saved to %s", path)
+    log.debug("Plan saved to %s", path)
 
 
 # ===========================================================================

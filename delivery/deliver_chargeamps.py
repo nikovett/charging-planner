@@ -165,7 +165,7 @@ def _ca_login() -> tuple[str, str]:
     entitlements_token = ent_resp.get("token", "")
     if not entitlements_token:
         raise RuntimeError(f"No entitlements token in response: {ent_resp}")
-    log.info("Charge Amps entitlements token OK (org: %s)", org_id)
+    log.info("Charge Amps entitlements token OK")
 
     _token_cache["token"]     = token
     _token_cache["ent_token"] = entitlements_token
