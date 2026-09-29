@@ -2517,6 +2517,53 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
     print()
 
 
+def print_delivery_card(profile_name: str, handler_display: str, charge_point_id: str,
+                        status: str, reason: str = None, plan: dict = None) -> None:
+    """Print a rich, coloured delivery summary card to stdout, mirroring
+    print_plan_summary's visual style — same box width, same color helpers,
+    same _window_bar rendering for the window list.
+
+    status is one of "delivered", "skipped", "failed".
+    reason is shown for "skipped"/"failed"; ignored for "delivered".
+    plan supplies the window list for "delivered" — pass it whenever
+    available; omitted (None) prints the card without a window section,
+    for outcomes decided before a specific plan/windows were in hand.
+    """
+    W = 66
+    print()
+    print(_bold("  " + "═" * W))
+    print(_bold(f"  Delivery — {profile_name}"))
+    print(_bold("  " + "═" * W))
+    print(f"  {_dim('Handler')}   {handler_display}")
+    print(f"  {_dim('Charger')}   {charge_point_id}")
+
+    if status == "delivered":
+        print(f"  {_dim('Status')}    {_green('✓ Delivered')}")
+    elif status == "skipped":
+        print(f"  {_dim('Status')}    {_yellow('— Skipped')}")
+        if reason:
+            print(f"  {_dim('Reason')}    {reason}")
+    else:  # failed
+        print(f"  {_dim('Status')}    {_red('✗ Failed')}")
+        if reason:
+            print(f"  {_dim('Reason')}    {reason}")
+
+    if status == "delivered" and plan and plan.get("windows"):
+        wins  = plan["windows"]
+        ps    = plan.get("price_stats", {})
+        min_c = ps.get("min_cents_kwh", 0)
+        max_c = ps.get("max_cents_kwh", 0)
+        print()
+        print(f"  {_bold(f'Windows ({len(wins)}):')} ")
+        for w in wins:
+            print(_window_bar(w["start"], w["end"],
+                              w["duration_minutes"], w["avg_price_cents_kwh"],
+                              min_c, max_c))
+
+    print(_bold("  " + "═" * W))
+    print()
+
+
 # ===========================================================================
 # GitHub Actions job summary
 # ===========================================================================

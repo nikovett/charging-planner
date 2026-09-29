@@ -141,7 +141,7 @@ def _easee_login() -> str:
     token = resp.get("accessToken", "")
     if not token:
         raise RuntimeError(f"Easee login failed — no accessToken in response: {resp}")
-    log.info("Easee login OK")
+    log.debug("Easee login OK")
 
     _token_cache["token"] = token
     return token
@@ -171,7 +171,7 @@ def _easee_put_basic_plan(
         body=payload,
         token=token,
     )
-    log.info(
+    log.debug(
         "Delivered basic plan: charger=%s  %s → %s",
         charger_id,
         start_utc.strftime("%Y-%m-%d %H:%M UTC"),
@@ -225,7 +225,7 @@ def _easee_put_weekly_plan(
         f"{s.strftime('%H:%M')}–{e.strftime('%H:%M')} UTC"
         for s, e in windows
     )
-    log.info("Delivered weekly plan: charger=%s  windows=%s", charger_id, windows_str)
+    log.debug("Delivered weekly plan: charger=%s  windows=%s", charger_id, windows_str)
 
 
 # ===========================================================================

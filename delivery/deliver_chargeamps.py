@@ -145,7 +145,7 @@ def _ca_login() -> tuple[str, str]:
     token = resp.get("token", "")
     if not token:
         raise RuntimeError(f"Charge Amps login failed — no token in response: {resp}")
-    log.info("Charge Amps login OK")
+    log.debug("Charge Amps login OK")
 
     claims = (resp.get("user") or {}).get("claims", [])
     org_id = ""
@@ -165,7 +165,7 @@ def _ca_login() -> tuple[str, str]:
     entitlements_token = ent_resp.get("token", "")
     if not entitlements_token:
         raise RuntimeError(f"No entitlements token in response: {ent_resp}")
-    log.info("Charge Amps entitlements token OK")
+    log.debug("Charge Amps entitlements token OK")
 
     _token_cache["token"]     = token
     _token_cache["ent_token"] = entitlements_token
@@ -228,7 +228,7 @@ def _ca_build_periods(
         if to > LIMIT:
             if fr >= LIMIT:
                 # Window falls entirely on Monday — preserve the offset within Monday
-                log.info(
+                log.debug(
                     "Window %s–%s falls on Monday — shifting offsets by -604800s.",
                     start_iso, end_iso,
                 )
@@ -237,7 +237,7 @@ def _ca_build_periods(
             else:
                 # Window crosses Sunday→Monday midnight — the Monday portion
                 # starts at 0 (Monday 00:00 on the charger).
-                log.info(
+                log.debug(
                     "Window %s–%s crosses Monday midnight — wrapping to Monday 00:00 "
                     "(from=0, to=%ds).",
                     start_iso, end_iso, to - LIMIT,
@@ -413,7 +413,7 @@ def _ca_put_schedule(
         f"{s}–{e}"
         for s, e in zip(plan["window_starts_utc"], plan["window_ends_utc"])
     )
-    log.info(
+    log.debug(
         "Delivered: charger=%s connector=%s  rate=%gA  windows=%s",
         charge_point_id, connector_id, max_charging_rate, windows_str,
     )
@@ -465,7 +465,7 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
         chargepoint   = _ca_get_chargepoint(charge_point_id, token, ent_token)
         original_mode = _ca_get_connector_mode(chargepoint, connector_id)
         was_charging  = _ca_is_connector_charging(chargepoint, connector_id)
-        log.info(
+        log.debug(
             "Connector state before delivery: charger=%s connector=%s  mode=%s  charging=%s",
             charge_point_id, connector_id, original_mode, was_charging,
         )

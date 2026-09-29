@@ -124,7 +124,7 @@ def _request(
 def _get_charging_profiles(vin: str, api_key: str) -> dict:
     """GET vehicle data including chargingProfiles and charging status."""
     path = f"/api/v1/vehicles/{vin}?include=chargingProfiles,charging"
-    log.info("MySkoda: fetching charging profiles for VIN %s", vin)
+    log.debug("MySkoda: fetching charging profiles for VIN %s", vin)
     return _request(path, api_key)
 
 
@@ -151,7 +151,7 @@ def _find_profile(vehicle_response: dict, profile_name: str | None) -> dict:
     if profile_name:
         for p in profiles:
             if p.get("name", "").lower() == profile_name.lower():
-                log.info(
+                log.debug(
                     "MySkoda: found profile '%s' (id=%s)", p.get("name"), p.get("id")
                 )
                 return p
@@ -165,7 +165,7 @@ def _find_profile(vehicle_response: dict, profile_name: str | None) -> dict:
     # otherwise require the user to set profile_name explicitly.
     if len(profiles) == 1:
         profile = profiles[0]
-        log.info(
+        log.debug(
             "MySkoda: one profile found, using '%s' (id=%s)",
             profile.get("name"), profile.get("id"),
         )
@@ -293,13 +293,13 @@ def _build_updated_profile(
             slot["enabled"]   = True
             slot["startTime"] = start_hhmm
             slot["endTime"]   = end_hhmm
-            log.info(
+            log.debug(
                 "MySkoda: slot %d (id=%s) set to %s-%s enabled=True",
                 i + 1, slot.get("id"), start_hhmm, end_hhmm,
             )
         else:
             if slot.get("enabled"):
-                log.info(
+                log.debug(
                     "MySkoda: slot %d (id=%s) disabled (was enabled)",
                     i + 1, slot.get("id"),
                 )
@@ -316,9 +316,9 @@ def _put_profile(vin: str, profile: dict, api_key: str) -> None:
     """
     profile_id = profile["id"]
     path = f"/api/v1/vehicles/{vin}/charging-profiles/{profile_id}"
-    log.info("MySkoda: PUT charging profile id=%s to VIN %s", profile_id, vin)
+    log.debug("MySkoda: PUT charging profile id=%s to VIN %s", profile_id, vin)
     _request(path, api_key, method="PUT", body=profile)
-    log.info("MySkoda: profile update accepted (202) - vehicle will apply asynchronously")
+    log.debug("MySkoda: profile update accepted (202) - vehicle will apply asynchronously")
 
 
 def _put_charge_mode(vin: str, api_key: str, mode: str) -> None:
@@ -331,9 +331,9 @@ def _put_charge_mode(vin: str, api_key: str, mode: str) -> None:
     Response is 202 Accepted (async).
     """
     path = f"/api/v1/vehicles/{vin}/charging/mode"
-    log.info("MySkoda: setting charge mode to %s", mode)
+    log.debug("MySkoda: setting charge mode to %s", mode)
     _request(path, api_key, method="PUT", body={"chargeMode": mode})
-    log.info("MySkoda: charge mode update accepted (202)")
+    log.debug("MySkoda: charge mode update accepted (202)")
 
 
 # ===========================================================================
@@ -428,7 +428,7 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
         for s, e in zip(windows_start, windows_end)
     ]
 
-    log.info(
+    log.debug(
         "MySkoda: delivering profile '%s' -> VIN %s  %d window(s): %s  (%s)  %d min",
         plan.get("profile"), vin, len(windows_hhmm),
         ", ".join(f"{s}-{e}" for s, e in windows_hhmm), tz_name, total_minutes,
@@ -442,7 +442,7 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
         .get("charging", {})
         .get("isVehicleInSavedLocation", False)
     )
-    log.info("MySkoda: vehicle at saved charging location: %s", is_at_location)
+    log.debug("MySkoda: vehicle at saved charging location: %s", is_at_location)
     if not is_at_location:
         log.warning(
             "MySkoda: vehicle is not at a saved charging location - preferred charging "
@@ -570,7 +570,7 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     else:
         log.info("MySkoda: skipping charge mode update (set_charge_mode: false)")
 
-    log.info(
+    log.debug(
         "Delivered: vin=%s windows=%s",
         vin, ", ".join(f"{s}-{e}" for s, e in windows_hhmm),
     )

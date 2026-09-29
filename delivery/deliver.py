@@ -270,8 +270,14 @@ def should_skip_redundant_delivery(
     profile_name: str,
     handler_name: str = "unknown",
     charge_point_id: str = "unknown",
-) -> bool:
+) -> Optional[str]:
     """Decide whether to skip delivery because it would be redundant or unsafe.
+
+    Returns the skip reason as a string, or None if delivery should proceed
+    — not a bare bool, so the caller (dispatch()) can show the same reason
+    on the delivery summary card without re-deriving or duplicating this
+    function's own wording. A non-empty string is truthy and None is falsy,
+    so existing assertTrue/assertFalse call sites are unaffected by this.
 
     handler_name and charge_point_id identify the specific delivery target
     for log messages only — the decision itself is driven entirely by plan
@@ -303,7 +309,7 @@ def should_skip_redundant_delivery(
          nothing has changed — skip. Different windows — deliver.
     """
     if prior is None:
-        return False
+        return None
 
     same_windows = (
         plan.get("window_starts_utc") == prior.get("window_starts_utc")
@@ -311,7 +317,7 @@ def should_skip_redundant_delivery(
     )
 
     if prior.get("schedule_uses_forecast") and not (plan.get("schedule_uses_forecast") and same_windows):
-        return False
+        return None
 
     new_cfg_start   = _parse_iso(plan.get("configured_window_start_utc"))
     new_gen_at      = _parse_iso(plan.get("generated_at"))
@@ -322,29 +328,55 @@ def should_skip_redundant_delivery(
             and new_cfg_start == prior_cfg_start
             and new_gen_at >= new_cfg_start
             and prior_gen_at < prior_cfg_start):
+        reason = ("a plan for this window was already delivered before it opened; "
+                  "this run is live and redelivering risks interrupting whatever "
+                  "that plan started")
         log.info(
-            "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — a "
-            "plan for this window was already delivered before it opened; "
-            "this run is live and redelivering risks interrupting whatever "
-            "that plan started.",
-            profile_name, handler_name, charge_point_id,
+            "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — %s.",
+            profile_name, handler_name, charge_point_id, reason,
         )
-        return True
+        return reason
 
     if same_windows:
+        reason = "unchanged from the already-delivered plan"
         log.info(
-            "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — "
-            "unchanged from the already-delivered plan.",
-            profile_name, handler_name, charge_point_id,
+            "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — %s.",
+            profile_name, handler_name, charge_point_id, reason,
         )
-        return True
+        return reason
 
-    return False
+    return None
 
 
 # ===========================================================================
 # Dispatch
 # ===========================================================================
+
+_HANDLER_DISPLAY_NAMES = {
+    "chargeamps": "Charge Amps",
+    "myskoda": "MySkoda",
+    "easee": "Easee",
+}
+
+
+class _LastErrorCapture(logging.Handler):
+    """Captures the last ERROR-level message logged anywhere during a
+    handler's deliver() call. Every handler's own failure branches already
+    log the reason via log.error right before returning bare False (none of
+    them raise for a normal, expected failure — see each handler's
+    "except Exception as exc: log.error(...); return False" pattern) — so
+    dispatch()'s own except-Exception block, which only fires for a truly
+    unexpected error escaping the handler entirely, never sees that reason.
+    Attached to the root logger for the duration of the call only, so it
+    catches records regardless of which handler module logged them, without
+    needing to know that module's logger name in advance."""
+
+    def __init__(self):
+        super().__init__(level=logging.ERROR)
+        self.last_message: Optional[str] = None
+
+    def emit(self, record):
+        self.last_message = record.getMessage()
 
 
 def dispatch(plans_by_profile: dict[str, dict], config: dict, data_dir: str = "data") -> bool:
@@ -357,6 +389,17 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict, data_dir: str = "d
     should_skip_redundant_delivery against the last successfully delivered
     plan for that (profile, handler, charger) — see that function's
     docstring for when a delivery is skipped rather than attempted.
+
+    Prints a delivery summary card (print_delivery_card) for every outcome —
+    delivered, skipped, or failed, including the two pre-attempt skip cases
+    below — mirroring how charging_planner.py's own print_plan_summary gives
+    a human-readable card alongside the structured log lines, not instead
+    of them. The old per-outcome "Delivery succeeded"/"Delivery failed"
+    terse log lines are gone: the card now carries that, and repeating it as
+    plain text right next to a card saying the same thing added nothing.
+    The pre-attempt "Delivering profile ... → handler ..." announcement
+    stays, since it's useful on its own for correlating timestamps in the
+    raw log before the outcome is known.
 
     Returns True only if every attempted delivery succeeded (a skip does not
     count as a failure).
@@ -372,6 +415,7 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict, data_dir: str = "d
 
     for profile_name, timezone, entry, charge_point_ids in deliveries:
         handler_name = entry["handler"]
+        handler_display = _HANDLER_DISPLAY_NAMES.get(handler_name, handler_name)
 
         plan = plans_by_profile.get(profile_name)
         if plan is None:
@@ -379,6 +423,8 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict, data_dir: str = "d
                 "No plan found for profile '%s' — skipping all deliveries for this profile.",
                 profile_name,
             )
+            cp.print_delivery_card(profile_name, handler_display, ", ".join(charge_point_ids),
+                                   "skipped", reason="no plan file found for this profile")
             all_ok = False
             continue
 
@@ -387,6 +433,8 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict, data_dir: str = "d
                 "Plan for profile '%s' has no windows — skipping delivery.",
                 profile_name,
             )
+            cp.print_delivery_card(profile_name, handler_display, ", ".join(charge_point_ids),
+                                   "skipped", reason="plan has no charging windows")
             all_ok = False
             continue
 
@@ -399,33 +447,38 @@ def dispatch(plans_by_profile: dict[str, dict], config: dict, data_dir: str = "d
             record_path = _delivered_record_path(data_dir, profile_name, handler_name, charge_point_id)
             prior = _load_delivered_record(record_path)
 
-            if should_skip_redundant_delivery(plan, prior, profile_name, handler_name, charge_point_id):
+            skip_reason = should_skip_redundant_delivery(plan, prior, profile_name, handler_name, charge_point_id)
+            if skip_reason:
+                cp.print_delivery_card(profile_name, handler_display, charge_point_id,
+                                       "skipped", reason=skip_reason)
                 continue
 
             log.info(
                 "Delivering profile '%s' → handler '%s'  charger '%s'  timezone '%s'",
                 profile_name, handler_name, charge_point_id, timezone,
             )
+            capture = _LastErrorCapture()
+            logging.getLogger().addHandler(capture)
             try:
                 ok = module.deliver(plan, charge_point_id, entry, timezone)
+                fail_reason = None if ok else capture.last_message
             except Exception as exc:
                 log.error(
                     "Handler '%s' raised an unexpected error for charger '%s': %s",
                     handler_name, charge_point_id, exc,
                 )
                 ok = False
+                fail_reason = str(exc)
+            finally:
+                logging.getLogger().removeHandler(capture)
 
             if not ok:
-                log.error(
-                    "Delivery failed: profile='%s'  handler='%s'  charger='%s'",
-                    profile_name, handler_name, charge_point_id,
-                )
+                cp.print_delivery_card(profile_name, handler_display, charge_point_id,
+                                       "failed", reason=fail_reason)
                 all_ok = False
             else:
-                log.info(
-                    "Delivery succeeded: profile='%s'  handler='%s'  charger='%s'",
-                    profile_name, handler_name, charge_point_id,
-                )
+                cp.print_delivery_card(profile_name, handler_display, charge_point_id,
+                                       "delivered", plan=plan)
                 _save_delivered_record(record_path, plan)
 
     return all_ok

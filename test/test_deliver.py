@@ -12,6 +12,7 @@ Run from the repo root:
 """
 
 import json
+import logging
 import sys
 import tempfile
 import unittest
@@ -106,6 +107,16 @@ class TestShouldSkipRedundantDelivery(unittest.TestCase):
         plan = make_plan(schedule_uses_forecast=True)  # same default windows as make_record
         self.assertTrue(should_skip_redundant_delivery(plan, prior, "overnight"))
 
+    def test_unchanged_plan_skip_reason_is_a_real_string(self):
+        # should_skip_redundant_delivery returns the reason itself now, not
+        # a bare bool, specifically so dispatch() can show it on the
+        # delivery card without re-deriving the same wording separately.
+        prior = make_record(schedule_uses_forecast=True)
+        plan = make_plan(schedule_uses_forecast=True)
+        reason = should_skip_redundant_delivery(plan, prior, "overnight")
+        self.assertIsInstance(reason, str)
+        self.assertIn("unchanged", reason)
+
     def test_prior_forecast_based_and_new_forecast_but_different_windows_delivers(self):
         # Two forecast-based runs, but the forecast itself moved between
         # them (different windows) — still a real correction, deliver.
@@ -129,6 +140,20 @@ class TestShouldSkipRedundantDelivery(unittest.TestCase):
             window_starts_utc=("2026-03-17T22:00:00+00:00",),  # clamped-to-now, differs from prior
         )
         self.assertTrue(should_skip_redundant_delivery(plan, prior, "overnight"))
+
+    def test_live_window_skip_reason_is_a_real_string(self):
+        prior = make_record(
+            generated_at="2026-03-17T14:00:00+00:00",
+            configured_window_start_utc="2026-03-17T19:00:00+00:00",
+        )
+        plan = make_plan(
+            generated_at="2026-03-17T22:00:00+00:00",
+            configured_window_start_utc="2026-03-17T19:00:00+00:00",
+            window_starts_utc=("2026-03-17T22:00:00+00:00",),
+        )
+        reason = should_skip_redundant_delivery(plan, prior, "overnight")
+        self.assertIsInstance(reason, str)
+        self.assertIn("already delivered before it opened", reason)
 
     def test_live_run_different_window_instance_does_not_skip(self):
         # The exact regression scenario from the design discussion: prior
@@ -494,6 +519,77 @@ class TestDispatchRedundantDelivery(unittest.TestCase):
             dispatch({"overnight": forecast_plan}, self.CONFIG, data_dir=tmp)
             self.assertEqual(handler.deliver.call_count, 1,
                              "identical forecast-based redelivery must be skipped")
+
+
+class TestDispatchErrorCapture(unittest.TestCase):
+    """dispatch()'s _LastErrorCapture attaches a real logging.Handler to the
+    root logger for the duration of each handler call — real, new
+    machinery with a real failure mode if the cleanup (`finally:
+    logging.getLogger().removeHandler(capture)`) were ever wrong: handlers
+    would accumulate across calls, or a later call could pick up a stale
+    message from an earlier one. Covers the behavior, not print_delivery_card
+    itself (see TestPrintDeliveryCard in test_charging_planner.py for that —
+    a pure display function, light content checks only)."""
+
+    CONFIG = {
+        "entsoe": {"timezone": "Europe/Helsinki"},
+        "charging": [{
+            "name": "overnight",
+            "deliveries": [{"handler": "myskoda", "charge_point_id": "SKODA_VIN"}],
+        }],
+    }
+
+    def _fake_handler_that_logs_and_fails(self, message):
+        module = mock.MagicMock()
+        def _deliver(*a, **kw):
+            logging.getLogger("deliver_myskoda").error(message)
+            return False
+        module.deliver = _deliver
+        return module
+
+    def test_bare_false_failure_reason_reaches_the_card(self):
+        # The gap this closes: every handler's own normal failure path logs
+        # via log.error then returns bare False, never raising — so
+        # dispatch()'s except-Exception block alone would never see the
+        # reason. Confirms the captured message actually reaches stdout via
+        # the card, not just that dispatch() still returns False correctly.
+        module = self._fake_handler_that_logs_and_fails("Charge Amps login failed: HTTP 401")
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict("os.environ", {"SKODA_VIN": "VIN123"}), \
+             mock.patch("deliver._load_handler", return_value=module):
+            out = self._capture_stdout(dispatch, {"overnight": make_plan()}, self.CONFIG, data_dir=tmp)
+        self.assertIn("Charge Amps login failed: HTTP 401", out)
+
+    def test_root_logger_has_no_leftover_capture_handler_after_dispatch(self):
+        # If removeHandler were ever skipped (e.g. moved out of a finally:),
+        # this would accumulate one extra handler on the root logger per
+        # delivery attempt across the life of a long-running process.
+        before = len(logging.getLogger().handlers)
+        module = self._fake_handler_that_logs_and_fails("some failure")
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict("os.environ", {"SKODA_VIN": "VIN123"}), \
+             mock.patch("deliver._load_handler", return_value=module):
+            dispatch({"overnight": make_plan()}, self.CONFIG, data_dir=tmp)
+        self.assertEqual(len(logging.getLogger().handlers), before)
+
+    def test_second_calls_reason_is_not_stale_from_first(self):
+        module1 = self._fake_handler_that_logs_and_fails("first failure")
+        module2_mock = mock.MagicMock()
+        module2_mock.deliver = mock.MagicMock(return_value=True)  # succeeds, logs nothing
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict("os.environ", {"SKODA_VIN": "VIN123"}), \
+             mock.patch("deliver._load_handler", side_effect=[module1, module2_mock]):
+            dispatch({"overnight": make_plan()}, self.CONFIG, data_dir=tmp)
+            out = self._capture_stdout(dispatch, {"overnight": make_plan()}, self.CONFIG, data_dir=tmp)
+        self.assertNotIn("first failure", out)
+
+    @staticmethod
+    def _capture_stdout(fn, *args, **kwargs) -> str:
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            fn(*args, **kwargs)
+        return buf.getvalue()
 
 
 if __name__ == "__main__":

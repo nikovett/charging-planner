@@ -1,6 +1,6 @@
 # Test Suite
 
-491 tests across five files. Run from the repo root:
+502 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,8 +9,8 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 347 tests, 3 skipped
-PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 31 tests
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 353 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 36 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 41 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (347 tests)
+## test_charging_planner.py (353 tests)
 
 #### Config
 
@@ -132,6 +132,9 @@ OCPP 1.6, 2.0.1, and 2.1 profile generation: schema validity, `validFrom`/`valid
 ### TestPrintPlanSummary (23)
 Console plan summary output: header fields, market price stats, charging window count and times, savings vs market (below/above/near), optional fields (retained minutes, plan warning, vs-optimal line), ANSI colour suppression and enabling.
 
+### TestPrintDeliveryCard (6)
+`print_delivery_card` — the delivery equivalent of `print_plan_summary`, reusing the same color helpers and `_window_bar` renderer. Light content-presence checks only, matching `TestPrintPlanSummary`'s own style: a pure display function can't affect what actually gets delivered, unlike the return-type and error-capture changes covered in `test_deliver.py`. Covers all three statuses (delivered with its window list, skipped and failed with their reason text) and confirms a delivered card without a plan omits the window section rather than crashing.
+
 ### TestWindowBar (8)
 `_window_bar` rendering: bar block length including minimum-2 floor, duration formatting for hours+minutes/exact hours/minutes-only, price label.
 
@@ -158,21 +161,24 @@ A normal run's log used to repeat the same handful of facts across four separate
 
 ---
 
-## test_deliver.py (31 tests)
+## test_deliver.py (36 tests)
 
 The dispatcher itself — primarily redundant-delivery protection (see CONTEXT.md "Redundant delivery protection" for the full rationale).
 
 ### TestDeliverModuleConfigLoading (4)
 Regression coverage for a real bug: `deliver.py` used to have its own, completely independent `load_config` — a bare `yaml.safe_load` never calling `charging_planner.translate_config` — so when `config.yaml` moved to the new `profiles:` format, the planner's own `load_config` translated correctly but `deliver.py`'s separate copy silently found zero delivery entries for every profile, no error, just "No delivery entries found." Confirms there's exactly one `load_config` in the codebase (`hasattr(deliver, "load_config")` is `False`; `deliver.cp.load_config is charging_planner.load_config`); confirms a new-format config loaded via `deliver.py`'s own imported `load_config` resolves delivery entries correctly. The critical one: `test_real_subprocess_finds_deliveries_with_new_format_config` actually runs `delivery/deliver.py` as a real subprocess (`python3 delivery/deliver.py ... --config ...`, matching both the GHA workflow and manual use) — every other test in this file calls into `deliver`'s functions directly within an already-imported process, which shares whatever module state already exists and would never have caught this; only a real subprocess exercises `deliver.py`'s own `sys.path`/import resolution independently. Mutation-checked: temporarily reintroducing the old duplicate `load_config` makes all four tests fail as expected.
 
-### TestShouldSkipRedundantDelivery (15)
-The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule yields to a real-price-based one or a differently-forecasted one, including when the new run is live mid-window (forecast-override beats live-window protection); two close-together forecast-based runs with byte-identical windows do *not* force a redundant redelivery just because the prior was an estimate — confirmed against real production data (a manual trigger before ENTSO-E's publish time, followed by a simulated second trigger moments later); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule) — also confirmed against real production data (a manual trigger fired 11 minutes into the window); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing; live-window protection is confirmed independent of plan completeness — a fully-satisfied, warning-free plan (no `plan_warning` key present at all) is still protected exactly like a partial one would be, since the function never inspects `required_minutes`/`total_minutes`/`plan_warning`. Plus two tests (using `assertLogs`, not just the return value) confirming the skip log actually names the specific `handler`/`charger` that was skipped, for both the rule-3 (live-window) and rule-4 (identical) skip messages — real production logs showed "Profile 'X': skipping delivery" with no handler/charger named at all, which the decision itself has always been scoped by but the log output didn't reflect.
+### TestShouldSkipRedundantDelivery (17)
+The full decision matrix for `should_skip_redundant_delivery`: no prior record delivers; a forecast-based prior schedule yields to a real-price-based one or a differently-forecasted one, including when the new run is live mid-window (forecast-override beats live-window protection); two close-together forecast-based runs with byte-identical windows do *not* force a redundant redelivery just because the prior was an estimate — confirmed against real production data (a manual trigger before ENTSO-E's publish time, followed by a simulated second trigger moments later); a live run whose target window matches a prior plan that predates that same window's start is blocked (protects an already-committed pre-window schedule) — also confirmed against real production data (a manual trigger fired 11 minutes into the window); the same protection does *not* apply across different window instances (the Monday-completed / Tuesday-live scenario — a stale, unrelated prior plan must never block a legitimate new delivery); a non-live run with a pre-window prior falls through to the plain diff instead; identical scheduled windows skip, different windows deliver (both start and end compared independently); a record missing the newer timestamp fields degrades gracefully to diff-only rather than crashing; live-window protection is confirmed independent of plan completeness — a fully-satisfied, warning-free plan (no `plan_warning` key present at all) is still protected exactly like a partial one would be, since the function never inspects `required_minutes`/`total_minutes`/`plan_warning`. Plus two tests (using `assertLogs`, not just the return value) confirming the skip log actually names the specific `handler`/`charger` that was skipped, for both the rule-3 (live-window) and rule-4 (identical) skip messages — real production logs showed "Profile 'X': skipping delivery" with no handler/charger named at all, which the decision itself has always been scoped by but the log output didn't reflect. Two more confirm the function now *returns* its reason as a string (not a bare bool) for rules 3 and 4 — the delivery card shows this directly rather than re-deriving the same wording at the call site.
 
 ### TestDeliveredRecordPersistence (7)
 The persisted record file: round-trip read/write, missing file returns `None`, corrupt JSON returns `None` (logged, not raised), the charge-point ID (a VIN or charger serial — directly identifying, and this file is committed to a typically-public `data/`) never appears in the filename, the hash is deterministic across calls with the same inputs, distinct chargers get distinct records, the data directory is created if it doesn't exist yet.
 
 ### TestDispatchRedundantDelivery (5)
 End-to-end through `dispatch()` with a mocked handler: a second identical run never calls the handler a second time; a changed plan does redeliver; a failed delivery leaves no record, so a retry is attempted normally rather than being mistaken for "already handled"; a forecast-based prior plan is superseded by a real-price-based one even with otherwise-matching windows; an identical forecast-based rerun (both before real prices publish) does not redeliver.
+
+### TestDispatchErrorCapture (3)
+`_LastErrorCapture` — a `logging.Handler` `dispatch()` attaches to the root logger for the duration of each handler call, since every handler's own normal failure path already logs the reason via `log.error` and returns bare `False` rather than raising, so `dispatch()`'s own `except Exception` block never sees it on its own. Confirms the captured message actually reaches the printed delivery card (not just that `dispatch()` still returns `False` correctly); confirms the root logger has no leftover handler after a call completes (the real failure mode if the `finally: removeHandler(...)` were ever dropped — handlers would accumulate one per delivery attempt across a long-running process); confirms a second call's reason isn't stale from a first call's failure. Mutation-checked: deleting the `finally:` cleanup makes the leftover-handler test fail as expected.
 
 ---
 

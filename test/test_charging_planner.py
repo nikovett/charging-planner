@@ -56,6 +56,7 @@ from charging_planner import (
     filter_preferred_window,
     merge_continuous_slots,
     parse_configs,
+    print_delivery_card,
     print_plan_summary,
     translate_config,
     select_charging_windows,
@@ -3697,6 +3698,66 @@ class TestPrintPlanSummary(unittest.TestCase):
         with mock.patch("charging_planner._USE_COLOR", True):
             out = self._out()
         self.assertIn("\033[", out)
+
+
+class TestPrintDeliveryCard(unittest.TestCase):
+    """print_delivery_card is a pure display function (mirrors
+    TestPrintPlanSummary's own light, content-presence style — no
+    mutation checks, since a rendering bug here can't affect what actually
+    gets delivered, unlike the return-type/error-capture changes covered
+    in test_deliver.py)."""
+
+    def setUp(self):
+        patcher = mock.patch("charging_planner._USE_COLOR", False)
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
+    PLAN = {
+        "windows": [{"start": "18:45", "end": "19:30", "duration_minutes": 45,
+                    "avg_price_cents_kwh": 3.2}],
+        "price_stats": {"min_cents_kwh": 1.5, "max_cents_kwh": 5.0},
+    }
+
+    def _out(self, **kw) -> str:
+        return _capture_stdout(print_delivery_card, **kw)
+
+    def test_delivered_shows_profile_handler_charger_status(self):
+        out = self._out(profile_name="topup", handler_display="Charge Amps",
+                        charge_point_id="CHG-1", status="delivered", plan=self.PLAN)
+        self.assertIn("topup", out)
+        self.assertIn("Charge Amps", out)
+        self.assertIn("CHG-1", out)
+        self.assertIn("Delivered", out)
+
+    def test_delivered_shows_window_list(self):
+        out = self._out(profile_name="topup", handler_display="Charge Amps",
+                        charge_point_id="CHG-1", status="delivered", plan=self.PLAN)
+        self.assertIn("18:45", out)
+        self.assertIn("19:30", out)
+
+    def test_delivered_without_plan_omits_window_section(self):
+        out = self._out(profile_name="topup", handler_display="Charge Amps",
+                        charge_point_id="CHG-1", status="delivered")
+        self.assertNotIn("Windows", out)
+
+    def test_skipped_shows_reason(self):
+        out = self._out(profile_name="overnight", handler_display="MySkoda",
+                        charge_point_id="VIN-1", status="skipped",
+                        reason="unchanged from the already-delivered plan")
+        self.assertIn("Skipped", out)
+        self.assertIn("unchanged from the already-delivered plan", out)
+
+    def test_failed_shows_reason(self):
+        out = self._out(profile_name="topup", handler_display="Easee",
+                        charge_point_id="EASEE-1", status="failed",
+                        reason="login failed: HTTP 401")
+        self.assertIn("Failed", out)
+        self.assertIn("login failed: HTTP 401", out)
+
+    def test_failed_without_reason_does_not_crash(self):
+        out = self._out(profile_name="topup", handler_display="Easee",
+                        charge_point_id="EASEE-1", status="failed")
+        self.assertIn("Failed", out)
 
 
 class TestWindowBar(unittest.TestCase):
