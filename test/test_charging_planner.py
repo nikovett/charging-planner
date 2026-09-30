@@ -3546,7 +3546,10 @@ class TestWriteConfigJson(unittest.TestCase):
 # ===========================================================================
 
 def _make_output_plan(*, windows=None, total_minutes=240, avg_price=0.62,
-                      retained=0, warning=None, avg_optimal=None) -> dict:
+                      retained=0, warning=None, avg_optimal=None,
+                      preferred_window_start="21:00", preferred_window_end="06:30",
+                      configured_window_start_utc="2026-03-14T19:00:00+00:00",
+                      configured_window_end_utc="2026-03-15T04:30:00+00:00") -> dict:
     """Minimal plan dict for print_plan_summary / GHA summary tests."""
     if windows is None:
         windows = [
@@ -3568,6 +3571,10 @@ def _make_output_plan(*, windows=None, total_minutes=240, avg_price=0.62,
         "total_minutes": total_minutes,
         "avg_price_cents_kwh": avg_price,
         "avg_optimal_price_cents_kwh": avg_optimal,
+        "preferred_window_start": preferred_window_start,
+        "preferred_window_end": preferred_window_end,
+        "configured_window_start_utc": configured_window_start_utc,
+        "configured_window_end_utc": configured_window_end_utc,
         "windows": windows,
         "retained_minutes": retained,
         "plan_warning": warning,
@@ -3603,8 +3610,34 @@ class TestPrintPlanSummary(unittest.TestCase):
     def test_header_contains_price_source(self):
         self.assertIn("ENTSO-E", self._out())
 
-    def test_header_contains_timezone(self):
-        self.assertIn("Europe/Helsinki", self._out())
+    def test_title_contains_profile_name(self):
+        self.assertIn("Charging Planner — test", self._out())
+
+    def test_window_row_shows_day_range_and_times(self):
+        # Timezone is deliberately no longer shown here -- the caller already
+        # logs it once at the very start of the run, and repeating it on
+        # every profile's card added nothing. Replaced with the day-range +
+        # preferred window, which used to only ever appear in the separate
+        # "targeting X window" decision log line.
+        out = self._out()
+        self.assertIn("sat-sun", out)
+        self.assertIn("21:00", out)
+        self.assertIn("06:30", out)
+        self.assertNotIn("Timezone", out)
+
+    def test_window_row_same_day_collapses_to_single_day(self):
+        out = self._out(configured_window_start_utc="2026-03-15T01:00:00+00:00",
+                        configured_window_end_utc="2026-03-15T05:00:00+00:00")
+        self.assertIn("sun ", out)
+        self.assertNotIn("sun-sun", out)
+
+    def test_window_row_falls_back_gracefully_without_configured_end(self):
+        # A plan.json written before configured_window_end_utc existed.
+        plan = _make_output_plan()
+        del plan["configured_window_end_utc"]
+        out = _capture_stdout(print_plan_summary, plan, [])
+        self.assertIn("21:00", out)
+        self.assertIn("06:30", out)
 
     def test_market_prices_line_shows_min_avg_max(self):
         out = self._out()
@@ -4281,6 +4314,9 @@ class TestLogVerbosity(unittest.TestCase):
         self.assertNotIn("slots inside", combined)
         self.assertNotIn("Selecting", combined)
         self.assertNotIn("min scheduled, avg", combined)
+        self.assertNotIn("=== Profile:", combined)
+        self.assertNotIn("targeting", combined)
+        self.assertNotIn("window coverage", combined)
 
     def test_demoted_lines_present_at_debug_level(self):
         with self.assertLogs("charging_planner", level="DEBUG") as cm:
@@ -4290,6 +4326,9 @@ class TestLogVerbosity(unittest.TestCase):
         self.assertIn("slots inside", combined)
         self.assertIn("Selecting", combined)
         self.assertIn("min scheduled, avg", combined)
+        self.assertIn("=== Profile:", combined)
+        self.assertIn("targeting", combined)
+        self.assertIn("window coverage", combined)
 
     def test_spillover_reported_at_info_level_when_it_happens(self):
         # A tiny window with plenty of candidate time available before it —

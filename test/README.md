@@ -1,6 +1,6 @@
 # Test Suite
 
-502 tests across five files. Run from the repo root:
+505 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 353 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 356 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 36 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (353 tests)
+## test_charging_planner.py (356 tests)
 
 #### Config
 
@@ -129,8 +129,8 @@ OCPP 1.6, 2.0.1, and 2.1 profile generation: schema validity, `validFrom`/`valid
 
 #### Display / reporting
 
-### TestPrintPlanSummary (23)
-Console plan summary output: header fields, market price stats, charging window count and times, savings vs market (below/above/near), optional fields (retained minutes, plan warning, vs-optimal line), ANSI colour suppression and enabling.
+### TestPrintPlanSummary (26)
+Console plan summary output: header fields, market price stats, charging window count and times, savings vs market (below/above/near), optional fields (retained minutes, plan warning, vs-optimal line), ANSI colour suppression and enabling. Header redesign, driven by a real production log showing several separate lines duplicating what the card could show instead: title now includes the profile name; the `Timezone` row (repeated once per profile in a run that already logs it exactly once, at the very top) is replaced by a `Window` row showing day-range/preferred-window/required-minutes, sourced from the plan's own `configured_window_start_utc`/`configured_window_end_utc` via the same `_day_range_label` helper the decision log uses. Covers the day-range showing correctly, a same-day window collapsing to a single day rather than the redundant `sun-sun`, and a graceful fallback (window/minutes shown, day-range omitted) for a `plan.json` written before `configured_window_end_utc` existed.
 
 ### TestPrintDeliveryCard (6)
 `print_delivery_card` — the delivery equivalent of `print_plan_summary`, reusing the same color helpers and `_window_bar` renderer. Light content-presence checks only, matching `TestPrintPlanSummary`'s own style: a pure display function can't affect what actually gets delivered, unlike the return-type and error-capture changes covered in `test_deliver.py`. Covers all three statuses (delivered with its window list, skipped and failed with their reason text) and confirms a delivered card without a plan omits the window section rather than crashing.
@@ -157,7 +157,7 @@ GHA step-summary per-profile section: profile name, required hours, window table
 Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable. Plus five delayed-run regression tests: a run firing mid-window still targets tonight's live window rather than skipping to the next night; with an artificially-cheap already-elapsed slot planted to tempt the DP, confirms it's never selected; a live window with too little time left to fit `required_hours` still uses 100% of what remains (never rolls to the next occurrence) and honestly reports the shortfall via `plan_warning`; the companion case — a live window with a comfortable 1h buffer over `required_hours` — produces a complete plan with no warning, confirming the shortfall handling above is specific to genuine insufficiency, not just running late; the same too-little-time scenario repeated with `max_windows: null` (the actual default) instead of `1` — the DP behind it used to return a completely empty plan in this situation rather than the same graceful partial result `max_windows: 1` already produced.
 
 ### TestLogVerbosity (4)
-A normal run's log used to repeat the same handful of facts across four separate `INFO` lines (the target window in UTC, then again in local time with candidate counts, the required-minutes figure re-derived as a multiplication, and the scheduled total/average price/window count) before `print_plan_summary` printed those same three numbers again in the pretty console block immediately after. All four demoted to `log.debug` — confirms they're genuinely absent from a normal (`INFO`-level) run and still present with `--debug` enabled, so nothing was deleted, just quieted. One exception: spillover (minutes scheduled outside the preferred window) isn't shown anywhere else, so it stays at `INFO`, split into its own line — confirms it's reported when spillover genuinely happens and silent when it doesn't. Mutation-checked: reintroducing one demoted line at `INFO` level makes the absence test fail as expected.
+A normal run's log used to repeat the same handful of facts across four separate `INFO` lines (the target window in UTC, then again in local time with candidate counts, the required-minutes figure re-derived as a multiplication, and the scheduled total/average price/window count) before `print_plan_summary` printed those same three numbers again in the pretty console block immediately after. All four demoted to `log.debug` — confirms they're genuinely absent from a normal (`INFO`-level) run and still present with `--debug` enabled, so nothing was deleted, just quieted. One exception: spillover (minutes scheduled outside the preferred window) isn't shown anywhere else, so it stays at `INFO`, split into its own line — confirms it's reported when spillover genuinely happens and silent when it doesn't. Mutation-checked: reintroducing one demoted line at `INFO` level makes the absence test fail as expected. The absent/present checks were later extended to three more lines demoted for the same reason once the plan summary card grew to actually carry what they used to say: the `=== Profile: X ===` banner (redundant with the card's own title), the decision log's own `targeting X window` line (now the card's `Window` row), and the window-coverage success line (the *warning* path for insufficient coverage is untouched, only the "coverage is fine" case moved).
 
 ---
 

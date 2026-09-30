@@ -2143,6 +2143,7 @@ class PlanParams:
     retained_minutes:       int             = 0     # future charging minutes carried over from previous plan
     plan_warning:           Optional[str]   = None  # human-readable reason when total_minutes < required_minutes
     window_start_utc:       Optional[datetime] = None  # configured (unclamped) window start — see _resolve_planning_horizon
+    window_end_utc:         Optional[datetime] = None  # configured (unclamped) window end — same source, needed to compute the day-range shown on the plan summary card
     generated_at:           Optional[datetime] = None  # when this plan was built
 
 
@@ -2165,6 +2166,7 @@ def build_plan(p: PlanParams) -> dict:
       "total_minutes": 240,
       "avg_price_cents_kwh": 1.84,
       "configured_window_start_utc": "2026-03-14T19:00:00+00:00",
+      "configured_window_end_utc": "2026-03-15T04:00:00+00:00",
       "schedule_uses_forecast": false,
       "windows": [
         { "start": "01:00", "end": "04:00",
@@ -2280,6 +2282,7 @@ def build_plan(p: PlanParams) -> dict:
         "preferred_window_start": p.preferred_window_start,
         "preferred_window_end":   p.preferred_window_end,
         "configured_window_start_utc": p.window_start_utc.isoformat() if p.window_start_utc else None,
+        "configured_window_end_utc": p.window_end_utc.isoformat() if p.window_end_utc else None,
         "schedule_uses_forecast": schedule_uses_forecast,
         "windows":                win_list,
         "window_starts_utc":      [w[0].isoformat() for w in p.windows],
@@ -2439,13 +2442,28 @@ def print_plan_summary(plan: dict, all_prices: list[Slot]) -> None:
 
     print()
     print(_bold("  " + "═" * W))
-    print(_bold("  Charging Planner"))
+    print(_bold(f"  Charging Planner — {plan['profile']}"))
     print(_bold("  " + "═" * W))
     print(f"  {_dim('Date')}      {_bold(plan['date'])}   "
           f"{_dim('Area')} {_bold(plan['area'])}   "
           f"{_dim('Source')} {plan['price_source']}")
-    tz_offset_str = f"(UTC{plan['utc_offset_hours']:+d})"
-    print(f"  {_dim('Timezone')}  {plan['timezone']} {_dim(tz_offset_str)}")
+
+    ws_iso = plan.get("configured_window_start_utc")
+    we_iso = plan.get("configured_window_end_utc")
+    if ws_iso and we_iso:
+        tz = ZoneInfo(plan["timezone"])
+        ws = datetime.fromisoformat(ws_iso)
+        we = datetime.fromisoformat(we_iso)
+        day_range = _day_range_label(ws, we, tz)
+        print(f"  {_dim('Window')}    {day_range}  "
+              f"{plan['preferred_window_start']}–{plan['preferred_window_end']} local, {req} min")
+    else:
+        # Only reachable for a plan.json written before this field existed —
+        # any/any windows have real start/end timestamps just like any
+        # other shape (confirmed earlier: an any/any window can itself span
+        # two days, e.g. "fri-sat") and take the day-range branch above.
+        print(f"  {_dim('Window')}    "
+              f"{plan['preferred_window_start']}–{plan['preferred_window_end']} local, {req} min")
     print()
 
     # Price summary bar
@@ -2753,7 +2771,7 @@ def _check_window_coverage(
         )
         return False
 
-    log.info("Profile '%s': window coverage %d/%d min (%.0f%%).",
+    log.debug("Profile '%s': window coverage %d/%d min (%.0f%%).",
              profile_name, covered_minutes, window_minutes, coverage * 100)
     return True
 
@@ -2858,6 +2876,21 @@ def _select_slots(
 # ===========================================================================
 
 _DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_DAY_ABBR_REV = {v: k for k, v in _DAY_ABBR.items()}
+
+
+def _day_range_label(ws: datetime, we: datetime, tz) -> str:
+    """Day-range notation ('thu-fri') mirroring config.yaml's own schedule:
+    day keys, computed from a window's actual resolved bounds rather than
+    an abstract target date, since those can differ (an overnight window
+    "for" Friday starts Thursday evening). Shared by the decision log
+    (_resolve_planning_horizon) and the plan summary card (print_plan_summary)
+    so the day-range shown in each always means the same thing, computed
+    the same way, rather than two independent implementations that could
+    quietly drift apart."""
+    start_day = _DAY_ABBR_REV[_DAY_NAMES[ws.astimezone(tz).weekday()]]
+    end_day = _DAY_ABBR_REV[_DAY_NAMES[we.astimezone(tz).weekday()]]
+    return start_day if start_day == end_day else f"{start_day}-{end_day}"
 
 
 def _resolve_schedule_window(cfg: "Config", target_date: "date") -> tuple[str, str, Optional[int]]:
@@ -3031,8 +3064,6 @@ def _resolve_planning_horizon(
                                 23, 0, tzinfo=timezone.utc) + timedelta(days=1)
     any_end_cap = min(last_price_utc, plan_horizon_utc)
 
-    _DAY_ABBR_REV = {v: k for k, v in _DAY_ABBR.items()}
-
     def _log_target(ws: datetime, we: datetime, start_str: str, end_str: str, req: Optional[int]) -> None:
         """Log the single winning candidate — the decision, not the candidates
         checked. Day-range notation ('thu-fri') mirrors config.yaml's own
@@ -3041,16 +3072,18 @@ def _resolve_planning_horizon(
         differ (an overnight window "for" Friday starts Thursday evening) —
         this keeps the logged date matching plan_date (ws's date), not the
         target weekday alone, which showed a different date than the plan
-        JSON's own "date" field before this."""
-        start_day = _DAY_ABBR_REV[_DAY_NAMES[ws.astimezone(tz).weekday()]]
-        end_day = _DAY_ABBR_REV[_DAY_NAMES[we.astimezone(tz).weekday()]]
-        day_range = start_day if start_day == end_day else f"{start_day}-{end_day}"
+        JSON's own "date" field before this. Logged at debug, not info: this
+        same day-range/window/required-minutes now shows on the plan
+        summary card's own Window row (print_plan_summary), sourced from
+        the same _day_range_label this function uses — an info-level line
+        here would just restate it a second time."""
+        day_range = _day_range_label(ws, we, tz)
         plan_date_str = ws.astimezone(tz).date().isoformat()
         if req is not None:
-            log.info("Profile '%s': targeting %s window (%s) — %s–%s local, %d min",
+            log.debug("Profile '%s': targeting %s window (%s) — %s–%s local, %d min",
                      cfg.name, day_range, plan_date_str, start_str, end_str, req)
         else:
-            log.info("Profile '%s': targeting %s window (%s) — %s–%s local",
+            log.debug("Profile '%s': targeting %s window (%s) — %s–%s local",
                      cfg.name, day_range, plan_date_str, start_str, end_str)
 
     has_schedule_or_any = (bool(cfg.schedule) or cfg.preferred_window_any
@@ -3119,7 +3152,7 @@ def _plan_one_profile(
     supplement_starts:      set  = None,
 ) -> dict:
     """Run selection and build a plan dict for a single profile."""
-    log.info("=== Profile: %s ===", cfg.name)
+    log.debug("=== Profile: %s ===", cfg.name)
 
     now_utc = datetime.now(tz=timezone.utc)
 
@@ -3236,6 +3269,7 @@ def _plan_one_profile(
         supplement_starts=supplement_starts,
         plan_warning=plan_warning,
         window_start_utc=win_start_utc,
+        window_end_utc=win_end_utc,
         generated_at=now_utc,
     ))
     plan["profile"] = cfg.name
