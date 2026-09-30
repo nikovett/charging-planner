@@ -204,7 +204,7 @@ class TestShouldSkipRedundantDelivery(unittest.TestCase):
         # output needs to say so too, not just the return value.
         prior = make_record()
         plan = make_plan()
-        with self.assertLogs("deliver", level="INFO") as cm:
+        with self.assertLogs("deliver", level="DEBUG") as cm:
             should_skip_redundant_delivery(plan, prior, "overnight", "myskoda", "VIN123")
         self.assertTrue(any("myskoda" in msg and "VIN123" in msg for msg in cm.output))
 
@@ -218,7 +218,7 @@ class TestShouldSkipRedundantDelivery(unittest.TestCase):
             configured_window_start_utc="2026-03-17T19:00:00+00:00",
             window_starts_utc=("2026-03-17T22:00:00+00:00",),
         )
-        with self.assertLogs("deliver", level="INFO") as cm:
+        with self.assertLogs("deliver", level="DEBUG") as cm:
             should_skip_redundant_delivery(plan, prior, "overnight", "chargeamps", "CHG-42")
         self.assertTrue(any("chargeamps" in msg and "CHG-42" in msg for msg in cm.output))
 

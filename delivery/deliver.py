@@ -283,9 +283,11 @@ def should_skip_redundant_delivery(
     for log messages only — the decision itself is driven entirely by plan
     and prior (which dispatch() already loaded from the record for this
     exact (profile, handler, charge_point_id) triple). Naming the specific
-    target in the log matters once a profile delivers to more than one
-    charger: without it, "skipping delivery" for profile 'X' is ambiguous
-    about which of X's chargers was actually skipped.
+    target matters once a profile delivers to more than one charger: without
+    it, "skipping delivery" for profile 'X' is ambiguous about which of X's
+    chargers was actually skipped. Logged at debug, not info — dispatch()
+    always prints a delivery card with this same reason immediately after,
+    so an info-level line here would just restate it a second time.
 
     Checked in order:
       1. No prior record — nothing to compare against, deliver.
@@ -331,7 +333,7 @@ def should_skip_redundant_delivery(
         reason = ("a plan for this window was already delivered before it opened; "
                   "this run is live and redelivering risks interrupting whatever "
                   "that plan started")
-        log.info(
+        log.debug(
             "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — %s.",
             profile_name, handler_name, charge_point_id, reason,
         )
@@ -339,7 +341,7 @@ def should_skip_redundant_delivery(
 
     if same_windows:
         reason = "unchanged from the already-delivered plan"
-        log.info(
+        log.debug(
             "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — %s.",
             profile_name, handler_name, charge_point_id, reason,
         )
