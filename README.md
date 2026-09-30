@@ -25,10 +25,10 @@ Fetches day-ahead electricity prices from the [ENTSO-E Transparency Platform](ht
 
 ```
   ══════════════════════════════════════════════════════════════════
-  Charging Planner
+  Charging Planner — overnight
   ══════════════════════════════════════════════════════════════════
   Date      2026-03-15   Area FI   Source ENTSO-E
-  Timezone  Europe/Helsinki (UTC+2)
+  Window    sat-sun  21:00–07:00 local, 240 min
 
   Market prices   0.47 min  1.64 avg  4.27 max  c€/kWh
 
@@ -191,7 +191,20 @@ To enable: go to **Settings → Pages**, select **Deploy from a branch**, choose
 
 `delivery/deliver.py` reads the `delivery:` block inside each charging profile and dispatches the plan to the right handler. Three are included out of the box — `chargeamps` (tested), `easee` (untested), `myskoda` (tested, delivers to the vehicle instead of a charger) — and adding a new one requires no changes to the planner or the dispatcher.
 
-See [`delivery/README.md`](delivery/README.md) for handler config keys, environment variables, and per-handler behaviour.
+```
+  ══════════════════════════════════════════════════════════════════
+  Delivery — overnight
+  ══════════════════════════════════════════════════════════════════
+  Handler   MySkoda
+  Charger   VIN...789
+  Status    ✓ Delivered
+
+  Windows (1):
+    03:00–07:00  ████████████████  0.62 c€/kWh  4h00m
+  ══════════════════════════════════════════════════════════════════
+```
+
+A skipped or failed delivery shows the same card with `Status` and `Reason` reflecting why — redundant-delivery protection, a handler-specific failure, or a plan with no windows to send. See [`delivery/README.md`](delivery/README.md) for handler config keys, environment variables, and per-handler behaviour.
 
 ---
 
