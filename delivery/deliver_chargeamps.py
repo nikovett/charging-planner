@@ -497,7 +497,7 @@ def deliver(plan: dict, charge_point_id: str, entry: dict, timezone: str) -> boo
                 )
                 # Schedule was delivered successfully — still return True
         else:
-            log.info(
+            log.debug(
                 "Mode already 'Schedule' for charger=%s connector=%s — no restore needed.",
                 charge_point_id, connector_id,
             )
