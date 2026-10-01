@@ -300,15 +300,20 @@ def should_skip_redundant_delivery(
          estimate confirmed again by a redundant trigger, and forcing a
          redelivery there would burn an API call for nothing (falls through
          to rule 4 instead, which will skip it as unchanged).
-      3. This run's window is live (already started) and the prior plan
-         predates that same window's start — the prior plan is an
-         already-committed pre-window schedule; redelivering here risks
-         interrupting whatever it already started. Only applies when both
-         plans target the *same* window instance (configured_window_start_utc
-         matches) — otherwise this would wrongly compare against an
-         unrelated, already-elapsed window from a previous cycle.
-      4. Otherwise, identical scheduled windows to the prior delivery means
-         nothing has changed — skip. Different windows — deliver.
+      3. Identical scheduled windows to the prior delivery means nothing
+         has changed — skip. Checked before the live-window rule so that
+         the reason shown is the accurate one: a late run that merely
+         re-derived the same plan is "unchanged", not a risk of
+         interruption.
+      4. This run's window is live (already started), its windows differ
+         from the prior delivery, and the prior plan predates that same
+         window's start — the prior plan is an already-committed
+         pre-window schedule; redelivering here risks interrupting
+         whatever it already started. Only applies when both plans target
+         the *same* window instance (configured_window_start_utc matches)
+         — otherwise this would wrongly compare against an unrelated,
+         already-elapsed window from a previous cycle.
+      5. Otherwise — different windows, not protected — deliver.
     """
     if prior is None:
         return None
@@ -321,6 +326,14 @@ def should_skip_redundant_delivery(
     if prior.get("schedule_uses_forecast") and not (plan.get("schedule_uses_forecast") and same_windows):
         return None
 
+    if same_windows:
+        reason = "unchanged from the already-delivered plan"
+        log.debug(
+            "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — %s.",
+            profile_name, handler_name, charge_point_id, reason,
+        )
+        return reason
+
     new_cfg_start   = _parse_iso(plan.get("configured_window_start_utc"))
     new_gen_at      = _parse_iso(plan.get("generated_at"))
     prior_cfg_start = _parse_iso(prior.get("configured_window_start_utc"))
@@ -330,17 +343,9 @@ def should_skip_redundant_delivery(
             and new_cfg_start == prior_cfg_start
             and new_gen_at >= new_cfg_start
             and prior_gen_at < prior_cfg_start):
-        reason = ("a plan for this window was already delivered before it opened; "
-                  "this run is live and redelivering risks interrupting whatever "
-                  "that plan started")
-        log.debug(
-            "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — %s.",
-            profile_name, handler_name, charge_point_id, reason,
-        )
-        return reason
-
-    if same_windows:
-        reason = "unchanged from the already-delivered plan"
+        reason = ("a plan for this window was already delivered before it opened "
+                  "and this run's windows differ from it; this run is live and "
+                  "redelivering risks interrupting whatever that plan started")
         log.debug(
             "Skipping delivery: profile='%s'  handler='%s'  charger='%s' — %s.",
             profile_name, handler_name, charge_point_id, reason,

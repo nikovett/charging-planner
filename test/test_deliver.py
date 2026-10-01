@@ -155,6 +155,38 @@ class TestShouldSkipRedundantDelivery(unittest.TestCase):
         self.assertIsInstance(reason, str)
         self.assertIn("already delivered before it opened", reason)
 
+    def test_live_run_identical_windows_reports_unchanged_not_interruption_risk(self):
+        # Regression (2026-09-30 production log): GHA fired the scheduled run
+        # ~5.5h late, after the window had opened. The live run re-derived
+        # exactly the same windows as the pre-window delivery (all slots
+        # were still ahead), but the card said redelivering "risks
+        # interrupting" a plan — misleading, since nothing differed. The
+        # skip is the same either way; the reason must be the accurate one.
+        prior = make_record(
+            generated_at="2026-03-17T14:00:00+00:00",
+            configured_window_start_utc="2026-03-17T19:00:00+00:00",
+        )
+        plan = make_plan(
+            generated_at="2026-03-17T19:02:00+00:00",   # live: after 19:00 window start
+            configured_window_start_utc="2026-03-17T19:00:00+00:00",
+        )
+        reason = should_skip_redundant_delivery(plan, prior, "overnight")
+        self.assertEqual(reason, "unchanged from the already-delivered plan")
+        self.assertNotIn("interrupt", reason)
+
+    def test_live_window_skip_reason_mentions_windows_differ(self):
+        prior = make_record(
+            generated_at="2026-03-17T14:00:00+00:00",
+            configured_window_start_utc="2026-03-17T19:00:00+00:00",
+        )
+        plan = make_plan(
+            generated_at="2026-03-17T22:00:00+00:00",
+            configured_window_start_utc="2026-03-17T19:00:00+00:00",
+            window_starts_utc=("2026-03-17T22:00:00+00:00",),
+        )
+        reason = should_skip_redundant_delivery(plan, prior, "overnight")
+        self.assertIn("windows differ", reason)
+
     def test_live_run_different_window_instance_does_not_skip(self):
         # The exact regression scenario from the design discussion: prior
         # plan is for MONDAY night, already delivered and completed. A
