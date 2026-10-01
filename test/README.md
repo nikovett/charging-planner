@@ -1,6 +1,6 @@
 # Test Suite
 
-507 tests across five files. Run from the repo root:
+509 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -13,7 +13,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 3
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 38 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
-PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 41 tests
+PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 43 tests
 ```
 
 `PYTHONPATH` is needed because the test modules import the planner and handlers directly by module name. The 3 skipped tests (`TestOcppChargingProfile`) validate the built OCPP charging profile against the real OCPP 1.6/2.0.1/2.1 JSON schemas — they skip gracefully (`self.skipTest`) when the local schema file isn't present in the environment, rather than failing or trying to fetch it over the network.
@@ -225,7 +225,7 @@ Single window → basic plan, multiple windows → weekly plan, empty plan retur
 
 ---
 
-## test_deliver_myskoda.py (41 tests)
+## test_deliver_myskoda.py (43 tests)
 
 ### TestTimeInWindow (8)
 `_time_in_window` — the core primitive for active-slot detection: same-day windows (inside/outside), start is inclusive, end is exclusive (matches charging stopping exactly at window end, not overrunning it), overnight wraparound (both sides of midnight), zero-length windows never match.
@@ -242,5 +242,5 @@ Direct tests for `_build_updated_profile` — the slot mapping: one window fills
 ### TestDeliverSlotMapping (2)
 End-to-end: three plan windows land in vehicle slots 1–3 with slot 4 left disabled; UTC window times are correctly converted to the vehicle's local timezone before being written.
 
-### TestDeliverChargingState (7)
-Charging-state safety logic, including active-slot detection: not charging → full delivery (slot update + mode change); charging in MANUAL/TIMER modes → slot update but no mode change (these modes don't use preferredChargingTimes slots at all, so nothing needs protecting); charging in PREFERRED_CHARGING_TIMES with a uniquely identifiable active slot → plan windows routed around it, that slot left completely untouched, other slots managed normally, no mode change; no time-window match → delivery skipped entirely; an ambiguous match (two enabled slots both overlap "now") → also skipped; active slot identified but the plan needs all 4 slots (no room to route around it) → skipped; charging in an unknown mode → delivery skipped entirely (still reports success, not failure — skipping is the correct outcome, not an error).
+### TestDeliverChargingState (9)
+Charging-state safety logic, including active-slot detection: not charging → full delivery (slot update + mode change); charging in MANUAL/TIMER modes → slot update but no mode change (these modes don't use preferredChargingTimes slots at all, so nothing needs protecting); charging in PREFERRED_CHARGING_TIMES with a uniquely identifiable active slot → plan windows routed around it, that slot left completely untouched, other slots managed normally, no mode change; no time-window match → delivery skipped entirely; an ambiguous match (two enabled slots both overlap "now") → also skipped; active slot identified but the plan needs all 4 slots (no room to route around it) → skipped; charging in an unknown mode → delivery skipped entirely (still reports success, not failure — skipping is the correct outcome, not an error). Also covers the away-from-saved-location warning: it must state that times are applied while the charge mode cannot change (empirically observed), never claim the times may be ignored, and must not appear at all when the vehicle is at a saved location.

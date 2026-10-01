@@ -26,8 +26,11 @@ null/unlimited) to guarantee this holds; the handler also checks the actual
 window count of each plan as a defensive runtime check.
 
 Tested against a real Škoda Enyaq on 2026-09-14. First delivery confirmed
-correct in the MyŠkoda app. Vehicle was away from home at time of delivery
-— at-home charging behaviour to be observed on subsequent runs.
+correct in the MyŠkoda app. Observed since: when the vehicle is away from a
+saved charging location, preferred charging times are applied normally, but a
+charge mode change is accepted by the API (202) and then ignored by the
+vehicle. A delivery while away therefore only takes effect if the vehicle is
+already in PREFERRED_CHARGING_TIMES mode.
 
 Invoked by delivery/deliver.py when handler: myskoda is set inside a charging
 profile's delivery entry in config.yaml.
@@ -446,9 +449,8 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     if not is_at_location:
         log.warning(
             "MySkoda: vehicle is not at a saved charging location - preferred charging "
-            "times and charge mode may not take effect until the vehicle arrives at the "
-            "saved location. The API accepts the update (202) but the vehicle may ignore "
-            "or revert it when away from home."
+            "times updated normally, but the charge mode cannot be changed (the API "
+            "accepts the request (202) but the vehicle ignores it)"
         )
 
     # Step 2: Find target profile

@@ -14,6 +14,7 @@ Run from the repo root:
 
 import copy
 import sys
+import logging
 import unittest
 import unittest.mock as mock
 from datetime import datetime
@@ -427,6 +428,39 @@ class TestDeliverChargingState(unittest.TestCase):
         self.assertTrue(result)
         mock_put.assert_called_once()
         mock_mode.assert_called_once()
+
+    def _run_logged(self, is_at_location):
+        plan = make_plan(["2026-09-15T21:00:00Z"], ["2026-09-15T23:00:00Z"],
+                         max_windows=1)
+        vresp = make_vehicle_response(is_at_location=is_at_location, charging_state="READY")
+        with mock.patch.dict("os.environ", {"SKODA_API_KEY": "key"}), \
+             mock.patch("deliver_myskoda._get_charging_profiles", return_value=vresp), \
+             mock.patch("deliver_myskoda._put_profile") as mock_put, \
+             mock.patch("deliver_myskoda._put_charge_mode"), \
+             self.assertLogs("deliver_myskoda", level="WARNING") as cm:
+            # assertLogs needs at least one record; a sentinel keeps the
+            # at-home case (no warning expected) assertable without failing.
+            logging.getLogger("deliver_myskoda").warning("__sentinel__")
+            result = deliver(plan, "VIN123", make_entry(), "Europe/Helsinki")
+        return result, mock_put, [m for m in cm.output if "__sentinel__" not in m]
+
+    def test_away_from_saved_location_warns_times_applied_mode_ignored(self):
+        # Empirical behaviour (observed on a real vehicle): away from a saved
+        # location, preferred times ARE applied, only the charge mode change
+        # is ignored. The warning must say that, not claim the times may
+        # also be ignored.
+        result, mock_put, warnings = self._run_logged(is_at_location=False)
+        self.assertTrue(result)
+        mock_put.assert_called_once()          # times still delivered
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("times updated normally", warnings[0])
+        self.assertIn("charge mode cannot be changed", warnings[0])
+        self.assertNotIn("may not take effect", warnings[0])
+
+    def test_at_saved_location_does_not_warn(self):
+        result, mock_put, warnings = self._run_logged(is_at_location=True)
+        self.assertTrue(result)
+        self.assertEqual(warnings, [])
 
     def test_charging_in_manual_mode_updates_slot_but_not_mode(self):
         result, mock_put, mock_mode = self._run("CHARGING", "MANUAL")
