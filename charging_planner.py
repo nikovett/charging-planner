@@ -2579,7 +2579,6 @@ def print_delivery_card(profile_name: str, handler_display: str, charge_point_id
                               min_c, max_c))
 
     print(_bold("  " + "═" * W))
-    print()
 
 
 # ===========================================================================
@@ -3290,7 +3289,7 @@ def _plan_one_profile(
     print_plan_summary(plan, future_prices)
     output_path = os.path.join(output_dir, f"plan-{cfg.name}.json")
     save_plan(plan, output_path)
-    print(f"  Plan saved to: {output_path}\n")
+    print(f"  Plan saved to: {output_path}")
     return plan
 
 
