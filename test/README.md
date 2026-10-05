@@ -1,6 +1,6 @@
 # Test Suite
 
-509 tests across five files. Run from the repo root:
+514 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 356 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 361 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 38 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (356 tests)
+## test_charging_planner.py (361 tests)
 
 #### Config
 
@@ -45,8 +45,11 @@ Profile merging over `CHARGING_DEFAULTS`, schedule parsing, multi-profile config
 
 #### Price acquisition
 
-### TestXmlParsing (10)
-ENTSO-E XML parsing: slot count, 15-min duration, sort order, ordinal sequencing, no duplicate starts, forward-fill between explicit points, resolution detection.
+### TestXmlParsing (11)
+ENTSO-E XML parsing: slot count, 15-min duration, sort order, ordinal sequencing, no duplicate starts, forward-fill between explicit points, forward-fill of omitted trailing points to the end of the period (ENTSO-E A03 regression, 2026-10-05), resolution detection.
+
+### TestEntsoeTrailingOmittedPoints (4)
+Real ENTSO-E response captured 2026-10-05 (`test/fixtures/entsoe_2026-10-05.xml`, loaded from disk): A03 curves omit repeated prices including at the end of a period. Checks all three delivery days come out complete (288 slots), no gaps, the omitted trailing hour holds the last listed price, and the 18:00–03:30 UTC window is fully covered with no coverage warning.
 
 ### TestRealEntsoEData (12)
 Integration tests against a bundled ENTSO-E XML fixture: prices in plausible range, known peak price, `min_slot_minutes` respected, overnight windows stay within window, real-world slot selection.

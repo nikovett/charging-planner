@@ -1022,6 +1022,19 @@ class TestXmlParsing(unittest.TestCase):
         for s in first_four:
             self.assertAlmostEqual(s.price_eur_kwh, 0.003)  # 3.00 EUR/MWh = 0.003 €/kWh
 
+    def test_trailing_omitted_points_filled_to_period_end(self):
+        # Regression (2026-10-05 production run): ENTSO-E omits points whose
+        # price equals the previous one, including at the end of the period.
+        # MINIMAL_XML's last point is position 9 of a 24h/15min period (96
+        # positions); positions 10..96 are implicitly position 9's price and
+        # must be present, otherwise the day's final hours go missing.
+        slots = _parse_entsoe_xml(MINIMAL_XML, date(2026, 3, 15), "FI")
+        self.assertEqual(len(slots), 96)
+        self.assertAlmostEqual(slots[-1].price_eur_kwh, 0.0035)   # position 9 = 3.50
+        self.assertEqual(slots[-1].end, datetime(2026, 3, 15, 23, 0, tzinfo=timezone.utc))
+        for a, b in zip(slots, slots[1:]):
+            self.assertEqual(b.start, a.end)                      # no gaps
+
     def test_price_at_position_5_updated(self):
         slots = _parse_entsoe_xml(MINIMAL_XML, date(2026, 3, 15), "FI")
         # Position 5 = 1.50 EUR/MWh = 0.0015 €/kWh
@@ -1058,6 +1071,53 @@ class TestXmlParsing(unittest.TestCase):
         slots = _parse_entsoe_xml(MINIMAL_XML, date(2026, 3, 15), "FI")
         for i, s in enumerate(slots):
             self.assertEqual(s.slot, i)
+
+
+class TestEntsoeTrailingOmittedPoints(unittest.TestCase):
+    """Real ENTSO-E response captured 2026-10-05 (test/fixtures/entsoe_2026-10-05.xml).
+
+    ENTSO-E's variable-block curve (A03) omits points whose price equals the
+    previous one — including at the end of a period, where the last listed
+    price holds to the period end. In this response the Oct 5 period lists
+    positions only up to 92 of 96 and the Oct 6 period up to 93 of 96. Before
+    the fix the parser dropped those trailing slots (281 of 288), leaving a
+    60-minute hole inside the 18:00-03:30 UTC window and tripping the
+    coverage check (510/570 min) with a misleading "prices not yet
+    published" warning.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "fixtures", "entsoe_2026-10-05.xml")
+        with open(path, encoding="utf-8") as f:
+            cls.slots = _parse_entsoe_xml(f.read(), date(2026, 10, 5), "FI")
+
+    def test_all_three_delivery_days_complete(self):
+        self.assertEqual(len(self.slots), 288)          # 3 days x 96 slots
+        self.assertEqual(self.slots[-1].end,
+                         datetime(2026, 10, 6, 22, 0, tzinfo=timezone.utc))
+
+    def test_no_gaps_between_slots(self):
+        for a, b in zip(self.slots, self.slots[1:]):
+            self.assertEqual(b.start, a.end)
+
+    def test_omitted_trailing_hour_holds_last_listed_price(self):
+        last_listed = next(s for s in self.slots
+                           if s.start == datetime(2026, 10, 5, 20, 45, tzinfo=timezone.utc))
+        for s in self.slots:
+            if datetime(2026, 10, 5, 21, 0, tzinfo=timezone.utc) <= s.start \
+                    < datetime(2026, 10, 5, 22, 0, tzinfo=timezone.utc):
+                self.assertAlmostEqual(s.price_eur_kwh, last_listed.price_eur_kwh)
+
+    def test_overnight_window_fully_covered_no_warning(self):
+        from charging_planner import _check_window_coverage
+        ws = datetime(2026, 10, 5, 18, 0, tzinfo=timezone.utc)
+        we = datetime(2026, 10, 6, 3, 30, tzinfo=timezone.utc)
+        inside = [s for s in self.slots if ws <= s.start < we]
+        self.assertEqual(sum(s.duration_minutes for s in inside), 570)
+        with self.assertNoLogs("charging_planner", level="WARNING"):
+            self.assertTrue(_check_window_coverage(inside, ws, we, "overnight"))
 
 
 class TestRealEntsoEData(unittest.TestCase):

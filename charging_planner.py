@@ -1365,10 +1365,24 @@ def _xml_interpolate_slots(
     period_end_utc,
     slot_minutes: int,
 ) -> list[Slot]:
-    """Expand sparse {position: price} dict into a full Slot list via forward-fill."""
+    """Expand sparse {position: price} dict into a full Slot list via forward-fill.
+
+    ENTSO-E's variable-block curve (A03) omits any point whose price equals the
+    previous one, and that applies to the *tail* of the period too: the last
+    listed point's price holds until the period's end. So the fill must run to
+    the end of the period, not just to the last listed position — otherwise a
+    day whose final hours repeat the same price silently loses those slots
+    (seen 2026-10-05: the last hour of the delivery day was missing, which
+    tripped the window-coverage check with 0 forecast slots to fill the gap).
+    """
     slots      = []
     last_price = explicit[min(explicit.keys())]
-    for pos in range(1, max(explicit.keys()) + 1):
+    last_pos   = max(explicit.keys())
+    if period_end_utc is not None:
+        period_positions = int((period_end_utc - period_start_utc).total_seconds()
+                               // 60 // slot_minutes)
+        last_pos = max(last_pos, period_positions)
+    for pos in range(1, last_pos + 1):
         if pos in explicit:
             last_price = explicit[pos]
         slot_start = period_start_utc + timedelta(minutes=slot_minutes * (pos - 1))
