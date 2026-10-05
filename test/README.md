@@ -1,6 +1,6 @@
 # Test Suite
 
-514 tests across five files. Run from the repo root:
+519 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 361 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 366 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 38 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (361 tests)
+## test_charging_planner.py (366 tests)
 
 #### Config
 
@@ -47,6 +47,9 @@ Profile merging over `CHARGING_DEFAULTS`, schedule parsing, multi-profile config
 
 ### TestXmlParsing (11)
 ENTSO-E XML parsing: slot count, 15-min duration, sort order, ordinal sequencing, no duplicate starts, forward-fill between explicit points, forward-fill of omitted trailing points to the end of the period (ENTSO-E A03 regression, 2026-10-05), resolution detection.
+
+### TestHttpRetry (5)
+`_http_request_with_retry` retries transient failures (408/429/500/502/503/504/522/524/599 — the last from the 2026-10-05 ENTSO-E gateway timeout that was previously attempted only once), exhausts all attempts on a persistent failure, does not retry client errors (400/401/403), and retries 404 when a caller opts in (ENTSO-E: prices not yet published).
 
 ### TestEntsoeTrailingOmittedPoints (4)
 Real ENTSO-E response captured 2026-10-05 (`test/fixtures/entsoe_2026-10-05.xml`, loaded from disk): A03 curves omit repeated prices including at the end of a period. Checks all three delivery days come out complete (288 slots), no gaps, the omitted trailing hour holds the last listed price, and the 18:00–03:30 UTC window is fully covered with no coverage warning.

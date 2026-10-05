@@ -334,6 +334,14 @@ def _deep_merge(base: dict, override: dict) -> None:
 # HTTP retry helper
 # ===========================================================================
 
+# Status codes that mean "the server or a gateway in front of it had a
+# transient problem" — worth retrying. 599 is not a standard code but is what
+# ENTSO-E's gateway (uu-gateway-router) returns for backend connect timeouts
+# (seen 2026-10-05: one attempt, no retry, fell through to the next source).
+# Anything else (401, 403, 400, ...) is a real client-side error: retrying
+# only delays the failure.
+TRANSIENT_HTTP_CODES = frozenset({408, 429, 500, 502, 503, 504, 522, 524, 599})
+
 def _http_request_with_retry(
     req: urllib.request.Request,
     timeout: int = 20,
@@ -343,7 +351,7 @@ def _http_request_with_retry(
     retry_codes: set = None,
 ) -> str:
     if retry_codes is None:
-        retry_codes = {500, 502, 503, 504}
+        retry_codes = TRANSIENT_HTTP_CODES
     last_exc: Exception = RuntimeError("No attempts made")
     for attempt in range(1, retries + 1):
         try:
@@ -735,17 +743,17 @@ def fetch_entsoe_prices(
     req = urllib.request.Request(url, headers={"Accept": "application/xml"})
     try:
         raw = _http_request_with_retry(req, timeout=30, retries=5, backoff=5.0, label="ENTSO-E",
-                                       retry_codes={404, 500, 502, 503, 504})
+                                       retry_codes=TRANSIENT_HTTP_CODES | {404})
     except urllib.error.HTTPError as e:
         if e.code == 404:
             raise PriceDataUnavailable(
                 f"ENTSO-E returned 404 after retries — tomorrow's prices may not be "
                 f"published yet (ENTSO-E publishes at ~12:00 UTC)."
             )
-        log.error("ENTSO-E request failed after retries: %s", e)
+        log.error("ENTSO-E request failed: %s", e)
         raise
     except Exception as e:
-        log.error("ENTSO-E request failed after retries: %s", e)
+        log.error("ENTSO-E request failed: %s", e)
         raise
     all_slots = _parse_entsoe_xml(raw, today, area)
 

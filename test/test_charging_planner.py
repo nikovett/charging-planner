@@ -1073,6 +1073,72 @@ class TestXmlParsing(unittest.TestCase):
             self.assertEqual(s.slot, i)
 
 
+class TestHttpRetry(unittest.TestCase):
+    """_http_request_with_retry retries transient failures, not client errors.
+
+    Regression (2026-10-05): ENTSO-E's gateway returned HTTP 599
+    (connectTimeout) and, because 599 was not a retry code, the request was
+    attempted once and the planner fell through to the next price source
+    (the log still claimed "failed after retries").
+    """
+
+    @staticmethod
+    def _http_error(code):
+        import urllib.error
+        return urllib.error.HTTPError("https://x", code, "err", {}, io.BytesIO(b"body"))
+
+    @staticmethod
+    def _ok():
+        resp = mock.MagicMock()
+        resp.read.return_value = b"payload"
+        resp.__enter__.return_value = resp
+        return resp
+
+    def _run(self, side_effect, **kw):
+        import urllib.request
+        from charging_planner import _http_request_with_retry
+        req = urllib.request.Request("https://x")
+        with mock.patch("charging_planner.urllib.request.urlopen",
+                        side_effect=side_effect) as urlopen, \
+             mock.patch("charging_planner.time_module.sleep"):
+            try:
+                result = _http_request_with_retry(req, retries=3, backoff=2.0, **kw)
+            except Exception as exc:
+                result = exc
+        return result, urlopen.call_count
+
+    def test_http_599_is_retried_then_succeeds(self):
+        result, calls = self._run([self._http_error(599), self._ok()])
+        self.assertEqual(result, "payload")
+        self.assertEqual(calls, 2)
+
+    def test_all_transient_codes_retry(self):
+        from charging_planner import TRANSIENT_HTTP_CODES
+        for code in (408, 429, 500, 502, 503, 504, 522, 524, 599):
+            self.assertIn(code, TRANSIENT_HTTP_CODES)
+            result, calls = self._run([self._http_error(code), self._ok()])
+            self.assertEqual(result, "payload", code)
+            self.assertEqual(calls, 2, code)
+
+    def test_persistent_599_exhausts_all_attempts(self):
+        result, calls = self._run([self._http_error(599)] * 3)
+        self.assertIsInstance(result, Exception)
+        self.assertEqual(calls, 3)
+
+    def test_client_errors_are_not_retried(self):
+        for code in (400, 401, 403):
+            result, calls = self._run([self._http_error(code)] * 3)
+            self.assertIsInstance(result, Exception)
+            self.assertEqual(calls, 1, code)
+
+    def test_entsoe_also_retries_404_unpublished(self):
+        from charging_planner import TRANSIENT_HTTP_CODES
+        result, calls = self._run([self._http_error(404), self._ok()],
+                                  retry_codes=TRANSIENT_HTTP_CODES | {404})
+        self.assertEqual(result, "payload")
+        self.assertEqual(calls, 2)
+
+
 class TestEntsoeTrailingOmittedPoints(unittest.TestCase):
     """Real ENTSO-E response captured 2026-10-05 (test/fixtures/entsoe_2026-10-05.xml).
 
