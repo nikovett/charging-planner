@@ -4,37 +4,25 @@
   "area": "FI",
   "price_source": "ENTSO-E",
   "timezone": "Europe/Helsinki",
-  "generated_at": "2026-10-10T13:00:40.548429+00:00",
+  "generated_at": "2026-10-10T17:24:11.935138+00:00",
   "utc_offset_hours": 3,
   "price_stats": {
     "min_cents_kwh": 2.543,
     "max_cents_kwh": 8.401,
-    "avg_cents_kwh": 4.0589
+    "avg_cents_kwh": 4.0859
   },
   "required_minutes": 270,
   "retained_minutes": 0,
   "max_windows": null,
   "total_minutes": 270,
-  "avg_price_cents_kwh": 2.8947,
-  "avg_optimal_price_cents_kwh": 2.8947,
+  "avg_price_cents_kwh": 2.9414,
+  "avg_optimal_price_cents_kwh": 2.9414,
   "preferred_window_start": "any",
   "preferred_window_end": "any",
-  "configured_window_start_utc": "2026-10-10T13:00:40.548429+00:00",
+  "configured_window_start_utc": "2026-10-10T17:24:11.935138+00:00",
   "configured_window_end_utc": "2026-10-11T22:00:00+00:00",
   "schedule_uses_forecast": false,
   "windows": [
-    {
-      "start": "16:15",
-      "end": "16:45",
-      "duration_minutes": 30,
-      "avg_price_cents_kwh": 2.9405
-    },
-    {
-      "start": "17:00",
-      "end": "17:30",
-      "duration_minutes": 30,
-      "avg_price_cents_kwh": 2.9785
-    },
     {
       "start": "20:30",
       "end": "21:00",
@@ -43,9 +31,9 @@
     },
     {
       "start": "21:30",
-      "end": "22:00",
-      "duration_minutes": 30,
-      "avg_price_cents_kwh": 3.0055
+      "end": "22:15",
+      "duration_minutes": 45,
+      "avg_price_cents_kwh": 3.062
     },
     {
       "start": "22:30",
@@ -54,10 +42,16 @@
       "avg_price_cents_kwh": 2.9725
     },
     {
-      "start": "23:30",
+      "start": "23:15",
       "end": "01:00",
-      "duration_minutes": 90,
-      "avg_price_cents_kwh": 2.7865
+      "duration_minutes": 105,
+      "avg_price_cents_kwh": 2.8454
+    },
+    {
+      "start": "21:45",
+      "end": "22:15",
+      "duration_minutes": 30,
+      "avg_price_cents_kwh": 3.1525
     },
     {
       "start": "00:30",
@@ -67,21 +61,19 @@
     }
   ],
   "window_starts_utc": [
-    "2026-10-10T13:15:00+00:00",
-    "2026-10-10T14:00:00+00:00",
     "2026-10-10T17:30:00+00:00",
     "2026-10-10T18:30:00+00:00",
     "2026-10-10T19:30:00+00:00",
-    "2026-10-10T20:30:00+00:00",
+    "2026-10-10T20:15:00+00:00",
+    "2026-10-11T18:45:00+00:00",
     "2026-10-11T21:30:00+00:00"
   ],
   "window_ends_utc": [
-    "2026-10-10T13:45:00+00:00",
-    "2026-10-10T14:30:00+00:00",
     "2026-10-10T18:00:00+00:00",
-    "2026-10-10T19:00:00+00:00",
+    "2026-10-10T19:15:00+00:00",
     "2026-10-10T20:00:00+00:00",
     "2026-10-10T22:00:00+00:00",
+    "2026-10-11T19:15:00+00:00",
     "2026-10-11T22:00:00+00:00"
   ],
   "price_slots": [
@@ -1030,14 +1022,14 @@
     {
       "start_utc": "2026-10-10T13:15:00+00:00",
       "price_cents_kwh": 2.681,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-10-10T13:30:00+00:00",
       "price_cents_kwh": 3.2,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-10-10T13:45:00+00:00",
@@ -1048,14 +1040,14 @@
     {
       "start_utc": "2026-10-10T14:00:00+00:00",
       "price_cents_kwh": 2.68,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-10-10T14:15:00+00:00",
       "price_cents_kwh": 3.277,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-10-10T14:30:00+00:00",
@@ -1168,8 +1160,8 @@
     {
       "start_utc": "2026-10-10T19:00:00+00:00",
       "price_cents_kwh": 3.175,
-      "charging": false,
-      "optimal": false
+      "charging": true,
+      "optimal": true
     },
     {
       "start_utc": "2026-10-10T19:15:00+00:00",
@@ -1198,8 +1190,8 @@
     {
       "start_utc": "2026-10-10T20:15:00+00:00",
       "price_cents_kwh": 3.199,
-      "charging": false,
-      "optimal": false
+      "charging": true,
+      "optimal": true
     },
     {
       "start_utc": "2026-10-10T20:30:00+00:00",
@@ -1738,14 +1730,14 @@
     {
       "start_utc": "2026-10-11T18:45:00+00:00",
       "price_cents_kwh": 3.306,
-      "charging": false,
-      "optimal": false
+      "charging": true,
+      "optimal": true
     },
     {
       "start_utc": "2026-10-11T19:00:00+00:00",
       "price_cents_kwh": 2.999,
-      "charging": false,
-      "optimal": false
+      "charging": true,
+      "optimal": true
     },
     {
       "start_utc": "2026-10-11T19:15:00+00:00",
@@ -2492,11 +2484,11 @@
     "stackLevel": 0,
     "chargingProfilePurpose": "TxDefaultProfile",
     "chargingProfileKind": "Absolute",
-    "validFrom": "2026-10-10T13:15:00+00:00",
+    "validFrom": "2026-10-10T17:30:00+00:00",
     "validTo": "2026-10-11T22:00:00+00:00",
     "chargingSchedule": {
-      "startSchedule": "2026-10-10T13:15:00+00:00",
-      "duration": 117900,
+      "startSchedule": "2026-10-10T17:30:00+00:00",
+      "duration": 102600,
       "chargingRateUnit": "W",
       "chargingSchedulePeriod": [
         {
@@ -2508,47 +2500,39 @@
           "limit": 0.0
         },
         {
-          "startPeriod": 2700,
+          "startPeriod": 3600,
           "limit": 11000.0
         },
         {
-          "startPeriod": 4500,
+          "startPeriod": 6300,
           "limit": 0.0
         },
         {
-          "startPeriod": 15300,
+          "startPeriod": 7200,
           "limit": 11000.0
         },
         {
-          "startPeriod": 17100,
+          "startPeriod": 9000,
           "limit": 0.0
         },
         {
-          "startPeriod": 18900,
+          "startPeriod": 9900,
           "limit": 11000.0
         },
         {
-          "startPeriod": 20700,
+          "startPeriod": 16200,
           "limit": 0.0
         },
         {
-          "startPeriod": 22500,
+          "startPeriod": 90900,
           "limit": 11000.0
         },
         {
-          "startPeriod": 24300,
+          "startPeriod": 92700,
           "limit": 0.0
         },
         {
-          "startPeriod": 26100,
-          "limit": 11000.0
-        },
-        {
-          "startPeriod": 31500,
-          "limit": 0.0
-        },
-        {
-          "startPeriod": 116100,
+          "startPeriod": 100800,
           "limit": 11000.0
         }
       ]
