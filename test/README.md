@@ -1,6 +1,6 @@
 # Test Suite
 
-531 tests across five files. Run from the repo root:
+536 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 378 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 383 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 38 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (378 tests)
+## test_charging_planner.py (383 tests)
 
 #### Config
 
@@ -120,8 +120,8 @@ Direct tests for `_select_with_min_block` (the `max_windows: null`, unbounded pa
 ### TestSelectWithMaxWindows (11)
 Direct tests for `_select_with_max_windows` (the `max_windows: N ≥ 2` path): uses at most N blocks, picks the cheapest N clusters over more expensive ones, `max_windows: 1` matches `_best_continuous_window` exactly, `max_windows: null` matches the unbounded path exactly, a generously high `max_windows` also matches the unbounded path, `min_gap_minutes`/`min_slot_minutes` enforced identically to the unbounded case, infeasible window budgets return `[]` cleanly, latest-slot tiebreak on equal price. Same graceful-degradation fix as `TestSelectWithMinBlock` above, verified for the bounded-window-count DP specifically.
 
-### TestSplitTolerance (12)
-`split_tolerance_cents_kwh` / `_prefer_fewer_blocks`, on a fixture of the real 2026-10-13 topup-window prices (`test/fixtures/prices_2026-10-13_topup_window.json`) where the cost-optimal 14-slot plan splits around one 0.661 c€/kWh slot to save 0.0028 c€/kWh. Zero tolerance and an omitted argument keep the strictly optimal 2-block split; the `CHARGING_DEFAULTS` tolerance merges it into one 14-slot block within tolerance; a tolerance smaller than the saving keeps the split; a synthetic two-cheap-pockets-around-an-expensive-middle case keeps its split; a merged plan never exceeds `max_windows` (2, 3, 4), keeps the exact slot total and honours the minimum block length; `max_windows: 1` is unchanged; an infeasible single block (candidates with a time hole) keeps the split and emits no warning; the default lives in `CHARGING_DEFAULTS` and reaches `Config`; `translate_config` does not expose the key; validation rejects a negative value; and `build_plan`'s "optimal" comparison stays strictly optimal (avg_optimal 0.5926 vs delivered 0.5954).
+### TestSplitTolerance (16)
+`split_tolerance_cents_kwh` / `_prefer_fewer_blocks`, on a fixture of the real 2026-10-13 topup-window prices (`test/fixtures/prices_2026-10-13_topup_window.json`) where the cost-optimal 14-slot plan splits around one 0.661 c€/kWh slot to save 0.0028 c€/kWh. Zero tolerance and an omitted argument keep the strictly optimal 2-block split; the `CHARGING_DEFAULTS` tolerance merges it into one 14-slot block within tolerance; a tolerance smaller than the saving keeps the split; a synthetic two-cheap-pockets-around-an-expensive-middle case keeps its split; a merged plan never exceeds `max_windows` (2, 3, 4), keeps the exact slot total and honours the minimum block length; `max_windows: 1` is unchanged; an infeasible single block (candidates with a time hole) keeps the split and emits no warning; the default lives in `CHARGING_DEFAULTS` and reaches `Config`; `translate_config` does not expose the key; validation rejects a negative value; and `build_plan`'s "optimal" comparison stays strictly optimal (avg_optimal 0.5926 vs delivered 0.5954). Also the merge trace: `select_charging_windows_with_info` reports `windows_before_merge` / `merge_extra_cost_cents_kwh` (merged, unmerged, `max_windows: 1`, empty input) and agrees with the slots-only wrapper; `_select_slots` fills its `merge_info_out`; `build_plan` writes both fields to the plan JSON (null when built without the info).
 
 
 #### Plan output
@@ -162,8 +162,8 @@ GHA step-summary per-profile section: profile name, required hours, window table
 
 #### Integration
 
-### TestEndToEnd (11)
-Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable. Plus five delayed-run regression tests: a run firing mid-window still targets tonight's live window rather than skipping to the next night; with an artificially-cheap already-elapsed slot planted to tempt the DP, confirms it's never selected; a live window with too little time left to fit `required_hours` still uses 100% of what remains (never rolls to the next occurrence) and honestly reports the shortfall via `plan_warning`; the companion case — a live window with a comfortable 1h buffer over `required_hours` — produces a complete plan with no warning, confirming the shortfall handling above is specific to genuine insufficiency, not just running late; the same too-little-time scenario repeated with `max_windows: null` (the actual default) instead of `1` — the DP behind it used to return a completely empty plan in this situation rather than the same graceful partial result `max_windows: 1` already produced.
+### TestEndToEnd (12)
+Full `cmd_plan` run with mocked prices: one plan file per profile, required keys, OCPP profile present, JSON written to output dir, exits cleanly when prices unavailable. Plus five delayed-run regression tests: a run firing mid-window still targets tonight's live window rather than skipping to the next night; with an artificially-cheap already-elapsed slot planted to tempt the DP, confirms it's never selected; a live window with too little time left to fit `required_hours` still uses 100% of what remains (never rolls to the next occurrence) and honestly reports the shortfall via `plan_warning`; the companion case — a live window with a comfortable 1h buffer over `required_hours` — produces a complete plan with no warning, confirming the shortfall handling above is specific to genuine insufficiency, not just running late; the same too-little-time scenario repeated with `max_windows: null` (the actual default) instead of `1` — the DP behind it used to return a completely empty plan in this situation rather than the same graceful partial result `max_windows: 1` already produced. Plus `test_plans_record_block_merge_trace`: every plan written by `cmd_plan` carries `windows_before_merge` and `merge_extra_cost_cents_kwh`.
 
 ### TestLogVerbosity (4)
 A normal run's log used to repeat the same handful of facts across four separate `INFO` lines (the target window in UTC, then again in local time with candidate counts, the required-minutes figure re-derived as a multiplication, and the scheduled total/average price/window count) before `print_plan_summary` printed those same three numbers again in the pretty console block immediately after. All four demoted to `log.debug` — confirms they're genuinely absent from a normal (`INFO`-level) run and still present with `--debug` enabled, so nothing was deleted, just quieted. One exception: spillover (minutes scheduled outside the preferred window) isn't shown anywhere else, so it stays at `INFO`, split into its own line — confirms it's reported when spillover genuinely happens and silent when it doesn't. Mutation-checked: reintroducing one demoted line at `INFO` level makes the absence test fail as expected. The absent/present checks were later extended to three more lines demoted for the same reason once the plan summary card grew to actually carry what they used to say: the `=== Profile: X ===` banner (redundant with the card's own title), the decision log's own `targeting X window` line (now the card's `Window` row), and the window-coverage success line (the *warning* path for insufficient coverage is untouched, only the "coverage is fine" case moved).

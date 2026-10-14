@@ -4168,6 +4168,16 @@ class TestEndToEnd(unittest.TestCase):
         # 06:30 Helsinki EET = 04:30 UTC
         self.assertLessEqual(win_end_utc, datetime(2026, 3, 16, 4, 30, tzinfo=UTC))
 
+    def test_plans_record_block_merge_trace(self):
+        # cmd_plan -> _plan_one_profile -> build_plan carries the merge trace
+        # into the plan JSON (windows_before_merge / merge_extra_cost_cents_kwh).
+        plans = self._run_cmd_plan(self._make_prices())
+        for plan in plans:
+            self.assertIn("windows_before_merge", plan)
+            self.assertIn("merge_extra_cost_cents_kwh", plan)
+            self.assertGreaterEqual(plan["windows_before_merge"], len(plan["windows"]) - 1)
+            self.assertGreaterEqual(plan["merge_extra_cost_cents_kwh"], 0.0)
+
     def test_plans_contain_ocpp_profile(self):
         plans = self._run_cmd_plan(self._make_prices())
         for plan in plans:
@@ -4603,6 +4613,63 @@ class TestSplitTolerance(unittest.TestCase):
         cp._validate_charging_profile(
             {"required_hours": 2, "split_tolerance_cents_kwh": -1}, errors)
         self.assertTrue(any("split_tolerance_cents_kwh" in e for e in errors))
+
+    def test_with_info_reports_what_the_merge_did(self):
+        import charging_planner as cp
+        sel, info = cp.select_charging_windows_with_info(
+            self._real_day(), 210, min_slot_minutes=30, min_gap_minutes=15,
+            split_tolerance_cents_kwh=0.03)
+        self.assertEqual(len(self._blocks(sel)), 1)
+        self.assertEqual(info["windows_before_merge"], 2)
+        self.assertAlmostEqual(info["merge_extra_cost_cents_kwh"], 0.0028, places=4)
+        # the slots-only wrapper returns exactly the same selection
+        plain = select_charging_windows(
+            self._real_day(), 210, min_slot_minutes=30, min_gap_minutes=15,
+            split_tolerance_cents_kwh=0.03)
+        self.assertEqual([s.start for s in sel], [s.start for s in plain])
+
+    def test_with_info_when_nothing_merged(self):
+        import charging_planner as cp
+        _, info = cp.select_charging_windows_with_info(
+            self._real_day(), 210, min_slot_minutes=30, min_gap_minutes=15,
+            split_tolerance_cents_kwh=0.0)
+        self.assertEqual(info, {"windows_before_merge": 2, "merge_extra_cost_cents_kwh": 0.0})
+        _, info1 = cp.select_charging_windows_with_info(
+            self._real_day(), 210, max_windows=1, split_tolerance_cents_kwh=0.03)
+        self.assertEqual(info1, {"windows_before_merge": 1, "merge_extra_cost_cents_kwh": 0.0})
+        sel, none_info = cp.select_charging_windows_with_info([], 210)
+        self.assertEqual((sel, none_info), ([], None))
+
+    def test_select_slots_passes_merge_info_out(self):
+        import charging_planner as cp
+        slots = self._real_day()
+        ws = slots[0].start
+        we = slots[-1].end
+        cfg = make_config(required_minutes=210, min_slot_minutes=30,
+                          preferred_window_start="21:00", preferred_window_end="06:30")
+        info = {}
+        selected, _ = cp._select_slots(
+            cfg, slots, ws, we, "21:00", "06:30",
+            now_utc=ws - timedelta(hours=5), merge_info_out=info)
+        self.assertEqual(len(self._blocks(selected)), 1)
+        self.assertEqual(info["windows_before_merge"], 2)
+        self.assertAlmostEqual(info["merge_extra_cost_cents_kwh"], 0.0028, places=4)
+
+    def test_plan_json_records_merge_info(self):
+        import charging_planner as cp
+        slots = self._real_day()
+        sel, info = cp.select_charging_windows_with_info(
+            slots, 210, min_slot_minutes=30, min_gap_minutes=15,
+            split_tolerance_cents_kwh=0.03)
+        plan = cp.build_plan(make_plan_params(
+            slots, sel, required_minutes=210, merge_info=info,
+            preferred_window_start="21:00", preferred_window_end="06:30"))
+        self.assertEqual(plan["windows_before_merge"], 2)
+        self.assertAlmostEqual(plan["merge_extra_cost_cents_kwh"], 0.0028, places=4)
+        # a plan built without the info keeps the keys, as null
+        bare = cp.build_plan(make_plan_params(slots, sel, required_minutes=210))
+        self.assertIsNone(bare["windows_before_merge"])
+        self.assertIsNone(bare["merge_extra_cost_cents_kwh"])
 
     def test_plan_optimal_comparison_stays_strictly_optimal(self):
         # The plan's "optimal" flags / avg_optimal are the strictly cost-optimal

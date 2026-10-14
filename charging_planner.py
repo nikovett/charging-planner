@@ -1540,7 +1540,35 @@ def select_charging_windows(
     _log: bool = True,
     split_tolerance_cents_kwh: float = 0.0,
 ) -> list[Slot]:
+    """Select the cheapest slots totalling required_minutes (slots only).
+
+    Thin wrapper over select_charging_windows_with_info, which documents the
+    parameters and also reports how many blocks a merge removed.
+    """
+    return select_charging_windows_with_info(
+        prices, required_minutes, max_windows, max_price, min_slot_minutes,
+        min_gap_minutes, _log, split_tolerance_cents_kwh,
+    )[0]
+
+
+def select_charging_windows_with_info(
+    prices: list[Slot],
+    required_minutes: int,
+    max_windows: Optional[int] = None,
+    max_price: Optional[float] = None,
+    min_slot_minutes: int = 15,
+    min_gap_minutes: int = 15,
+    _log: bool = True,
+    split_tolerance_cents_kwh: float = 0.0,
+) -> tuple[list[Slot], Optional[dict]]:
     """Select the cheapest slots totalling required_minutes.
+
+    Returns (selected, merge_info). merge_info is None when nothing was
+    selected, otherwise {"windows_before_merge": N, "merge_extra_cost_cents_kwh": X}
+    — N is the block count of the strictly cost-optimal selection and X the
+    average-price increase (c€/kWh) the block-merging step accepted (0.0 when it
+    changed nothing). It is recorded in the plan JSON so odd plans can be traced
+    back to the tolerance.
 
     split_tolerance_cents_kwh: after finding the cost-optimal selection, prefer
     the plan with the fewest charging blocks whose average price is within this
@@ -1555,7 +1583,7 @@ def select_charging_windows(
       N≥2  → at most N separate blocks (DP-optimal, window-count-bounded)
     """
     if not prices:
-        return []
+        return [], None
 
     slot_dur = prices[0].duration_minutes
     if required_minutes % slot_dur != 0:
@@ -1576,10 +1604,12 @@ def select_charging_windows(
 
     if not candidates:
         log.error("No candidate slots available for charging!")
-        return []
+        return [], None
 
     if max_windows == 1:
-        return _best_continuous_window(candidates, prices, n_slots)
+        single = _best_continuous_window(candidates, prices, n_slots)
+        return single, {"windows_before_merge": len(_group_continuous(single)),
+                        "merge_extra_cost_cents_kwh": 0.0}
 
     min_slots_per_block = max(1, (min_slot_minutes + slot_dur - 1) // slot_dur)
     effective_min_minutes = min_slots_per_block * slot_dur
@@ -1600,12 +1630,15 @@ def select_charging_windows(
             candidates, n_slots, min_slots_per_block, min_slots_per_gap, max_windows
         )
 
+    blocks_before = len(_group_continuous(sorted(selected, key=lambda x: x.start)))
+    extra_cost = 0.0
     if split_tolerance_cents_kwh > 0:
-        selected = _prefer_fewer_blocks(
+        selected, extra_cost = _prefer_fewer_blocks(
             selected, candidates, n_slots, min_slots_per_block, min_slots_per_gap,
             split_tolerance_cents_kwh,
         )
-    return selected
+    return selected, {"windows_before_merge": blocks_before,
+                      "merge_extra_cost_cents_kwh": round(extra_cost, 4)}
 
 
 def _prefer_fewer_blocks(
@@ -1615,9 +1648,11 @@ def _prefer_fewer_blocks(
     min_slots_per_block: int,
     min_slots_per_gap: int,
     tolerance_cents_kwh: float,
-) -> list[Slot]:
-    """Return the selection with the fewest charging blocks whose average price
-    is within tolerance_cents_kwh of `best` (the cost-optimal selection).
+) -> tuple[list[Slot], float]:
+    """Return (selection, extra_cost_cents_kwh): the selection with the fewest
+    charging blocks whose average price is within tolerance_cents_kwh of `best`
+    (the cost-optimal selection), and the average-price increase it accepted
+    (0.0 when `best` is returned unchanged).
 
     Splitting charging into several blocks is only worth it if it pays. A
     15-minute gap that saves 0.003 c€/kWh is pointless for the user (an extra
@@ -1633,7 +1668,7 @@ def _prefer_fewer_blocks(
     blocks = _group_continuous(sorted(best, key=lambda x: x.start))
     k = len(blocks)
     if k <= 1:
-        return best
+        return best, 0.0
     best_cost = sum(s.price_eur_kwh for s in best)
     allowed = tolerance_cents_kwh / 100.0 * len(best)
     for w in range(1, k):
@@ -1643,12 +1678,11 @@ def _prefer_fewer_blocks(
         if len(cand) != len(best):
             continue
         if sum(s.price_eur_kwh for s in cand) - best_cost <= allowed + 1e-12:
-            log.info("Merged %d charging blocks into %d (extra cost %.4f c€/kWh avg, "
-                     "within %.3f tolerance).", k, w,
-                     (sum(s.price_eur_kwh for s in cand) - best_cost) / len(best) * 100,
-                     tolerance_cents_kwh)
-            return cand
-    return best
+            extra = (sum(s.price_eur_kwh for s in cand) - best_cost) / len(best) * 100
+            log.debug("Merged %d charging blocks into %d (extra cost %.4f c€/kWh avg, "
+                      "within %.3f tolerance).", k, w, extra, tolerance_cents_kwh)
+            return cand, extra
+    return best, 0.0
 
 
 def _select_with_min_block(
@@ -2239,6 +2273,7 @@ class PlanParams:
     supplement_starts:      object          = None  # set of starts of forecast supplement slots
     retained_minutes:       int             = 0     # future charging minutes carried over from previous plan
     plan_warning:           Optional[str]   = None  # human-readable reason when total_minutes < required_minutes
+    merge_info:             Optional[dict]  = None  # {"windows_before_merge", "merge_extra_cost_cents_kwh"} from select_charging_windows_with_info
     window_start_utc:       Optional[datetime] = None  # configured (unclamped) window start — see _resolve_planning_horizon
     window_end_utc:         Optional[datetime] = None  # configured (unclamped) window end — same source, needed to compute the day-range shown on the plan summary card
     generated_at:           Optional[datetime] = None  # when this plan was built
@@ -2376,6 +2411,11 @@ def build_plan(p: PlanParams) -> dict:
         "total_minutes":          total_min,
         "avg_price_cents_kwh":    round(overall_avg, 4),
         "avg_optimal_price_cents_kwh": avg_optimal,
+        # Block-merging trace (split_tolerance_cents_kwh): blocks in the strictly
+        # cost-optimal selection, and the avg-price increase accepted to merge
+        # them. Null when the plan has no such info.
+        "windows_before_merge":   (p.merge_info or {}).get("windows_before_merge"),
+        "merge_extra_cost_cents_kwh": (p.merge_info or {}).get("merge_extra_cost_cents_kwh"),
         "preferred_window_start": p.preferred_window_start,
         "preferred_window_end":   p.preferred_window_end,
         "configured_window_start_utc": p.window_start_utc.isoformat() if p.window_start_utc else None,
@@ -2883,8 +2923,13 @@ def _select_slots(
     required_minutes_override: int = None,
     forecast_slots:   list = None,
     max_price_override: Optional[float] = None,
+    merge_info_out:   Optional[dict] = None,
 ) -> tuple[list[Slot], set, bool]:
     """Run the full slot-selection pipeline and return (selected, optimal_set, used_forecast).
+
+    merge_info_out: if given, filled with the block-merging trace from the main
+    selection (see select_charging_windows_with_info) — an out-parameter so the
+    return shape stays unchanged.
 
     Pipeline:
       filter preferred window → check coverage (supplement with forecast if partial)
@@ -2933,7 +2978,7 @@ def _select_slots(
     req_min = required_minutes_override if required_minutes_override is not None else cfg.required_minutes
 
     _eff_max = max_price_override if max_price_override is not None else cfg.max_price_eur
-    selected = select_charging_windows(
+    selected, _merge_info = select_charging_windows_with_info(
         inside,
         required_minutes=req_min,
         max_windows=cfg.max_windows,
@@ -2942,6 +2987,9 @@ def _select_slots(
         min_gap_minutes=cfg.min_gap_minutes,
         split_tolerance_cents_kwh=cfg.split_tolerance_cents_kwh,
     )
+
+    if merge_info_out is not None and _merge_info:
+        merge_info_out.update(_merge_info)
 
     remaining = req_min - sum(s.duration_minutes for s in selected)
     if remaining > 0 and outside:
@@ -3290,12 +3338,14 @@ def _plan_one_profile(
     base_required = sched_required_minutes if sched_required_minutes is not None else cfg.required_minutes
     effective_required = base_required + retained_minutes
 
+    merge_info: dict = {}
     selected, used_forecast = _select_slots(
         cfg, candidate_prices, win_start_utc, win_end_utc, win_start_str, win_end_str,
         now_utc=now_utc,
         required_minutes_override=effective_required,
         forecast_slots=forecast_display_slots,
         max_price_override=resolved_max_price_eur,
+        merge_info_out=merge_info,
     )
     if used_forecast and price_source != "forecast":
         log.warning("Profile '%s': plan built using forecast slots to fill window gap — "
@@ -3365,6 +3415,7 @@ def _plan_one_profile(
         forecast_slots=forecast_display_slots,
         supplement_starts=supplement_starts,
         plan_warning=plan_warning,
+        merge_info=merge_info or None,
         window_start_utc=win_start_utc,
         window_end_utc=win_end_utc,
         generated_at=now_utc,
