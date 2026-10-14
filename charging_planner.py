@@ -81,6 +81,11 @@ CHARGING_DEFAULTS = {
     "max_windows":            None,   # None = unlimited blocks (DP-optimal split); 1 = single unbroken block
     "min_slot_minutes":       30,
     "min_gap_minutes":        15,
+    # Internal tuning knob, deliberately NOT exposed in the user-facing config
+    # format (translate_config never passes it through). A plan with fewer
+    # charging blocks is preferred over the cost-optimal one when it costs no
+    # more than this many c€/kWh extra on average. 0 = strictly cost-optimal.
+    "split_tolerance_cents_kwh": 0.03,
     "preferred_window_start": "00:00",
     "preferred_window_end":   "23:59",
 }
@@ -435,6 +440,10 @@ def _validate_charging_profile(ch: dict, errors: list) -> None:
     elif int(min_gap) % 15 != 0:
         errors.append(f"charging.min_gap_minutes={min_gap} must be divisible by 15.")
 
+    split_tol = ch.get("split_tolerance_cents_kwh", CHARGING_DEFAULTS["split_tolerance_cents_kwh"])
+    if isinstance(split_tol, bool) or not isinstance(split_tol, (int, float)) or split_tol < 0:
+        errors.append(f"charging.split_tolerance_cents_kwh must be a non-negative number, got: {split_tol!r}.")
+
     max_windows = ch.get("max_windows")
     if max_windows is not None:
         if isinstance(max_windows, bool) or not isinstance(max_windows, int) or max_windows < 1:
@@ -588,6 +597,7 @@ class Config:
     window_end_any:         bool              # True = end is "any" (use last available price as end)
     schedule:               list              # day-specific window overrides (may be empty)
     max_price_is_avg:       bool              = False  # True = ceiling is dynamic daily average
+    split_tolerance_cents_kwh: float          = CHARGING_DEFAULTS["split_tolerance_cents_kwh"]  # prefer fewer blocks within this avg-price tolerance
 
 
 def _parse_one_profile(et: dict, ch: dict) -> "Config":
@@ -613,6 +623,8 @@ def _parse_one_profile(et: dict, ch: dict) -> "Config":
         max_windows=ch.get("max_windows"),
         min_slot_minutes=int(ch.get("min_slot_minutes", CHARGING_DEFAULTS["min_slot_minutes"])),
         min_gap_minutes=int(ch.get("min_gap_minutes", CHARGING_DEFAULTS["min_gap_minutes"])),
+        split_tolerance_cents_kwh=float(ch.get(
+            "split_tolerance_cents_kwh", CHARGING_DEFAULTS["split_tolerance_cents_kwh"])),
         max_price_eur=None if (ceil_cents is None or ceil_is_avg) else ceil_cents / 100.0,
         max_price_is_avg=ceil_is_avg,
         preferred_window_start=ch.get("preferred_window_start", "00:00"),
@@ -1526,8 +1538,14 @@ def select_charging_windows(
     min_slot_minutes: int = 15,
     min_gap_minutes: int = 15,
     _log: bool = True,
+    split_tolerance_cents_kwh: float = 0.0,
 ) -> list[Slot]:
     """Select the cheapest slots totalling required_minutes.
+
+    split_tolerance_cents_kwh: after finding the cost-optimal selection, prefer
+    the plan with the fewest charging blocks whose average price is within this
+    many c€/kWh of the optimum (see _prefer_fewer_blocks). 0 = strictly
+    cost-optimal (the default here; profiles pass CHARGING_DEFAULTS' value).
 
     max_windows controls how many separate charging blocks may be used:
       None → unlimited (DP-optimal split across any number of blocks — the
@@ -1575,12 +1593,62 @@ def select_charging_windows(
         if min_slots_per_block <= 1 and min_slots_per_gap == 0:
             selected = sorted(candidates, key=lambda x: (x.price_eur_kwh, -x.start.timestamp()))[:n_slots]
             selected.sort(key=lambda x: x.start)
-            return selected
-        return _select_with_min_block(candidates, n_slots, min_slots_per_block, min_slots_per_gap)
+        else:
+            selected = _select_with_min_block(candidates, n_slots, min_slots_per_block, min_slots_per_gap)
+    else:
+        selected = _select_with_max_windows(
+            candidates, n_slots, min_slots_per_block, min_slots_per_gap, max_windows
+        )
 
-    return _select_with_max_windows(
-        candidates, n_slots, min_slots_per_block, min_slots_per_gap, max_windows
-    )
+    if split_tolerance_cents_kwh > 0:
+        selected = _prefer_fewer_blocks(
+            selected, candidates, n_slots, min_slots_per_block, min_slots_per_gap,
+            split_tolerance_cents_kwh,
+        )
+    return selected
+
+
+def _prefer_fewer_blocks(
+    best: list[Slot],
+    candidates: list[Slot],
+    n_slots: int,
+    min_slots_per_block: int,
+    min_slots_per_gap: int,
+    tolerance_cents_kwh: float,
+) -> list[Slot]:
+    """Return the selection with the fewest charging blocks whose average price
+    is within tolerance_cents_kwh of `best` (the cost-optimal selection).
+
+    Splitting charging into several blocks is only worth it if it pays. A
+    15-minute gap that saves 0.003 c€/kWh is pointless for the user (an extra
+    start/stop and schedule entry) yet is what a strictly cost-optimal DP
+    produces. Rather than merging blocks after the fact (which broke
+    required_hours, the window and max_windows — why the old merging step was
+    removed), this re-runs the same DP with a tighter block budget w = 1, 2, …
+    (k-1 where k is best's block count). Every candidate therefore satisfies
+    min_slot_minutes, min_gap_minutes and the slot total by construction. The
+    first (fewest-block) candidate that covers the same number of slots and
+    stays within tolerance wins; otherwise `best` is returned unchanged.
+    """
+    blocks = _group_continuous(sorted(best, key=lambda x: x.start))
+    k = len(blocks)
+    if k <= 1:
+        return best
+    best_cost = sum(s.price_eur_kwh for s in best)
+    allowed = tolerance_cents_kwh / 100.0 * len(best)
+    for w in range(1, k):
+        cand = _select_with_max_windows(
+            candidates, n_slots, min_slots_per_block, min_slots_per_gap, w, quiet=True,
+        )
+        if len(cand) != len(best):
+            continue
+        if sum(s.price_eur_kwh for s in cand) - best_cost <= allowed + 1e-12:
+            log.info("Merged %d charging blocks into %d (extra cost %.4f c€/kWh avg, "
+                     "within %.3f tolerance).", k, w,
+                     (sum(s.price_eur_kwh for s in cand) - best_cost) / len(best) * 100,
+                     tolerance_cents_kwh)
+            return cand
+    return best
 
 
 def _select_with_min_block(
@@ -1749,10 +1817,15 @@ def _select_with_max_windows(
     min_slots_per_block: int,
     min_slots_per_gap: int,
     max_windows: int,
+    quiet: bool = False,
 ) -> list[Slot]:
     """Select n_slots from candidates at minimum total cost, where every block is
     ≥ min_slots_per_block long, every gap between blocks is ≥ min_slots_per_gap
     long, and at most max_windows separate blocks are used.
+
+    quiet=True suppresses the "could not reach the full n_slots" warnings, for
+    speculative calls (_prefer_fewer_blocks) where a shortfall just means the
+    tighter block budget is infeasible, not that the plan is short.
 
     If the full n_slots can't be reached at this window budget, falls back
     to the largest achievable selection rather than returning nothing — see
@@ -1847,17 +1920,19 @@ def _select_with_max_windows(
         while target_r > 0 and dp[max_windows][0][target_r] == INF:
             target_r -= 1
         if target_r == 0:
-            log.warning(
-                "No eligible slots at all for n_slots=%d min_slots_per_block=%d "
-                "max_windows=%d.", n_slots, min_slots_per_block, max_windows,
-            )
+            if not quiet:
+                log.warning(
+                    "No eligible slots at all for n_slots=%d min_slots_per_block=%d "
+                    "max_windows=%d.", n_slots, min_slots_per_block, max_windows,
+                )
             return []
-        log.warning(
-            "Could not reach the full %d slots requested (min_slots_per_block=%d "
-            "max_windows=%d) — returning the best achievable partial selection "
-            "of %d slots instead.",
-            n_slots, min_slots_per_block, max_windows, target_r,
-        )
+        if not quiet:
+            log.warning(
+                "Could not reach the full %d slots requested (min_slots_per_block=%d "
+                "max_windows=%d) — returning the best achievable partial selection "
+                "of %d slots instead.",
+                n_slots, min_slots_per_block, max_windows, target_r,
+            )
 
     # Reconstruct: at each step, find the latest valid block start matching
     # the DP value at the current (w, i, r) — same "latest-preferred" approach
@@ -2865,6 +2940,7 @@ def _select_slots(
         max_price=_eff_max,
         min_slot_minutes=cfg.min_slot_minutes,
         min_gap_minutes=cfg.min_gap_minutes,
+        split_tolerance_cents_kwh=cfg.split_tolerance_cents_kwh,
     )
 
     remaining = req_min - sum(s.duration_minutes for s in selected)

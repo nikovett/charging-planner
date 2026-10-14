@@ -45,6 +45,7 @@ Fetches day-ahead electricity prices and schedules EV charging for the cheapest 
 | `test/test_deliver_chargeamps.py` | Charge Amps tests |
 | `test/test_deliver_easee.py` | Easee tests |
 | `test/test_deliver_myskoda.py` | MyŠkoda tests |
+| `test/fixtures/prices_2026-10-13_topup_window.json` | Real FI prices for the 2026-10-13 topup window (the day a pointless 15-minute split appeared), used by `TestSplitTolerance` |
 | `test/fixtures/entsoe_2026-10-05.xml` | Real ENTSO-E day-ahead response (A03 curves with omitted trailing points) used by `TestEntsoeTrailingOmittedPoints` |
 | `test/README.md` | Test suite documentation, per-class breakdown |
 | `README.md` | Project documentation (end-user facing) |
@@ -268,11 +269,23 @@ Same DP, extended with a window-count budget (`_select_with_max_windows`):
 - `max_windows` is internally capped at `ceil(n_slots / min_slots_per_block)` — the most blocks that could ever be needed — to keep the DP small when configured generously higher than useful
 - Complexity: `O(max_windows × n² × n_slots)` — fine for realistic sizes (max_windows in the low single digits, n_slots ≤ ~30)
 
+### Fewest blocks within a tolerance (`split_tolerance_cents_kwh`)
+
+A strictly cost-optimal plan will split charging around a single slightly dearer slot to save a negligible amount. Real case, 2026-10-13 topup (14 slots): the optimum was 10 slots + a 15-minute gap + 4 slots at 0.5926 c€/kWh; one unbroken block costs 0.5954 — **0.0028 c€/kWh more, about 0.1 cent per charge** — but sends a second schedule entry to the charger and costs a MyŠkoda slot. `min_gap_minutes` can't express "is this split worth it": a larger gap only moves the problem (a 30-minute gap saves just as little), applies to every day and profile, and forbids splits that genuinely pay.
+
+`_prefer_fewer_blocks` (called from `select_charging_windows` when `split_tolerance_cents_kwh > 0`) takes the cost-optimal selection with `k` blocks, then re-runs `_select_with_max_windows` with a budget of `w = 1 … k-1` blocks and returns the **first (fewest-block) result that covers the same number of slots and whose average price is within the tolerance** of the optimum; otherwise the optimum is returned unchanged. It logs one line when it merges (`Merged 2 charging blocks into 1 (extra cost 0.0028 c€/kWh avg, within 0.030 tolerance)`).
+
+*Why this and not the old merging step.* The early "merge adjacent slots" pass ran *after* selection and rewrote its output, which is where the edge cases came from — merged plans could miss `required_hours`, leave the window or break `max_windows`. Here every candidate is produced by the same DP, so `min_slot_minutes`, `min_gap_minutes`, `max_windows` and the exact slot total hold by construction; a tighter budget that can't reach the full slot count is simply skipped (`quiet=True` suppresses the DP's "could not reach" warning for these speculative calls). Only fewer blocks are ever considered, so `max_windows` can never be exceeded.
+
+*Unit and default.* Absolute c€/kWh of *average* price, not a percentage — prices near zero or negative make percentages meaningless, and an absolute average reads directly as extra cents per kWh charged. Default **0.03** in `CHARGING_DEFAULTS` (≈1 cent per 40 kWh charge at worst; this day's merge cost 0.0028, so the default merges pointless splits with a wide margin while a real split — e.g. two cheap pockets around an expensive middle, ~10 c€/kWh apart — is untouched). It is picked from one day's data and should be tuned from more real plans. It is an **internal knob**: `translate_config` does not pass it through, so it can't be set from `config.yaml`; validation still rejects negative values for dicts built directly.
+
+*Where it applies.* Only the main selection in `_plan_one_profile` passes the profile's tolerance. `select_charging_windows` itself defaults to `0.0`, so the "optimal" comparison in `build_plan`, the partial-plan capacity comparison and spillover stay strictly cost-optimal. `max_windows: 1` is unaffected (already one block). "Optimal" in the plan JSON therefore means the unconstrained lower bound, and a merged plan's `avg_price_cents_kwh` sits slightly above `avg_optimal_price_cents_kwh` — which is deliberate: the dashboard's `vs optimal ↑N%` shows what merging cost (0.5% on 2026-10-13).
+
 **`min_slot_minutes`** controls the minimum individual block length — applies in all three cases (for `max_windows: 1` the whole required duration is one block, so it's moot there).
 
 **`min_gap_minutes`** controls the minimum gap between blocks (default 15, divisible by 15, can be 0) — identical semantics across `max_windows: null` and `max_windows: N`.
 
-**Defaults have one source: `CHARGING_DEFAULTS`.** Parsing, validation and the `PlanParams` dataclass read their fallbacks from it rather than restating literals. They used to restate them, and diverged: `CHARGING_DEFAULTS` said `min_gap_minutes: 15` while parsing/validation fell back to `30` and `PlanParams` to `30`, so any path that skipped the defaults merge silently got 30. Pinned by `TestParseConfigs.test_omitted_min_gap_and_min_slot_use_charging_defaults_without_merge`.
+**Defaults have one source: `CHARGING_DEFAULTS`.** Parsing, validation and the `PlanParams` dataclass read their fallbacks from it rather than restating literals. They used to restate them, and diverged: `CHARGING_DEFAULTS` said `min_gap_minutes: 15` while parsing/validation fell back to `30` and `PlanParams` to `30`, so any path that skipped the defaults merge silently got 30. Pinned by `TestParseConfigs.test_omitted_min_gap_and_min_slot_use_charging_defaults_without_merge`. `CHARGING_DEFAULTS` also carries the internal `split_tolerance_cents_kwh` (above), which has no user-facing config key.
 
 **Known gap — spillover ignores a configured `min_gap_minutes`.** `_select_spillover` calls `select_charging_windows` with `min_slot_minutes` deliberately relaxed to one slot, but passes no `min_gap_minutes`, so it always uses that function's own default (15). With the default config this coincides; with `min_gap_minutes: 30`, spillover blocks can sit 15 minutes apart. Unlike the `min_slot` relaxation it isn't clearly deliberate. Undecided whether spillover should honor the configured gap (Guiding Principle 2 suggests yes).
 
@@ -335,7 +348,7 @@ Key fields:
 - `price_stats` — min/avg/max across future slots available to the scheduler at run time
 - `total_minutes` — `required_minutes + retained_minutes`
 - `windows` — local-time charging windows; `window_starts/ends_utc` are the same windows as UTC ISO strings for delivery
-- `price_slots` — all slots from previous evening onwards. `charging: true` = scheduled. `optimal: true` = cheapest ignoring window. `forecasted: true` = display-only forecast slot
+- `price_slots` — all slots from previous evening onwards. `charging: true` = scheduled. `optimal: true` = cheapest ignoring window (strictly cost-optimal — may differ from `charging` when blocks were merged, see "Fewest blocks within a tolerance"). `forecasted: true` = display-only forecast slot
 - `plan_warning` — null or human-readable reason when plan is partial (`"partial plan — price limit X c€/kWh"` or `"partial plan — required hours exceed boundaries"`)
 - `ocpp_charging_profile` — OCPP 1.6/2.0.1/2.1 compatible ChargingProfile object for any downstream system
 - `generated_at` — when this specific plan was built. Exists specifically to support redundant-delivery protection (below); not otherwise consumed by the planner itself
@@ -435,6 +448,8 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 ## Design decisions
 
+**Block merging lives inside the optimizer, bounded by a tolerance — not after it.** The original post-hoc merge was removed for its edge cases; the same need (don't split charging for a negligible saving) came back from real data on 2026-10-13. Solved by re-running the DP with fewer blocks and accepting the first result within `split_tolerance_cents_kwh` of the optimum (see Slot selection). The tolerance is an internal default, not a config key: it's an optimization knob like `min_gap_minutes` that a typical user has no independent opinion about, and exposing it would deepen the knob surface that the config-simplification work (Future work) is trying to shrink.
+
 **A normal run's log shouldn't repeat the same facts through four separate lines.** The pre-cleanup log stated the target window and required minutes in the decision line, then the same window again in UTC (`Window UTC: ...`), then the same window a third time with candidate counts (`Preferred window ... slots inside, outside`), then the same required-minutes figure re-derived as a multiplication (`Selecting N slots × 15 min = ...`), then the scheduled total/average price/window count — immediately followed by `print_plan_summary` printing those exact same three numbers again in the pretty console block. Demoted all four to `log.debug` (available via `--debug`, not deleted) rather than removing them outright, since they're genuinely useful for troubleshooting, just not for a normal run's signal-to-noise. One exception, not demoted: spillover (minutes scheduled outside the preferred window) isn't shown anywhere else, including `print_plan_summary` — split into its own `log.info` line rather than folded into the demoted summary line it used to share.
 
 **Forecast supplement gated to FI** — `fetch_forecast_display_slots` returns `[]` for non-FI areas internally. Non-FI areas with partial prices proceed with what they have.
@@ -459,14 +474,14 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 **The first reorganization pass had three real defects, found by scrutiny after the fact, not by the verification used at the time.** Checking that the sorted set of `def test_...` method names was identical before and after (proving no test content was lost or duplicated) is necessary but not sufficient — it says nothing about *non-test* content: two module-level helper functions (`_make_output_plan`, `_capture_stdout`) got silently absorbed into an unrelated class's block and ended up ~1500 lines from the only place they're used, because the extraction only tracked class boundaries and multi-line fixture assignments, not `def _helper(...)` or single-line `UPPER_CASE = "..."` constants between classes. Worse: `if __name__ == "__main__": unittest.main()` ended up stranded mid-file — harmless under `python -m unittest` (module-based discovery finds every class regardless of where that block sits) but confirmed to silently drop the last 67 of 335 tests when the file is run directly (`python test_charging_planner.py`), exactly the kind of thing "run the suite, it passed" doesn't catch if the *invocation method itself* doesn't exercise the broken path. All three fixed; verified this time by both invocation methods, not just one.
 
-519 tests, 3 skipped:
-- `test/test_charging_planner.py` (366) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
+531 tests, 3 skipped:
+- `test/test_charging_planner.py` (378) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
 - `test/test_deliver.py` (38) — redundant-delivery protection: full decision matrix, persisted-record read/write, `dispatch()`-level integration
 - `test/test_deliver_chargeamps.py` (46) — login/cache, connector mode, period fields, period timing
 - `test/test_deliver_easee.py` (26) — day-of-week mapping, weekly/basic plan payloads, deliver routing
 - `test/test_deliver_myskoda.py` (43) — slot mapping, `max_windows` validation, active-slot detection, all four charging-state branches
 
-See `test/README.md` for the full per-class breakdown. `test/fixtures/` holds real captured API responses used as test inputs (currently one ENTSO-E response); prefer a captured real response over a synthetic one whenever a bug came from real data.
+See `test/README.md` for the full per-class breakdown. `test/fixtures/` holds real captured API responses used as test inputs (currently one ENTSO-E response and one day of real FI prices); prefer a captured real response over a synthetic one whenever a bug came from real data.
 
 **The suite must pass with no network access.** Any test that reaches `cmd_plan` must mock every price source it could fall through to — including `fetch_forecast_prices` and `fetch_forecast_display_slots`, not just `fetch_entsoe_prices`. `test_cmd_plan_exits_when_prices_missing` violated this for months: written before forecast supplementation existed, it mocked only ENTSO-E, so the planner fell through to the live forecast API, got real data, and never exited — a failure that looked date-dependent but was network-dependent. Verify by running the suite with outbound sockets blocked (patch `socket.socket.connect` / `socket.create_connection` to raise) whenever a new fallback source is added.
 
@@ -638,6 +653,9 @@ Needs proper design before touching `index.html` — not done as part of the red
 # Changelog
 
 Append-only. One entry per release. For full context see the session log below.
+
+## v2.3.0 — DRAFT
+- **Improved:** charging is no longer split into several blocks for a negligible saving. The planner now picks the plan with the fewest blocks whose average price is within 0.03 c€/kWh of the cheapest possible one. A real case (2026-10-13): two blocks separated by one 15-minute gap saved 0.0028 c€/kWh over a single block, about 0.1 cent per charge, but needed two schedule entries. Hours, window, `min_slot_minutes`, `min_gap_minutes` and `max_windows` are all still respected, and genuinely worthwhile splits are kept. The tolerance is an internal default, not a config option. The dashboard's "optimal" markers and `vs optimal` figure still show the strictly cheapest plan, so they now show what merging cost.
 
 ## v2.2.0 — 2026-10-05
 - **Fixed:** ENTSO-E prices could silently lose the last hour(s) of a delivery day. ENTSO-E omits any price equal to the previous one — including at the end of a day — and the parser only filled forward to the last *listed* point, so a night of repeated prices left a gap inside the evening window. That tripped the coverage check with a misleading "prices not yet fully published" warning, found no forecast slots to fill an interior gap, and relabelled the plan's source "forecast". Prices are now filled to the end of each period. Verified against a real ENTSO-E response and in production (288/288 slots, source ENTSO-E).
@@ -1156,3 +1174,13 @@ v2.2.0 prepared — a bugfix/log-accuracy release driven entirely by reading rea
 **Process lessons.** Two statements made during the session turned out wrong and were corrected only after checking the data: the claim that skipping commits when only `generated_at` changed would stop the large daily data commits (the diff showed `price_slots`/`price_stats` change every run too), and an assumption that a late 18:29 run was the cron (a 12:31 commit that day looked like the on-time cron; the log does not record its trigger). A "doubled blank lines still present" claim was likewise a misread of the log. Considered and deliberately deferred: extra cron entries/concurrency group and skipping data commits — see Future work.
 
 519 tests (was 505), 3 skipped, verified fully offline. Next: dashboard-can-show-an-undelivered-plan gap, unrecognized delivery keys (config pain point 2), shared profile defaults (pain point 3) — see Future work.
+
+### Session 38 — 2026-10-14
+
+Started from v2.2.0 (released 2026-10-09). Reviewed the 2026-10-09 manual run (healthy), answered where defaults live (`CHARGING_DEFAULTS`, one literal default in the `select_charging_windows` signature is a stale second copy but never takes effect because callers always pass the config value) and how `min_gap_minutes` sits in the `profiles:` format (a profile-level key; no shared-defaults mechanism).
+
+**Pointless split found from a real plan.** The 2026-10-13 topup plan was two blocks separated by one 15-minute gap (correct under `min_gap_minutes: 15` and provably cost-optimal) for a saving of 0.0028 c€/kWh. Discussed raising `min_gap_minutes` to 30 (rejected: moves the problem, applies everywhere) and bringing back post-hoc merging (rejected: its edge cases are why it was removed). Chosen: `_prefer_fewer_blocks` — re-run the same DP with fewer blocks and take the fewest within a tolerance. Verified against the real day's prices from the uploaded plan JSON before implementing (alternatives computed, 0.0028 vs the 0.1 I had first suggested as a default — corrected to 0.03). Default lives in `CHARGING_DEFAULTS`, deliberately not user-facing. 12 new tests (`TestSplitTolerance`) on a fixture of the real prices.
+
+**Open / to observe in production before releasing.** Tune the 0.03 default from more real plans; confirm the dashboard's `vs optimal ↑N%` reads sensibly after merges; delivery of a merged plan to Charge Amps/MyŠkoda is unchanged in shape (fewer windows). Version number (v2.3.0) is provisional.
+
+531 tests (was 519), 3 skipped, verified fully offline. Next: as before — dashboard-can-show-an-undelivered-plan gap, unrecognized delivery keys, shared profile defaults.

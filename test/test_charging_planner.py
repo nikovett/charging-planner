@@ -4480,6 +4480,145 @@ class TestLogVerbosity(unittest.TestCase):
         self.assertNotIn("spillover", combined)
 
 
+class TestSplitTolerance(unittest.TestCase):
+    """select_charging_windows(split_tolerance_cents_kwh=...) prefers the plan with
+    the fewest blocks whose average price is within the tolerance of the
+    cost-optimal one. Uses the real 2026-10-13 topup window, where the optimum
+    split 14 slots around one 0.661 c/kWh slot to save 0.0028 c/kWh.
+    """
+
+    @staticmethod
+    def _real_day():
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "fixtures", "prices_2026-10-13_topup_window.json")
+        with open(path) as f:
+            rows = json.load(f)["slots"]
+        return [make_slot(datetime.fromisoformat(r["start_utc"]), 15,
+                          r["price_cents_kwh"], i) for i, r in enumerate(rows)]
+
+    @staticmethod
+    def _blocks(sel):
+        import charging_planner as cp
+        return cp._group_continuous(sorted(sel, key=lambda s: s.start))
+
+    @staticmethod
+    def _avg(sel):
+        return sum(s.price_eur_kwh for s in sel) / len(sel) * 100
+
+    def test_zero_tolerance_keeps_cost_optimal_split(self):
+        sel = select_charging_windows(self._real_day(), 210, min_slot_minutes=30,
+                                      min_gap_minutes=15, split_tolerance_cents_kwh=0.0)
+        self.assertEqual(len(self._blocks(sel)), 2)
+        self.assertAlmostEqual(self._avg(sel), 0.5926, places=4)
+
+    def test_omitted_tolerance_is_strictly_optimal(self):
+        # The function default is 0 so existing callers (the "optimal"
+        # comparison, the capacity check) keep exact optimality.
+        sel = select_charging_windows(self._real_day(), 210, min_slot_minutes=30,
+                                      min_gap_minutes=15)
+        self.assertEqual(len(self._blocks(sel)), 2)
+
+    def test_default_tolerance_merges_pointless_split_into_one_block(self):
+        import charging_planner as cp
+        tol = cp.CHARGING_DEFAULTS["split_tolerance_cents_kwh"]
+        sel = select_charging_windows(self._real_day(), 210, min_slot_minutes=30,
+                                      min_gap_minutes=15, split_tolerance_cents_kwh=tol)
+        blocks = self._blocks(sel)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(len(sel), 14)                      # required hours exact
+        self.assertLess(self._avg(sel) - 0.5926, tol)       # within tolerance
+        self.assertAlmostEqual(self._avg(sel), 0.5954, places=4)
+
+    def test_tolerance_smaller_than_the_saving_keeps_split(self):
+        sel = select_charging_windows(self._real_day(), 210, min_slot_minutes=30,
+                                      min_gap_minutes=15, split_tolerance_cents_kwh=0.001)
+        self.assertEqual(len(self._blocks(sel)), 2)
+
+    def test_genuinely_worthwhile_split_is_kept(self):
+        # Two cheap pockets (1 c) separated by an expensive middle (20 c):
+        # a single block would cost ~10 c/kWh more on average.
+        base = datetime(2026, 10, 13, 20, 0, tzinfo=timezone.utc)
+        prices = [1.0] * 2 + [20.0] * 6 + [1.0] * 2
+        slots = [make_slot(base + timedelta(minutes=15 * i), 15, c, i)
+                 for i, c in enumerate(prices)]
+        sel = select_charging_windows(slots, 60, min_slot_minutes=30, min_gap_minutes=15,
+                                      split_tolerance_cents_kwh=0.03)
+        self.assertEqual(len(self._blocks(sel)), 2)
+        self.assertAlmostEqual(self._avg(sel), 1.0)
+
+    def test_merged_plan_never_exceeds_max_windows_and_honours_min_block(self):
+        for mw in (2, 3, 4):
+            sel = select_charging_windows(self._real_day(), 210, max_windows=mw,
+                                          min_slot_minutes=30, min_gap_minutes=15,
+                                          split_tolerance_cents_kwh=0.03)
+            blocks = self._blocks(sel)
+            self.assertLessEqual(len(blocks), mw)
+            self.assertEqual(len(sel), 14)
+            self.assertTrue(all(len(b) >= 2 for b in blocks))
+
+    def test_max_windows_one_unaffected(self):
+        a = select_charging_windows(self._real_day(), 210, max_windows=1,
+                                    split_tolerance_cents_kwh=0.0)
+        b = select_charging_windows(self._real_day(), 210, max_windows=1,
+                                    split_tolerance_cents_kwh=0.03)
+        self.assertEqual([s.start for s in a], [s.start for s in b])
+
+    def test_infeasible_single_block_keeps_split_without_warning(self):
+        # Candidates with a time hole (as a price ceiling would create) make a
+        # single block infeasible; the speculative narrower DP must neither be
+        # chosen nor emit its "could not reach" warning.
+        base = datetime(2026, 10, 13, 20, 0, tzinfo=timezone.utc)
+        slots = [make_slot(base + timedelta(minutes=15 * i), 15, 1.0, i)
+                 for i in list(range(0, 2)) + list(range(10, 12))]
+        with self.assertNoLogs("charging_planner", level="WARNING"):
+            sel = select_charging_windows(slots, 60, min_slot_minutes=30, min_gap_minutes=15,
+                                          split_tolerance_cents_kwh=0.03)
+        self.assertEqual(len(self._blocks(sel)), 2)
+        self.assertEqual(len(sel), 4)
+
+    def test_default_lives_in_charging_defaults_and_config_picks_it_up(self):
+        import charging_planner as cp
+        self.assertGreater(cp.CHARGING_DEFAULTS["split_tolerance_cents_kwh"], 0)
+        cfg = cp._parse_one_profile(
+            {"api_key": "abc", "area": "FI", "timezone": "Europe/Helsinki"},
+            {"name": "t", "required_hours": 2,
+             "preferred_window_start": "00:00", "preferred_window_end": "06:00"},
+        )
+        self.assertEqual(cfg.split_tolerance_cents_kwh,
+                         cp.CHARGING_DEFAULTS["split_tolerance_cents_kwh"])
+        self.assertEqual(make_config().split_tolerance_cents_kwh,
+                         cp.CHARGING_DEFAULTS["split_tolerance_cents_kwh"])
+
+    def test_not_exposed_in_user_facing_config(self):
+        raw = {"area": "FI", "profiles": [{
+            "name": "p", "split_tolerance_cents_kwh": 5,
+            "schedule": {"mon-sun": {"window": "any-any", "required": 2}},
+        }]}
+        out = translate_config(raw)
+        self.assertNotIn("split_tolerance_cents_kwh", out["charging"][0])
+
+    def test_negative_tolerance_rejected_by_validation(self):
+        import charging_planner as cp
+        errors = []
+        cp._validate_charging_profile(
+            {"required_hours": 2, "split_tolerance_cents_kwh": -1}, errors)
+        self.assertTrue(any("split_tolerance_cents_kwh" in e for e in errors))
+
+    def test_plan_optimal_comparison_stays_strictly_optimal(self):
+        # The plan's "optimal" flags / avg_optimal are the unconstrained lower
+        # bound: build_plan must not apply the tolerance there, so the
+        # dashboard shows what merging cost.
+        import charging_planner as cp
+        slots = self._real_day()
+        merged = select_charging_windows(slots, 210, min_slot_minutes=30,
+                                         min_gap_minutes=15, split_tolerance_cents_kwh=0.03)
+        plan = cp.build_plan(make_plan_params(
+            slots, merged, required_minutes=210,
+            preferred_window_start="21:00", preferred_window_end="06:30"))
+        self.assertAlmostEqual(plan["avg_optimal_price_cents_kwh"], 0.5926, places=4)
+        self.assertAlmostEqual(plan["avg_price_cents_kwh"], 0.5954, places=4)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

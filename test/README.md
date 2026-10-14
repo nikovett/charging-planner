@@ -1,6 +1,6 @@
 # Test Suite
 
-519 tests across five files. Run from the repo root:
+531 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 366 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 378 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 38 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (366 tests)
+## test_charging_planner.py (378 tests)
 
 #### Config
 
@@ -119,6 +119,9 @@ Direct tests for `_select_with_min_block` (the `max_windows: null`, unbounded pa
 
 ### TestSelectWithMaxWindows (11)
 Direct tests for `_select_with_max_windows` (the `max_windows: N ≥ 2` path): uses at most N blocks, picks the cheapest N clusters over more expensive ones, `max_windows: 1` matches `_best_continuous_window` exactly, `max_windows: null` matches the unbounded path exactly, a generously high `max_windows` also matches the unbounded path, `min_gap_minutes`/`min_slot_minutes` enforced identically to the unbounded case, infeasible window budgets return `[]` cleanly, latest-slot tiebreak on equal price. Same graceful-degradation fix as `TestSelectWithMinBlock` above, verified for the bounded-window-count DP specifically.
+
+### TestSplitTolerance (12)
+`split_tolerance_cents_kwh` / `_prefer_fewer_blocks`, on a fixture of the real 2026-10-13 topup-window prices (`test/fixtures/prices_2026-10-13_topup_window.json`) where the cost-optimal 14-slot plan splits around one 0.661 c€/kWh slot to save 0.0028 c€/kWh. Zero tolerance and an omitted argument keep the strictly optimal 2-block split; the `CHARGING_DEFAULTS` tolerance merges it into one 14-slot block within tolerance; a tolerance smaller than the saving keeps the split; a synthetic two-cheap-pockets-around-an-expensive-middle case keeps its split; a merged plan never exceeds `max_windows` (2, 3, 4), keeps the exact slot total and honours the minimum block length; `max_windows: 1` is unchanged; an infeasible single block (candidates with a time hole) keeps the split and emits no warning; the default lives in `CHARGING_DEFAULTS` and reaches `Config`; `translate_config` does not expose the key; validation rejects a negative value; and `build_plan`'s "optimal" comparison stays strictly optimal (avg_optimal 0.5926 vs delivered 0.5954).
 
 
 #### Plan output
