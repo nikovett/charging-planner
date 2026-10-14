@@ -4605,9 +4605,9 @@ class TestSplitTolerance(unittest.TestCase):
         self.assertTrue(any("split_tolerance_cents_kwh" in e for e in errors))
 
     def test_plan_optimal_comparison_stays_strictly_optimal(self):
-        # The plan's "optimal" flags / avg_optimal are the unconstrained lower
-        # bound: build_plan must not apply the tolerance there, so the
-        # dashboard shows what merging cost.
+        # The plan's "optimal" flags / avg_optimal are the strictly cost-optimal
+        # comparison (cheapest ignoring the window): build_plan must not apply
+        # the tolerance there.
         import charging_planner as cp
         slots = self._real_day()
         merged = select_charging_windows(slots, 210, min_slot_minutes=30,
