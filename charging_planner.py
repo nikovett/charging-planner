@@ -1536,7 +1536,7 @@ def select_charging_windows(
     max_windows: Optional[int] = None,
     max_price: Optional[float] = None,
     min_slot_minutes: int = 15,
-    min_gap_minutes: int = 15,
+    min_gap_minutes: int = CHARGING_DEFAULTS["min_gap_minutes"],
     _log: bool = True,
     split_tolerance_cents_kwh: float = 0.0,
 ) -> list[Slot]:
@@ -1557,7 +1557,7 @@ def select_charging_windows_with_info(
     max_windows: Optional[int] = None,
     max_price: Optional[float] = None,
     min_slot_minutes: int = 15,
-    min_gap_minutes: int = 15,
+    min_gap_minutes: int = CHARGING_DEFAULTS["min_gap_minutes"],
     _log: bool = True,
     split_tolerance_cents_kwh: float = 0.0,
 ) -> tuple[list[Slot], Optional[dict]]:
