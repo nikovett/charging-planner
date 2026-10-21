@@ -2828,6 +2828,38 @@ class TestBestContinuousWindow(unittest.TestCase):
             self.assertEqual(result[i].end, result[i + 1].start)
 
 
+    def test_equal_cost_windows_resolve_to_the_latest(self):
+        # Flat prices: every 4-slot window costs the same. The latest-preferred
+        # tie-break (as in the multi-block DP) must pick the last four slots.
+        slots = self._slots(8)
+        result = _best_continuous_window(slots, slots, n_slots=4)
+        self.assertEqual([s.start for s in result], [s.start for s in slots[4:8]])
+
+    def test_two_equal_dips_pick_the_later_one(self):
+        slots = self._slots(12)
+        for i in (1, 2, 3, 4, 8, 9, 10, 11):
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        result = _best_continuous_window(slots, slots, n_slots=4)
+        self.assertEqual(result[0].start, slots[8].start)
+
+    def test_strictly_cheaper_earlier_window_still_wins(self):
+        slots = self._slots(12)
+        for i in (1, 2, 3, 4):
+            slots[i] = replace(slots[i], price_eur_kwh=0.005)
+        for i in (8, 9, 10, 11):
+            slots[i] = replace(slots[i], price_eur_kwh=0.01)
+        result = _best_continuous_window(slots, slots, n_slots=4)
+        self.assertEqual(result[0].start, slots[1].start)
+
+    def test_max_windows_1_breaks_ties_like_the_multi_block_path(self):
+        # Same flat input through the public selector: max_windows=1 and
+        # max_windows=None must agree on which slots win an equal-cost tie.
+        slots = self._slots(16)
+        single = select_charging_windows(slots, 120, max_windows=1, _log=False)
+        multi = select_charging_windows(slots, 120, max_windows=None, _log=False)
+        self.assertEqual([s.start for s in single], [s.start for s in multi])
+
+
 class TestSelectSpillover(unittest.TestCase):
 
     def _window_utc(self, start_hhmm, end_hhmm):

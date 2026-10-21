@@ -2045,7 +2045,12 @@ def _best_continuous_window(
             continue
         if all(s.start in candidate_starts for s in window):
             avg = sum(s.price_eur_kwh for s in window) / n_slots
-            if avg <= best_avg:
+            # Scanning from the latest start backwards, an earlier window must be
+            # strictly cheaper to replace the current pick, so equal-cost windows
+            # resolve to the latest one — the same latest-preferred tie-break as the
+            # multi-block DP (_select_with_min_block / _select_with_max_windows).
+            # The epsilon matches the DP reconstruction's equal-cost check.
+            if avg < best_avg - 1e-12:
                 best_avg   = avg
                 best_start = i
 
