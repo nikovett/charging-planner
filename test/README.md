@@ -1,6 +1,6 @@
 # Test Suite
 
-536 tests across five files. Run from the repo root:
+540 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -9,7 +9,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver
 Or individually:
 
 ```
-PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 383 tests, 3 skipped
+PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 387 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 38 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
@@ -20,7 +20,7 @@ PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 4
 
 ---
 
-## test_charging_planner.py (383 tests)
+## test_charging_planner.py (387 tests)
 
 #### Config
 
@@ -104,8 +104,8 @@ Splits a slot list into inside/outside the preferred window. Overnight windows, 
 ### TestSelectChargingWindows (7)
 High-level slot selection: cheapest slots selected, required minutes met, price ceiling respected, `max_windows: 1` returns one block, `min_slot_minutes` enforced.
 
-### TestBestContinuousWindow (3)
-Returns the cheapest continuous run; respects temporal continuity (index adjacency is not sufficient); handles partial coverage.
+### TestBestContinuousWindow (7)
+Returns the cheapest continuous run; respects temporal continuity (index adjacency is not sufficient); handles partial coverage. Equal-cost windows resolve to the latest (flat prices, two equal dips), a strictly cheaper earlier window still wins, and `max_windows: 1` breaks ties the same way as the multi-block path.
 
 ### TestSelectSpillover (5)
 Spillover from outside the preferred window: not triggered when window is satisfied, stays before window end, `max_windows: 1` extends leftward, handles remaining < min slot.

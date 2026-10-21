@@ -248,7 +248,7 @@ The day-range computation itself (`_day_range_label`) is a shared, module-level 
 `select_charging_windows` dispatches on `max_windows`:
 
 ### `max_windows: 1`
-Slides a window of `required_hours` over all candidates, picks the cheapest contiguous block (`_best_continuous_window`).
+Slides a window of `required_hours` over all candidates, picks the cheapest contiguous block (`_best_continuous_window`). Scans from the latest start backwards and an earlier window must be *strictly* cheaper (by more than 1e-12) to replace the pick, so equal-cost windows resolve to the **latest** — the same latest-preferred tie-break as the multi-block DP. (Until this was fixed the scan used `<=` and preferred the earliest window on ties, an unintended inconsistency; no deployed profile used `max_windows: 1`.)
 
 ### `max_windows: null` (unlimited, default)
 Dynamic programming: finds the globally cheapest combination of blocks covering exactly `required_hours`, with no cap on how many blocks (`_select_with_min_block`).
@@ -477,8 +477,8 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 **The first reorganization pass had three real defects, found by scrutiny after the fact, not by the verification used at the time.** Checking that the sorted set of `def test_...` method names was identical before and after (proving no test content was lost or duplicated) is necessary but not sufficient — it says nothing about *non-test* content: two module-level helper functions (`_make_output_plan`, `_capture_stdout`) got silently absorbed into an unrelated class's block and ended up ~1500 lines from the only place they're used, because the extraction only tracked class boundaries and multi-line fixture assignments, not `def _helper(...)` or single-line `UPPER_CASE = "..."` constants between classes. Worse: `if __name__ == "__main__": unittest.main()` ended up stranded mid-file — harmless under `python -m unittest` (module-based discovery finds every class regardless of where that block sits) but confirmed to silently drop the last 67 of 335 tests when the file is run directly (`python test_charging_planner.py`), exactly the kind of thing "run the suite, it passed" doesn't catch if the *invocation method itself* doesn't exercise the broken path. All three fixed; verified this time by both invocation methods, not just one.
 
-536 tests, 3 skipped:
-- `test/test_charging_planner.py` (383) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
+540 tests, 3 skipped:
+- `test/test_charging_planner.py` (387) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
 - `test/test_deliver.py` (38) — redundant-delivery protection: full decision matrix, persisted-record read/write, `dispatch()`-level integration
 - `test/test_deliver_chargeamps.py` (46) — login/cache, connector mode, period fields, period timing
 - `test/test_deliver_easee.py` (26) — day-of-week mapping, weekly/basic plan payloads, deliver routing
