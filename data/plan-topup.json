@@ -1,620 +1,44 @@
 {
   "version": 1,
-  "date": "2026-11-04",
+  "date": "2026-11-05",
   "area": "FI",
   "price_source": "ENTSO-E",
   "timezone": "Europe/Helsinki",
-  "generated_at": "2026-11-04T19:55:36.097117+00:00",
+  "generated_at": "2026-11-05T14:00:30.246124+00:00",
   "utc_offset_hours": 2,
   "price_stats": {
-    "min_cents_kwh": 0.203,
-    "max_cents_kwh": 1.13,
-    "avg_cents_kwh": 0.6028
+    "min_cents_kwh": 0.529,
+    "max_cents_kwh": 21.705,
+    "avg_cents_kwh": 6.7562
   },
   "required_minutes": 210,
   "retained_minutes": 0,
   "max_windows": null,
   "total_minutes": 210,
-  "avg_price_cents_kwh": 0.2429,
-  "avg_optimal_price_cents_kwh": 0.2417,
+  "avg_price_cents_kwh": 0.7751,
+  "avg_optimal_price_cents_kwh": 0.6306,
   "windows_before_merge": 2,
-  "merge_extra_cost_cents_kwh": 0.0011,
+  "merge_extra_cost_cents_kwh": 0.0241,
   "preferred_window_start": "21:00",
   "preferred_window_end": "06:30",
-  "configured_window_start_utc": "2026-11-04T19:00:00+00:00",
-  "configured_window_end_utc": "2026-11-05T04:30:00+00:00",
+  "configured_window_start_utc": "2026-11-05T19:00:00+00:00",
+  "configured_window_end_utc": "2026-11-06T04:30:00+00:00",
   "schedule_uses_forecast": false,
   "windows": [
     {
-      "start": "23:45",
-      "end": "03:15",
+      "start": "21:00",
+      "end": "00:30",
       "duration_minutes": 210,
-      "avg_price_cents_kwh": 0.2429
+      "avg_price_cents_kwh": 0.7751
     }
   ],
   "window_starts_utc": [
-    "2026-11-04T21:45:00+00:00"
+    "2026-11-05T19:00:00+00:00"
   ],
   "window_ends_utc": [
-    "2026-11-05T01:15:00+00:00"
+    "2026-11-05T22:30:00+00:00"
   ],
   "price_slots": [
-    {
-      "start_utc": "2026-11-02T23:00:00+00:00",
-      "price_cents_kwh": 0.625,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-02T23:15:00+00:00",
-      "price_cents_kwh": 0.6,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-02T23:30:00+00:00",
-      "price_cents_kwh": 0.545,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-02T23:45:00+00:00",
-      "price_cents_kwh": 0.537,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T00:00:00+00:00",
-      "price_cents_kwh": 0.552,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T00:15:00+00:00",
-      "price_cents_kwh": 0.517,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T00:30:00+00:00",
-      "price_cents_kwh": 0.495,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T00:45:00+00:00",
-      "price_cents_kwh": 0.48,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T01:00:00+00:00",
-      "price_cents_kwh": 0.496,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T01:15:00+00:00",
-      "price_cents_kwh": 0.475,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T01:30:00+00:00",
-      "price_cents_kwh": 0.473,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T01:45:00+00:00",
-      "price_cents_kwh": 0.465,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T02:00:00+00:00",
-      "price_cents_kwh": 0.48,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T02:15:00+00:00",
-      "price_cents_kwh": 0.495,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T02:30:00+00:00",
-      "price_cents_kwh": 0.47,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T02:45:00+00:00",
-      "price_cents_kwh": 0.452,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T03:00:00+00:00",
-      "price_cents_kwh": 0.48,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T03:15:00+00:00",
-      "price_cents_kwh": 0.483,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T03:30:00+00:00",
-      "price_cents_kwh": 0.5,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T03:45:00+00:00",
-      "price_cents_kwh": 0.513,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T04:00:00+00:00",
-      "price_cents_kwh": 0.491,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T04:15:00+00:00",
-      "price_cents_kwh": 0.5,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T04:30:00+00:00",
-      "price_cents_kwh": 0.547,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T04:45:00+00:00",
-      "price_cents_kwh": 0.6,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T05:00:00+00:00",
-      "price_cents_kwh": 0.516,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T05:15:00+00:00",
-      "price_cents_kwh": 0.697,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T05:30:00+00:00",
-      "price_cents_kwh": 1.081,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T05:45:00+00:00",
-      "price_cents_kwh": 1.147,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T06:00:00+00:00",
-      "price_cents_kwh": 1.399,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T06:15:00+00:00",
-      "price_cents_kwh": 1.496,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T06:30:00+00:00",
-      "price_cents_kwh": 1.465,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T06:45:00+00:00",
-      "price_cents_kwh": 1.665,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T07:00:00+00:00",
-      "price_cents_kwh": 1.949,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T07:15:00+00:00",
-      "price_cents_kwh": 1.907,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T07:30:00+00:00",
-      "price_cents_kwh": 1.477,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T07:45:00+00:00",
-      "price_cents_kwh": 1.623,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T08:00:00+00:00",
-      "price_cents_kwh": 1.624,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T08:15:00+00:00",
-      "price_cents_kwh": 1.423,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T08:30:00+00:00",
-      "price_cents_kwh": 1.365,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T08:45:00+00:00",
-      "price_cents_kwh": 1.542,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T09:00:00+00:00",
-      "price_cents_kwh": 1.482,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T09:15:00+00:00",
-      "price_cents_kwh": 1.408,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T09:30:00+00:00",
-      "price_cents_kwh": 1.585,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T09:45:00+00:00",
-      "price_cents_kwh": 1.965,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T10:00:00+00:00",
-      "price_cents_kwh": 1.097,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T10:15:00+00:00",
-      "price_cents_kwh": 1.473,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T10:30:00+00:00",
-      "price_cents_kwh": 1.97,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T10:45:00+00:00",
-      "price_cents_kwh": 2.259,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T11:00:00+00:00",
-      "price_cents_kwh": 1.028,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T11:15:00+00:00",
-      "price_cents_kwh": 1.353,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T11:30:00+00:00",
-      "price_cents_kwh": 1.831,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T11:45:00+00:00",
-      "price_cents_kwh": 2.177,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T12:00:00+00:00",
-      "price_cents_kwh": 1.584,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T12:15:00+00:00",
-      "price_cents_kwh": 1.949,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T12:30:00+00:00",
-      "price_cents_kwh": 2.36,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T12:45:00+00:00",
-      "price_cents_kwh": 3.25,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T13:00:00+00:00",
-      "price_cents_kwh": 1.936,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T13:15:00+00:00",
-      "price_cents_kwh": 2.506,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T13:30:00+00:00",
-      "price_cents_kwh": 2.776,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T13:45:00+00:00",
-      "price_cents_kwh": 2.655,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T14:00:00+00:00",
-      "price_cents_kwh": 2.368,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T14:15:00+00:00",
-      "price_cents_kwh": 2.638,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T14:30:00+00:00",
-      "price_cents_kwh": 2.999,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T14:45:00+00:00",
-      "price_cents_kwh": 3.593,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T15:00:00+00:00",
-      "price_cents_kwh": 2.821,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T15:15:00+00:00",
-      "price_cents_kwh": 4.0,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T15:30:00+00:00",
-      "price_cents_kwh": 5.341,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T15:45:00+00:00",
-      "price_cents_kwh": 10.341,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T16:00:00+00:00",
-      "price_cents_kwh": 5.408,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T16:15:00+00:00",
-      "price_cents_kwh": 13.238,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T16:30:00+00:00",
-      "price_cents_kwh": 15.0,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T16:45:00+00:00",
-      "price_cents_kwh": 21.706,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T17:00:00+00:00",
-      "price_cents_kwh": 20.981,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T17:15:00+00:00",
-      "price_cents_kwh": 22.309,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T17:30:00+00:00",
-      "price_cents_kwh": 25.0,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T17:45:00+00:00",
-      "price_cents_kwh": 25.859,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T18:00:00+00:00",
-      "price_cents_kwh": 23.438,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T18:15:00+00:00",
-      "price_cents_kwh": 23.682,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T18:30:00+00:00",
-      "price_cents_kwh": 28.147,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T18:45:00+00:00",
-      "price_cents_kwh": 30.831,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T19:00:00+00:00",
-      "price_cents_kwh": 23.684,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T19:15:00+00:00",
-      "price_cents_kwh": 24.499,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T19:30:00+00:00",
-      "price_cents_kwh": 30.0,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T19:45:00+00:00",
-      "price_cents_kwh": 27.717,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T20:00:00+00:00",
-      "price_cents_kwh": 29.767,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T20:15:00+00:00",
-      "price_cents_kwh": 27.465,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T20:30:00+00:00",
-      "price_cents_kwh": 24.859,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T20:45:00+00:00",
-      "price_cents_kwh": 23.339,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T21:00:00+00:00",
-      "price_cents_kwh": 25.418,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T21:15:00+00:00",
-      "price_cents_kwh": 24.276,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T21:30:00+00:00",
-      "price_cents_kwh": 22.155,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T21:45:00+00:00",
-      "price_cents_kwh": 16.026,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T22:00:00+00:00",
-      "price_cents_kwh": 23.891,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T22:15:00+00:00",
-      "price_cents_kwh": 15.667,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T22:30:00+00:00",
-      "price_cents_kwh": 10.492,
-      "charging": false,
-      "optimal": false
-    },
-    {
-      "start_utc": "2026-11-03T22:45:00+00:00",
-      "price_cents_kwh": 3.991,
-      "charging": false,
-      "optimal": false
-    },
     {
       "start_utc": "2026-11-03T23:00:00+00:00",
       "price_cents_kwh": 16.486,
@@ -1159,97 +583,97 @@
       "start_utc": "2026-11-04T21:30:00+00:00",
       "price_cents_kwh": 0.253,
       "charging": false,
-      "optimal": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-04T21:45:00+00:00",
       "price_cents_kwh": 0.252,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-04T22:00:00+00:00",
       "price_cents_kwh": 0.252,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-04T22:15:00+00:00",
       "price_cents_kwh": 0.205,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-04T22:30:00+00:00",
       "price_cents_kwh": 0.204,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-04T22:45:00+00:00",
       "price_cents_kwh": 0.203,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-04T23:00:00+00:00",
       "price_cents_kwh": 0.209,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-04T23:15:00+00:00",
       "price_cents_kwh": 0.269,
-      "charging": true,
+      "charging": false,
       "optimal": false
     },
     {
       "start_utc": "2026-11-04T23:30:00+00:00",
       "price_cents_kwh": 0.268,
-      "charging": true,
+      "charging": false,
       "optimal": false
     },
     {
       "start_utc": "2026-11-04T23:45:00+00:00",
       "price_cents_kwh": 0.258,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T00:00:00+00:00",
       "price_cents_kwh": 0.253,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T00:15:00+00:00",
       "price_cents_kwh": 0.268,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T00:30:00+00:00",
       "price_cents_kwh": 0.253,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T00:45:00+00:00",
       "price_cents_kwh": 0.253,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T01:00:00+00:00",
       "price_cents_kwh": 0.253,
-      "charging": true,
-      "optimal": true
+      "charging": false,
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T01:15:00+00:00",
       "price_cents_kwh": 0.268,
       "charging": false,
-      "optimal": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T01:30:00+00:00",
@@ -1627,814 +1051,1390 @@
       "start_utc": "2026-11-05T17:00:00+00:00",
       "price_cents_kwh": 0.627,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T17:15:00+00:00",
       "price_cents_kwh": 0.639,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T17:30:00+00:00",
       "price_cents_kwh": 0.641,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T17:45:00+00:00",
       "price_cents_kwh": 0.639,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T18:00:00+00:00",
       "price_cents_kwh": 0.605,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T18:15:00+00:00",
       "price_cents_kwh": 0.597,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T18:30:00+00:00",
       "price_cents_kwh": 0.579,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T18:45:00+00:00",
       "price_cents_kwh": 0.529,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T19:00:00+00:00",
       "price_cents_kwh": 0.669,
-      "charging": false,
-      "optimal": false
+      "charging": true,
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T19:15:00+00:00",
       "price_cents_kwh": 0.628,
-      "charging": false,
-      "optimal": false
+      "charging": true,
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T19:30:00+00:00",
       "price_cents_kwh": 0.542,
-      "charging": false,
-      "optimal": false
+      "charging": true,
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T19:45:00+00:00",
       "price_cents_kwh": 0.579,
-      "charging": false,
-      "optimal": false
+      "charging": true,
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T20:00:00+00:00",
       "price_cents_kwh": 0.799,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T20:15:00+00:00",
       "price_cents_kwh": 0.827,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T20:30:00+00:00",
       "price_cents_kwh": 0.827,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T20:45:00+00:00",
       "price_cents_kwh": 0.827,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T21:00:00+00:00",
       "price_cents_kwh": 0.99,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T21:15:00+00:00",
       "price_cents_kwh": 0.902,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T21:30:00+00:00",
       "price_cents_kwh": 0.836,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T21:45:00+00:00",
       "price_cents_kwh": 0.8,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T22:00:00+00:00",
       "price_cents_kwh": 0.826,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T22:15:00+00:00",
       "price_cents_kwh": 0.8,
-      "charging": false,
+      "charging": true,
       "optimal": false
     },
     {
       "start_utc": "2026-11-05T22:30:00+00:00",
       "price_cents_kwh": 0.799,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T22:45:00+00:00",
       "price_cents_kwh": 0.755,
       "charging": false,
-      "optimal": false
+      "optimal": true
     },
     {
       "start_utc": "2026-11-05T23:00:00+00:00",
-      "price_cents_kwh": 0.8108,
+      "price_cents_kwh": 0.986,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T23:15:00+00:00",
-      "price_cents_kwh": 0.8108,
+      "price_cents_kwh": 0.981,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T23:30:00+00:00",
-      "price_cents_kwh": 0.8108,
+      "price_cents_kwh": 0.919,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-05T23:45:00+00:00",
-      "price_cents_kwh": 0.8108,
+      "price_cents_kwh": 0.911,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T00:00:00+00:00",
-      "price_cents_kwh": 0.8868,
+      "price_cents_kwh": 0.867,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T00:15:00+00:00",
-      "price_cents_kwh": 0.8868,
+      "price_cents_kwh": 0.918,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T00:30:00+00:00",
-      "price_cents_kwh": 0.8868,
+      "price_cents_kwh": 0.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T00:45:00+00:00",
-      "price_cents_kwh": 0.8868,
+      "price_cents_kwh": 1.014,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T01:00:00+00:00",
-      "price_cents_kwh": 1.3776,
+      "price_cents_kwh": 0.827,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T01:15:00+00:00",
-      "price_cents_kwh": 1.3776,
+      "price_cents_kwh": 0.901,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T01:30:00+00:00",
-      "price_cents_kwh": 1.3776,
+      "price_cents_kwh": 1.008,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T01:45:00+00:00",
-      "price_cents_kwh": 1.3776,
+      "price_cents_kwh": 1.311,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T02:00:00+00:00",
-      "price_cents_kwh": 1.7294,
+      "price_cents_kwh": 0.717,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T02:15:00+00:00",
-      "price_cents_kwh": 1.7294,
+      "price_cents_kwh": 0.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T02:30:00+00:00",
-      "price_cents_kwh": 1.7294,
+      "price_cents_kwh": 1.173,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T02:45:00+00:00",
-      "price_cents_kwh": 1.7294,
+      "price_cents_kwh": 1.938,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T03:00:00+00:00",
-      "price_cents_kwh": 2.4796,
+      "price_cents_kwh": 0.73,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T03:15:00+00:00",
-      "price_cents_kwh": 2.4796,
+      "price_cents_kwh": 0.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T03:30:00+00:00",
-      "price_cents_kwh": 2.4796,
+      "price_cents_kwh": 1.581,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T03:45:00+00:00",
-      "price_cents_kwh": 2.4796,
+      "price_cents_kwh": 2.817,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T04:00:00+00:00",
-      "price_cents_kwh": 4.238,
+      "price_cents_kwh": 0.714,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T04:15:00+00:00",
-      "price_cents_kwh": 4.238,
+      "price_cents_kwh": 1.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T04:30:00+00:00",
-      "price_cents_kwh": 4.238,
+      "price_cents_kwh": 2.281,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T04:45:00+00:00",
-      "price_cents_kwh": 4.238,
+      "price_cents_kwh": 3.604,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T05:00:00+00:00",
-      "price_cents_kwh": 7.2219,
+      "price_cents_kwh": 1.395,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T05:15:00+00:00",
-      "price_cents_kwh": 7.2219,
+      "price_cents_kwh": 2.8,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T05:30:00+00:00",
-      "price_cents_kwh": 7.2219,
+      "price_cents_kwh": 2.063,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T05:45:00+00:00",
-      "price_cents_kwh": 7.2219,
+      "price_cents_kwh": 3.778,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T06:00:00+00:00",
-      "price_cents_kwh": 9.1017,
+      "price_cents_kwh": 3.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T06:15:00+00:00",
-      "price_cents_kwh": 9.1017,
+      "price_cents_kwh": 10.984,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T06:30:00+00:00",
-      "price_cents_kwh": 9.1017,
+      "price_cents_kwh": 15.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T06:45:00+00:00",
-      "price_cents_kwh": 9.1017,
+      "price_cents_kwh": 18.57,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T07:00:00+00:00",
-      "price_cents_kwh": 11.1647,
+      "price_cents_kwh": 14.992,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T07:15:00+00:00",
-      "price_cents_kwh": 11.1647,
+      "price_cents_kwh": 16.784,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T07:30:00+00:00",
-      "price_cents_kwh": 11.1647,
+      "price_cents_kwh": 18.899,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T07:45:00+00:00",
-      "price_cents_kwh": 11.1647,
+      "price_cents_kwh": 21.705,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T08:00:00+00:00",
-      "price_cents_kwh": 10.7563,
+      "price_cents_kwh": 14.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T08:15:00+00:00",
-      "price_cents_kwh": 10.7563,
+      "price_cents_kwh": 15.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T08:30:00+00:00",
-      "price_cents_kwh": 10.7563,
+      "price_cents_kwh": 15.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T08:45:00+00:00",
-      "price_cents_kwh": 10.7563,
+      "price_cents_kwh": 16.422,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T09:00:00+00:00",
-      "price_cents_kwh": 11.6075,
+      "price_cents_kwh": 14.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T09:15:00+00:00",
-      "price_cents_kwh": 11.6075,
+      "price_cents_kwh": 15.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T09:30:00+00:00",
-      "price_cents_kwh": 11.6075,
+      "price_cents_kwh": 17.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T09:45:00+00:00",
-      "price_cents_kwh": 11.6075,
+      "price_cents_kwh": 17.959,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T10:00:00+00:00",
-      "price_cents_kwh": 12.6352,
+      "price_cents_kwh": 17.545,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T10:15:00+00:00",
-      "price_cents_kwh": 12.6352,
+      "price_cents_kwh": 17.082,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T10:30:00+00:00",
-      "price_cents_kwh": 12.6352,
+      "price_cents_kwh": 16.485,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T10:45:00+00:00",
-      "price_cents_kwh": 12.6352,
+      "price_cents_kwh": 17.378,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T11:00:00+00:00",
-      "price_cents_kwh": 11.9487,
+      "price_cents_kwh": 18.466,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T11:15:00+00:00",
-      "price_cents_kwh": 11.9487,
+      "price_cents_kwh": 19.981,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T11:30:00+00:00",
-      "price_cents_kwh": 11.9487,
+      "price_cents_kwh": 14.993,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T11:45:00+00:00",
-      "price_cents_kwh": 11.9487,
+      "price_cents_kwh": 14.244,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T12:00:00+00:00",
-      "price_cents_kwh": 10.1251,
+      "price_cents_kwh": 14.826,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T12:15:00+00:00",
-      "price_cents_kwh": 10.1251,
+      "price_cents_kwh": 14.826,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T12:30:00+00:00",
-      "price_cents_kwh": 10.1251,
+      "price_cents_kwh": 14.363,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T12:45:00+00:00",
-      "price_cents_kwh": 10.1251,
+      "price_cents_kwh": 10.988,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T13:00:00+00:00",
-      "price_cents_kwh": 9.441,
+      "price_cents_kwh": 14.996,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T13:15:00+00:00",
-      "price_cents_kwh": 9.441,
+      "price_cents_kwh": 14.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T13:30:00+00:00",
-      "price_cents_kwh": 9.441,
+      "price_cents_kwh": 14.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T13:45:00+00:00",
-      "price_cents_kwh": 9.441,
+      "price_cents_kwh": 14.929,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T14:00:00+00:00",
-      "price_cents_kwh": 8.1756,
+      "price_cents_kwh": 14.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T14:15:00+00:00",
-      "price_cents_kwh": 8.1756,
+      "price_cents_kwh": 14.994,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T14:30:00+00:00",
-      "price_cents_kwh": 8.1756,
+      "price_cents_kwh": 14.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T14:45:00+00:00",
-      "price_cents_kwh": 8.1756,
+      "price_cents_kwh": 13.325,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T15:00:00+00:00",
-      "price_cents_kwh": 7.2817,
+      "price_cents_kwh": 19.812,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T15:15:00+00:00",
-      "price_cents_kwh": 7.2817,
+      "price_cents_kwh": 19.899,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T15:30:00+00:00",
-      "price_cents_kwh": 7.2817,
+      "price_cents_kwh": 17.613,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T15:45:00+00:00",
-      "price_cents_kwh": 7.2817,
+      "price_cents_kwh": 15.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T16:00:00+00:00",
-      "price_cents_kwh": 6.6047,
+      "price_cents_kwh": 19.902,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T16:15:00+00:00",
-      "price_cents_kwh": 6.6047,
+      "price_cents_kwh": 19.353,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T16:30:00+00:00",
-      "price_cents_kwh": 6.6047,
+      "price_cents_kwh": 16.841,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T16:45:00+00:00",
-      "price_cents_kwh": 6.6047,
+      "price_cents_kwh": 15.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T17:00:00+00:00",
-      "price_cents_kwh": 8.2262,
+      "price_cents_kwh": 18.899,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T17:15:00+00:00",
-      "price_cents_kwh": 8.2262,
+      "price_cents_kwh": 15.751,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T17:30:00+00:00",
-      "price_cents_kwh": 8.2262,
+      "price_cents_kwh": 14.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T17:45:00+00:00",
-      "price_cents_kwh": 8.2262,
+      "price_cents_kwh": 11.99,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T18:00:00+00:00",
-      "price_cents_kwh": 7.2943,
+      "price_cents_kwh": 10.3,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T18:15:00+00:00",
-      "price_cents_kwh": 7.2943,
+      "price_cents_kwh": 5.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T18:30:00+00:00",
-      "price_cents_kwh": 7.2943,
+      "price_cents_kwh": 3.499,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T18:45:00+00:00",
-      "price_cents_kwh": 7.2943,
+      "price_cents_kwh": 2.799,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T19:00:00+00:00",
-      "price_cents_kwh": 6.3475,
+      "price_cents_kwh": 3.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T19:15:00+00:00",
-      "price_cents_kwh": 6.3475,
+      "price_cents_kwh": 2.742,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T19:30:00+00:00",
-      "price_cents_kwh": 6.3475,
+      "price_cents_kwh": 2.637,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T19:45:00+00:00",
-      "price_cents_kwh": 6.3475,
+      "price_cents_kwh": 1.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T20:00:00+00:00",
-      "price_cents_kwh": 6.8498,
+      "price_cents_kwh": 2.948,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T20:15:00+00:00",
-      "price_cents_kwh": 6.8498,
+      "price_cents_kwh": 3.0,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T20:30:00+00:00",
-      "price_cents_kwh": 6.8498,
+      "price_cents_kwh": 2.617,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T20:45:00+00:00",
-      "price_cents_kwh": 6.8498,
+      "price_cents_kwh": 1.949,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T21:00:00+00:00",
-      "price_cents_kwh": 5.7378,
+      "price_cents_kwh": 2.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T21:15:00+00:00",
-      "price_cents_kwh": 5.7378,
+      "price_cents_kwh": 2.448,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T21:30:00+00:00",
-      "price_cents_kwh": 5.7378,
+      "price_cents_kwh": 1.157,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T21:45:00+00:00",
-      "price_cents_kwh": 5.7378,
+      "price_cents_kwh": 0.999,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T22:00:00+00:00",
-      "price_cents_kwh": 4.5823,
+      "price_cents_kwh": 1.932,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T22:15:00+00:00",
-      "price_cents_kwh": 4.5823,
+      "price_cents_kwh": 1.337,
       "charging": false,
-      "optimal": false,
-      "forecasted": true
+      "optimal": false
     },
     {
       "start_utc": "2026-11-06T22:30:00+00:00",
-      "price_cents_kwh": 4.5823,
+      "price_cents_kwh": 1.018,
+      "charging": false,
+      "optimal": false
+    },
+    {
+      "start_utc": "2026-11-06T22:45:00+00:00",
+      "price_cents_kwh": 0.931,
+      "charging": false,
+      "optimal": false
+    },
+    {
+      "start_utc": "2026-11-06T23:00:00+00:00",
+      "price_cents_kwh": 2.4801,
       "charging": false,
       "optimal": false,
       "forecasted": true
     },
     {
-      "start_utc": "2026-11-06T22:45:00+00:00",
-      "price_cents_kwh": 4.5823,
+      "start_utc": "2026-11-06T23:15:00+00:00",
+      "price_cents_kwh": 2.4801,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-06T23:30:00+00:00",
+      "price_cents_kwh": 2.4801,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-06T23:45:00+00:00",
+      "price_cents_kwh": 2.4801,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T00:00:00+00:00",
+      "price_cents_kwh": 0.6137,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T00:15:00+00:00",
+      "price_cents_kwh": 0.6137,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T00:30:00+00:00",
+      "price_cents_kwh": 0.6137,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T00:45:00+00:00",
+      "price_cents_kwh": 0.6137,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T01:00:00+00:00",
+      "price_cents_kwh": 0.5997,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T01:15:00+00:00",
+      "price_cents_kwh": 0.5997,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T01:30:00+00:00",
+      "price_cents_kwh": 0.5997,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T01:45:00+00:00",
+      "price_cents_kwh": 0.5997,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T02:00:00+00:00",
+      "price_cents_kwh": 0.7592,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T02:15:00+00:00",
+      "price_cents_kwh": 0.7592,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T02:30:00+00:00",
+      "price_cents_kwh": 0.7592,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T02:45:00+00:00",
+      "price_cents_kwh": 0.7592,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T03:00:00+00:00",
+      "price_cents_kwh": 0.9378,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T03:15:00+00:00",
+      "price_cents_kwh": 0.9378,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T03:30:00+00:00",
+      "price_cents_kwh": 0.9378,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T03:45:00+00:00",
+      "price_cents_kwh": 0.9378,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T04:00:00+00:00",
+      "price_cents_kwh": 0.8676,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T04:15:00+00:00",
+      "price_cents_kwh": 0.8676,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T04:30:00+00:00",
+      "price_cents_kwh": 0.8676,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T04:45:00+00:00",
+      "price_cents_kwh": 0.8676,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T05:00:00+00:00",
+      "price_cents_kwh": 0.4358,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T05:15:00+00:00",
+      "price_cents_kwh": 0.4358,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T05:30:00+00:00",
+      "price_cents_kwh": 0.4358,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T05:45:00+00:00",
+      "price_cents_kwh": 0.4358,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T06:00:00+00:00",
+      "price_cents_kwh": 0.7704,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T06:15:00+00:00",
+      "price_cents_kwh": 0.7704,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T06:30:00+00:00",
+      "price_cents_kwh": 0.7704,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T06:45:00+00:00",
+      "price_cents_kwh": 0.7704,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T07:00:00+00:00",
+      "price_cents_kwh": 0.7637,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T07:15:00+00:00",
+      "price_cents_kwh": 0.7637,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T07:30:00+00:00",
+      "price_cents_kwh": 0.7637,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T07:45:00+00:00",
+      "price_cents_kwh": 0.7637,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T08:00:00+00:00",
+      "price_cents_kwh": 0.7112,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T08:15:00+00:00",
+      "price_cents_kwh": 0.7112,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T08:30:00+00:00",
+      "price_cents_kwh": 0.7112,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T08:45:00+00:00",
+      "price_cents_kwh": 0.7112,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T09:00:00+00:00",
+      "price_cents_kwh": 0.6299,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T09:15:00+00:00",
+      "price_cents_kwh": 0.6299,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T09:30:00+00:00",
+      "price_cents_kwh": 0.6299,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T09:45:00+00:00",
+      "price_cents_kwh": 0.6299,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T10:00:00+00:00",
+      "price_cents_kwh": 0.3387,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T10:15:00+00:00",
+      "price_cents_kwh": 0.3387,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T10:30:00+00:00",
+      "price_cents_kwh": 0.3387,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T10:45:00+00:00",
+      "price_cents_kwh": 0.3387,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T11:00:00+00:00",
+      "price_cents_kwh": 0.0225,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T11:15:00+00:00",
+      "price_cents_kwh": 0.0225,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T11:30:00+00:00",
+      "price_cents_kwh": 0.0225,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T11:45:00+00:00",
+      "price_cents_kwh": 0.0225,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T12:00:00+00:00",
+      "price_cents_kwh": -0.181,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T12:15:00+00:00",
+      "price_cents_kwh": -0.181,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T12:30:00+00:00",
+      "price_cents_kwh": -0.181,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T12:45:00+00:00",
+      "price_cents_kwh": -0.181,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T13:00:00+00:00",
+      "price_cents_kwh": -0.0879,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T13:15:00+00:00",
+      "price_cents_kwh": -0.0879,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T13:30:00+00:00",
+      "price_cents_kwh": -0.0879,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T13:45:00+00:00",
+      "price_cents_kwh": -0.0879,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T14:00:00+00:00",
+      "price_cents_kwh": 0.3828,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T14:15:00+00:00",
+      "price_cents_kwh": 0.3828,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T14:30:00+00:00",
+      "price_cents_kwh": 0.3828,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T14:45:00+00:00",
+      "price_cents_kwh": 0.3828,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T15:00:00+00:00",
+      "price_cents_kwh": 0.7328,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T15:15:00+00:00",
+      "price_cents_kwh": 0.7328,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T15:30:00+00:00",
+      "price_cents_kwh": 0.7328,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T15:45:00+00:00",
+      "price_cents_kwh": 0.7328,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T16:00:00+00:00",
+      "price_cents_kwh": 0.8062,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T16:15:00+00:00",
+      "price_cents_kwh": 0.8062,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T16:30:00+00:00",
+      "price_cents_kwh": 0.8062,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T16:45:00+00:00",
+      "price_cents_kwh": 0.8062,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T17:00:00+00:00",
+      "price_cents_kwh": 0.8509,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T17:15:00+00:00",
+      "price_cents_kwh": 0.8509,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T17:30:00+00:00",
+      "price_cents_kwh": 0.8509,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T17:45:00+00:00",
+      "price_cents_kwh": 0.8509,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T18:00:00+00:00",
+      "price_cents_kwh": 0.7256,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T18:15:00+00:00",
+      "price_cents_kwh": 0.7256,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T18:30:00+00:00",
+      "price_cents_kwh": 0.7256,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T18:45:00+00:00",
+      "price_cents_kwh": 0.7256,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T19:00:00+00:00",
+      "price_cents_kwh": 0.3766,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T19:15:00+00:00",
+      "price_cents_kwh": 0.3766,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T19:30:00+00:00",
+      "price_cents_kwh": 0.3766,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T19:45:00+00:00",
+      "price_cents_kwh": 0.3766,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T20:00:00+00:00",
+      "price_cents_kwh": 0.4635,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T20:15:00+00:00",
+      "price_cents_kwh": 0.4635,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T20:30:00+00:00",
+      "price_cents_kwh": 0.4635,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T20:45:00+00:00",
+      "price_cents_kwh": 0.4635,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T21:00:00+00:00",
+      "price_cents_kwh": 0.4625,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T21:15:00+00:00",
+      "price_cents_kwh": 0.4625,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T21:30:00+00:00",
+      "price_cents_kwh": 0.4625,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T21:45:00+00:00",
+      "price_cents_kwh": 0.4625,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T22:00:00+00:00",
+      "price_cents_kwh": 0.2011,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T22:15:00+00:00",
+      "price_cents_kwh": 0.2011,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T22:30:00+00:00",
+      "price_cents_kwh": 0.2011,
+      "charging": false,
+      "optimal": false,
+      "forecasted": true
+    },
+    {
+      "start_utc": "2026-11-07T22:45:00+00:00",
+      "price_cents_kwh": 0.2011,
       "charging": false,
       "optimal": false,
       "forecasted": true
@@ -2446,10 +2446,10 @@
     "stackLevel": 0,
     "chargingProfilePurpose": "TxDefaultProfile",
     "chargingProfileKind": "Absolute",
-    "validFrom": "2026-11-04T21:45:00+00:00",
-    "validTo": "2026-11-05T01:15:00+00:00",
+    "validFrom": "2026-11-05T19:00:00+00:00",
+    "validTo": "2026-11-05T22:30:00+00:00",
     "chargingSchedule": {
-      "startSchedule": "2026-11-04T21:45:00+00:00",
+      "startSchedule": "2026-11-05T19:00:00+00:00",
       "duration": 12600,
       "chargingRateUnit": "W",
       "chargingSchedulePeriod": [
