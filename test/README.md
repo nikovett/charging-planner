@@ -1,6 +1,6 @@
 # Test Suite
 
-540 tests across five files. Run from the repo root:
+541 tests across five files. Run from the repo root:
 
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner test_deliver test_deliver_chargeamps test_deliver_easee test_deliver_myskoda -v
@@ -11,7 +11,7 @@ Or individually:
 ```
 PYTHONPATH=.:test:delivery python -m unittest test_charging_planner -v       # 387 tests, 3 skipped
 PYTHONPATH=.:test:delivery python -m unittest test_deliver -v                # 38 tests
-PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 46 tests
+PYTHONPATH=.:test:delivery python -m unittest test_deliver_chargeamps -v     # 47 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_easee -v          # 26 tests
 PYTHONPATH=.:test:delivery python -m unittest test_deliver_myskoda -v        # 43 tests
 ```
@@ -191,7 +191,7 @@ End-to-end through `dispatch()` with a mocked handler: a second identical run ne
 
 ---
 
-## test_deliver_chargeamps.py (46 tests)
+## test_deliver_chargeamps.py (47 tests)
 
 ### TestAnchorCalculation (5)
 Monday anchor is always Monday 00:00 local time expressed as UTC, across timezones and DST transitions.
@@ -202,8 +202,8 @@ Monday anchor is always Monday 00:00 local time expressed as UTC, across timezon
 ### TestPeriodFields (6)
 Each period has required fields, correct types, unique IDs, `from` < `to`.
 
-### TestBuildPeriodsEdgeCases (7)
-Empty plan, `Z`-suffix timestamps, consecutive windows. Regression tests for the 604800s weekly limit: `test_window_crossing_monday_midnight_wraps_to_zero` (Sun 23:45→Mon 01:00 wraps to from=0), `test_monday_window_from_any_any_plan` (Monday-only slot preserves offset), `test_normal_window_no_wrapping` (normal weekday unchanged).
+### TestBuildPeriodsEdgeCases (8)
+Empty plan, `Z`-suffix timestamps, consecutive windows. Regression tests for the 604800s weekly limit: `test_window_crossing_monday_midnight_is_split_into_sunday_and_monday` (Sun 23:45→Mon 01:00 becomes a Sunday part ending at 604800 plus a Monday part from 0), `test_sunday_evening_part_of_a_midnight_crossing_window_is_kept` (Sun 22:00→Mon 01:00 keeps all 3 h; regression for 2026-11-15), `test_monday_window_from_any_any_plan` (Monday-only slot preserves offset), `test_normal_window_no_wrapping` (normal weekday unchanged).
 
 ### TestDeliver (14)
 Full `deliver()` call: returns true on success, false on login/GET/PUT failure, passes connector ID and rate from config, reads charger state, mode restore behaviour (was On/Off/Schedule), override not activated when not charging.

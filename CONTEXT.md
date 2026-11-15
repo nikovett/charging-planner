@@ -417,6 +417,8 @@ The official Charge Amps external API (`eapi.charge.space`) does not support sch
 
 **Override mechanism.** Always reads `isCharging` before delivery. If true, activates schedule override after delivery via `PUT /api/chargepoints/{id}/{connector_id}/schedule/override` — protects the current session. Override clears automatically when the cable disconnects.
 
+**Weekly periods and the Sunday→Monday split.** The schedule is a list of `schedulePeriods` in seconds from a Monday-00:00-local anchor, and the API rejects any `to` above 604800 (7 days). A window crossing Sunday→Monday midnight is therefore delivered as **two** periods: the Sunday part from its start up to exactly 604800, and the Monday part from 0 to the original end; a window entirely on Monday is shifted by -604800. Charge Amps itself drops a part shorter than its 30-minute minimum (e.g. the 15-minute 23:45→00:00 remnant), which is expected. Until 2026-11-15 the Sunday part was discarded as "outside the 7-day limit" — it is not (`to == 604800` is accepted) — so a Sun 22:00 → Mon 01:00 plan (3 h) reached the charger as Mon 00:00–01:00 (1 h). Found because the charger showed only the Monday slot; the plan JSON, the log and the delivered record all showed the full window, so nothing in the pipeline reported the loss. Pinned by `test_sunday_evening_part_of_a_midnight_crossing_window_is_kept`. `to == 604800` being accepted is inferred from the existing "`to > 604800` is rejected" behaviour; confirm on the charger after the first affected delivery.
+
 **Override error codes treated as success:** `OverridingScheduleExists` (already active), `NoScheduleForConnector` (no active schedule).
 
 **Connector state fields** (confirmed from live API): `isCharging` (bool), `onBySchedule` / `offBySchedule`, `mode` (`"On"` / `"Off"` / `"Schedule"`), `ocppStatus`.
@@ -479,10 +481,10 @@ The only handler that delivers to the *vehicle* rather than a charger — a cate
 
 **The first reorganization pass had three real defects, found by scrutiny after the fact, not by the verification used at the time.** Checking that the sorted set of `def test_...` method names was identical before and after (proving no test content was lost or duplicated) is necessary but not sufficient — it says nothing about *non-test* content: two module-level helper functions (`_make_output_plan`, `_capture_stdout`) got silently absorbed into an unrelated class's block and ended up ~1500 lines from the only place they're used, because the extraction only tracked class boundaries and multi-line fixture assignments, not `def _helper(...)` or single-line `UPPER_CASE = "..."` constants between classes. Worse: `if __name__ == "__main__": unittest.main()` ended up stranded mid-file — harmless under `python -m unittest` (module-based discovery finds every class regardless of where that block sits) but confirmed to silently drop the last 67 of 335 tests when the file is run directly (`python test_charging_planner.py`), exactly the kind of thing "run the suite, it passed" doesn't catch if the *invocation method itself* doesn't exercise the broken path. All three fixed; verified this time by both invocation methods, not just one.
 
-540 tests, 3 skipped:
+541 tests, 3 skipped:
 - `test/test_charging_planner.py` (387) — price parsing, window resolution, slot selection DP, gap constraint, spillover, plan building, schedule resolution, retained minutes, area-based fallback chain (unit + integration), console output and GHA summary
 - `test/test_deliver.py` (38) — redundant-delivery protection: full decision matrix, persisted-record read/write, `dispatch()`-level integration
-- `test/test_deliver_chargeamps.py` (46) — login/cache, connector mode, period fields, period timing
+- `test/test_deliver_chargeamps.py` (47) — login/cache, connector mode, period fields, period timing
 - `test/test_deliver_easee.py` (26) — day-of-week mapping, weekly/basic plan payloads, deliver routing
 - `test/test_deliver_myskoda.py` (43) — slot mapping, `max_windows` validation, active-slot detection, all four charging-state branches
 

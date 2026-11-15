@@ -196,9 +196,11 @@ def _ca_build_periods(
     Fix: any period where 'to' exceeds 604800 is wrapped to the start of the
     week — from=0, to=(original_to - 604800). The slot lands at Monday 00:00
     on the charger, which is correct since the original window was Monday anyway.
-    A window crossing midnight is split: the part before midnight is discarded
-    (it falls outside the 7-day limit) and only the Monday portion is kept,
-    starting at from=0.
+    A window crossing Sunday→Monday midnight is split into two periods: the
+    Sunday part (from its start up to exactly 604800, which is within the limit)
+    and the Monday part (from=0 up to the original end). Both parts are kept —
+    discarding the Sunday part silently cut e.g. a 22:00–01:00 plan to 1 hour.
+    Charge Amps itself drops a part shorter than its 30-minute minimum.
     """
     window_starts = plan.get("window_starts_utc", [])
     window_ends   = plan.get("window_ends_utc", [])
@@ -235,13 +237,21 @@ def _ca_build_periods(
                 fr = fr - LIMIT
                 to = to - LIMIT
             else:
-                # Window crosses Sunday→Monday midnight — the Monday portion
-                # starts at 0 (Monday 00:00 on the charger).
+                # Window crosses Sunday→Monday midnight — keep both parts: the
+                # Sunday part runs up to the end of the week (to == LIMIT, which
+                # the API accepts), the Monday part starts at 0 (Monday 00:00 on
+                # the charger).
                 log.debug(
-                    "Window %s–%s crosses Monday midnight — wrapping to Monday 00:00 "
-                    "(from=0, to=%ds).",
-                    start_iso, end_iso, to - LIMIT,
+                    "Window %s–%s crosses Monday midnight — split into Sunday "
+                    "(from=%ds, to=%ds) and Monday (from=0, to=%ds).",
+                    start_iso, end_iso, fr, LIMIT, to - LIMIT,
                 )
+                periods.append({
+                    "id":         _nanoid(),
+                    "from":       fr,
+                    "to":         LIMIT,
+                    "maxCurrent": max_charging_rate,
+                })
                 fr = 0
                 to = to - LIMIT
 
