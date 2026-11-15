@@ -146,14 +146,17 @@ class TestPeriodTiming(unittest.TestCase):
         self.assertEqual(periods[0]["from"], 6 * 24 * 3600 + 20 * 3600)
 
     def test_single_window_to_offset(self):
-        # End: 2026-03-16 04:30 UTC = Monday 06:30 Helsinki — crosses midnight.
-        # Anchor advances one week; to = 628200 - 604800 = 23400s from next anchor.
+        # Window Sun 22:00 → Mon 06:30 Helsinki crosses Sunday→Monday midnight, so
+        # it is split: Sunday part up to exactly 604800, Monday part 0 → 06:30.
         periods, anchor_iso = self._periods_and_anchor(
             "2026-03-15T20:00:00+00:00",
             "2026-03-16T04:30:00+00:00",
         )
-        self.assertEqual(len(periods), 1)
-        self.assertLessEqual(periods[0]["to"], 604800)
+        self.assertEqual(len(periods), 2)
+        self.assertEqual(periods[0]["to"], 604800)
+        self.assertEqual((periods[1]["from"], periods[1]["to"]), (0, 6 * 3600 + 1800))
+        for p in periods:
+            self.assertLessEqual(p["to"], 604800)
 
     def test_window_duration_preserved(self):
         # A 4h window not crossing Monday midnight — duration exactly preserved.
@@ -280,22 +283,46 @@ class TestBuildPeriodsEdgeCases(unittest.TestCase):
             ["2026-03-16T04:30:00Z"],
         )
         periods, anchor = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
-        self.assertEqual(len(periods), 1)
-        self.assertGreater(periods[0]["to"], periods[0]["from"])
+        # Sun 22:00 → Mon 06:30 Helsinki crosses Sunday→Monday midnight: two periods.
+        self.assertEqual(len(periods), 2)
+        for p in periods:
+            self.assertGreater(p["to"], p["from"])
 
-    def test_window_crossing_monday_midnight_wraps_to_zero(self):
+    def test_window_crossing_monday_midnight_is_split_into_sunday_and_monday(self):
         # Sun 23:45 → Mon 01:00 Helsinki — to would be 608400s, exceeds 604800.
-        # Wrapped: from=0, to=608400-604800=3600 (Monday 00:00→01:00 on charger).
-        # Anchor stays this Monday — 2026-08-10 00:00 Helsinki = 2026-08-09 21:00 UTC
+        # Split: Sunday part 23:45→24:00 (to == 604800) and Monday part
+        # from=0, to=608400-604800=3600. Anchor stays this Monday —
+        # 2026-08-10 00:00 Helsinki = 2026-08-09 21:00 UTC
         plan = make_plan(
             ["2026-08-16T20:45:00+00:00"],  # Sun 23:45 Helsinki
             ["2026-08-16T22:00:00+00:00"],  # Mon 01:00 Helsinki
         )
         periods, anchor_iso = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
         self.assertEqual(anchor_iso, "2026-08-09T21:00:00Z")
-        self.assertEqual(len(periods), 1)
-        self.assertEqual(periods[0]["from"], 0)
-        self.assertEqual(periods[0]["to"], 3600)
+        self.assertEqual(len(periods), 2)
+        self.assertEqual((periods[0]["from"], periods[0]["to"]), (604800 - 900, 604800))
+        self.assertEqual((periods[1]["from"], periods[1]["to"]), (0, 3600))
+
+    def test_sunday_evening_part_of_a_midnight_crossing_window_is_kept(self):
+        # Regression (2026-11-15): topup plan Sun 22:00 → Mon 01:00 Helsinki
+        # (3 h) used to be delivered as Mon 00:00–01:00 only (1 h) because the
+        # part before midnight was discarded. Both parts must be delivered and
+        # the total duration must equal the planned window.
+        plan = make_plan(
+            ["2026-11-15T20:00:00+00:00"],  # Sun 22:00 Helsinki (EET)
+            ["2026-11-15T23:00:00+00:00"],  # Mon 01:00 Helsinki
+        )
+        periods, anchor_iso = _ca_build_periods(plan, "Europe/Helsinki", 16.0)
+        self.assertEqual(anchor_iso, "2026-11-08T22:00:00Z")   # Mon 2026-11-09 00:00 EET
+        self.assertEqual(len(periods), 2)
+        self.assertEqual((periods[0]["from"], periods[0]["to"]),
+                         (6 * 86400 + 22 * 3600, 604800))      # Sun 22:00 → 24:00
+        self.assertEqual((periods[1]["from"], periods[1]["to"]), (0, 3600))   # Mon 00:00 → 01:00
+        total = sum(p["to"] - p["from"] for p in periods)
+        self.assertEqual(total, 3 * 3600)
+        for p in periods:
+            self.assertLessEqual(p["to"], 604800)
+            self.assertGreaterEqual(p["from"], 0)
 
     def test_window_fully_on_monday_fits_in_this_week(self):
         # Mon 01:00–02:00 Helsinki: anchor = that same Monday 00:00 Helsinki.
