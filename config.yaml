@@ -19,4 +19,4 @@ profiles:
       sat-sun: { window: any-any,     required: 7 }
     max_windows: 4                                       # required by the myskoda handler (vehicle has 4 slots)
     delivery:
-      - myskoda: { vin: SKODA_VIN }                       # vin = env var holding the VIN
+      - myskoda: { vin: SKODA_VIN, set_charge_mode: TIMER }    # vin = env var holding the VIN
