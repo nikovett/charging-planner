@@ -125,9 +125,14 @@ can't be identified (no match, or more than one enabled slot's window
 overlaps "now"), or the plan needs all 4 slots so there's no room to route
 around it, delivery is skipped entirely for that run rather than risk
 interrupting the session. Charging in any other mode (MANUAL, TIMER,
-TIMER_CHARGING_WITH_CLIMATISATION) doesn't go through preferredChargingTimes
-slots at all, so all 4 are managed freely — only the charge mode itself is
-left unchanged, to avoid disturbing whatever's driving that session.
+TIMER_CHARGING_WITH_CLIMATISATION) isn't driven by one specific slot, so all 4
+are managed freely — only the charge mode itself is left unchanged, to avoid
+disturbing whatever's driving that session. `MANUAL` ignores
+preferredChargingTimes entirely; `TIMER` and `TIMER_CHARGING_WITH_CLIMATISATION`
+*do* use them, but only as a soft preference within departure-time-driven
+charging: if the car's departure deadline needs more time or a different window
+than the preferred slots allow, the vehicle overrides them to still make the
+deadline (see CONTEXT.md, MyŠkoda delivery).
 
 **Requires `max_windows` set to a value between 1 and 4** — the vehicle has
 exactly 4 preferred charging time slots. `max_windows: null` (unlimited) is

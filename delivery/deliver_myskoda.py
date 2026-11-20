@@ -463,9 +463,12 @@ def _deliver_inner(plan: dict, vin: str, entry: dict, tz_name: str) -> None:
     # The safe action depends on the active charge mode (charging.settings.preferredChargeMode):
     #
     #   MANUAL / TIMER / TIMER_CHARGING_WITH_CLIMATISATION:
-    #     These modes drive the current session directly — not via a
-    #     preferredChargingTimes slot. Safe to update slots 1..N with the
-    #     plan windows and disable any unused slots.
+    #     No single preferredChargingTimes slot drives the current session.
+    #     MANUAL ignores the slots entirely; TIMER and
+    #     TIMER_CHARGING_WITH_CLIMATISATION use them only as a soft preference
+    #     within departure-time-driven charging (the vehicle overrides them if
+    #     the deadline needs it). Safe to update slots 1..N with the plan
+    #     windows and disable any unused slots.
     #     Do NOT change the charge mode — don't interrupt the current session logic.
     #
     #   PREFERRED_CHARGING_TIMES:
