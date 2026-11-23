@@ -4571,6 +4571,50 @@ class TestSplitTolerance(unittest.TestCase):
         self.assertLess(self._avg(sel) - 0.5926, tol)       # within tolerance
         self.assertAlmostEqual(self._avg(sel), 0.5954, places=4)
 
+    @staticmethod
+    def _flat_night():
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "fixtures", "prices_2026-11-23_flat_night.json")
+        with open(path) as f:
+            rows = json.load(f)["slots"]
+        return [make_slot(datetime.fromisoformat(r["start_utc"]), 15,
+                          r["price_cents_kwh"], i) for i, r in enumerate(rows)]
+
+    def test_default_tolerance_tidies_a_flat_night_topup(self):
+        # 2026-11-23: prices 1.2-1.95 c/kWh all night, so the cost-optimal 12 slots
+        # scatter over 6 blocks. The default (0.1) must give 2 blocks, 12 slots exact,
+        # at most `tolerance` dearer than the strict optimum (1.4553); 0.03 gave 5.
+        import charging_planner as cp
+        tol = cp.CHARGING_DEFAULTS["split_tolerance_cents_kwh"]
+        strict = select_charging_windows(self._flat_night(), 180, min_slot_minutes=30,
+                                         min_gap_minutes=15, split_tolerance_cents_kwh=0.0)
+        self.assertEqual(len(self._blocks(strict)), 6)
+        self.assertAlmostEqual(self._avg(strict), 1.4553, places=4)
+        sel = select_charging_windows(self._flat_night(), 180, min_slot_minutes=30,
+                                      min_gap_minutes=15, split_tolerance_cents_kwh=tol)
+        self.assertEqual(len(sel), 12)
+        self.assertEqual(len(self._blocks(sel)), 2)
+        self.assertLessEqual(self._avg(sel) - self._avg(strict), tol)
+        self.assertAlmostEqual(self._avg(sel), 1.5339, places=4)
+
+    def test_default_tolerance_makes_a_flat_night_overnight_one_block(self):
+        # Same night, overnight profile (420 min, max_windows 4): 3 blocks strictly
+        # optimal, 2 at 0.03 (+0.0161), 1 block at the default (+0.0309).
+        import charging_planner as cp
+        tol = cp.CHARGING_DEFAULTS["split_tolerance_cents_kwh"]
+        sel = select_charging_windows(self._flat_night(), 420, max_windows=4,
+                                      min_slot_minutes=30, min_gap_minutes=15,
+                                      split_tolerance_cents_kwh=tol)
+        self.assertEqual(len(sel), 28)
+        self.assertEqual(len(self._blocks(sel)), 1)
+        self.assertAlmostEqual(self._avg(sel), 1.6707, places=4)
+
+    def test_default_tolerance_is_0_1(self):
+        # Raised from 0.03 on 2026-11-23 after repeated near-misses (0.031, 0.0309,
+        # 0.032) left small avoidable splits; see CONTEXT.md "Tuning data".
+        import charging_planner as cp
+        self.assertEqual(cp.CHARGING_DEFAULTS["split_tolerance_cents_kwh"], 0.1)
+
     def test_tolerance_smaller_than_the_saving_keeps_split(self):
         sel = select_charging_windows(self._real_day(), 210, min_slot_minutes=30,
                                       min_gap_minutes=15, split_tolerance_cents_kwh=0.001)

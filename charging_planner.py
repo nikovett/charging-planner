@@ -85,7 +85,7 @@ CHARGING_DEFAULTS = {
     # format (translate_config never passes it through). A plan with fewer
     # charging blocks is preferred over the cost-optimal one when it costs no
     # more than this many c€/kWh extra on average. 0 = strictly cost-optimal.
-    "split_tolerance_cents_kwh": 0.03,
+    "split_tolerance_cents_kwh": 0.1,
     "preferred_window_start": "00:00",
     "preferred_window_end":   "23:59",
 }
